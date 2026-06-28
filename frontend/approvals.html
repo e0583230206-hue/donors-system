@@ -1,0 +1,119 @@
+﻿<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>אישור חיובים</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+        <span>א בלאט גמרא</span>
+        <small>ניהול תורמים</small>
+      </div>
+
+      <nav>
+        <a href="index.html">🏠 דף הבית</a>
+        <a href="donors.html">👤 תורמים</a>
+        <a href="debts.html">⚠️ חובות</a>
+        <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+        <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+        <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+        <a href="reports.html">📊 דוחות</a>
+        <a href="logs.html">🕒 יומן מערכת</a>
+        <a class="active" href="approvals.html">✅ אישור חיובים</a>
+        <a href="settings.html">⚙️ הגדרות</a>
+        <a href="README.html">📖 מדריך משתמש</a>
+      </nav>
+      <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1>אישור חיובים</h1>
+          <p>טיוטת חיובים לפני שליחה למערכת הטלפונית</p>
+        </div>
+
+        <button id="createDraftButton" class="primary-btn">
+          🔄 צור / רענן טיוטת חיובים
+        </button>
+        <button onclick="exportApprovalsExcel()" class="primary-btn">📥 ייצוא Excel</button>
+      </header>
+
+      <section class="stats-grid">
+        <div class="stat-card warning">
+          <h3>📋 בטיוטה</h3>
+          <strong id="draftCount">0</strong>
+          <p>חיובים שממתינים לטיפול</p>
+        </div>
+
+        <div class="stat-card success">
+          <h3>✅ אושרו</h3>
+          <strong id="approvedCount">0</strong>
+          <p>חיובים שאושרו לשליחה</p>
+        </div>
+
+        <div class="stat-card danger">
+          <h3>❌ בוטלו</h3>
+          <strong id="cancelledCount">0</strong>
+          <p>חיובים שבוטלו</p>
+        </div>
+
+        <div class="stat-card">
+          <h3>💰 סך לשליחה</h3>
+          <strong id="approvedAmount">₪0</strong>
+          <p>סכום חיובים מאושרים</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>👤 בחירת מאשר</h2>
+
+        <div class="form-grid">
+          <select id="approverSelect">
+            <option value="">בחר עובד מאשר</option>
+          </select>
+        </div>
+
+        <p id="messageBox" class="message"></p>
+      </section>
+
+      <section class="panel">
+        <h2>📞 טיוטת הודעות לחיוב</h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>תורם</th>
+                <th>טלפון</th>
+                <th>מטרה</th>
+                <th>סכום</th>
+                <th>הודעה לטלפון</th>
+                <th>סטטוס</th>
+                <th>אושר ע"י</th>
+                <th>תאריך אישור</th>
+                <th>פעולות</th>
+              </tr>
+            </thead>
+            <tbody id="approvalsTable"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="js/auth.js"></script>
+    <script src="js/database.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/hebcal-core.min.js"></script>
+    <script src="js/hebrew-date.js"></script>
+    <script src="js/system-clock.js"></script>
+    <script src="js/audit-log.js"></script>
+    <script src="js/vendor/xlsx.full.min.js"></script>
+    <script src="js/approvals.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/notifications.js"></script>
+  </body>
+</html>

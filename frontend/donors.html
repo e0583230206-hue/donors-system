@@ -1,0 +1,127 @@
+﻿<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>תורמים</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+        <span>א בלאט גמרא</span>
+        <small>ניהול תורמים</small>
+      </div>
+
+      <nav>
+        <a href="index.html">🏠 דף הבית</a>
+        <a class="active" href="donors.html">👤 תורמים</a>
+        <a href="debts.html">⚠️ חובות</a>
+        <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+        <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+        <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+        <a href="reports.html">📊 דוחות</a>
+        <a href="logs.html">🕒 יומן מערכת</a>
+        <a href="approvals.html">✅ אישור חיובים</a>
+        <a href="settings.html">⚙️ הגדרות</a>
+        <a href="README.html">📖 מדריך משתמש</a>
+      </nav>
+      <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar page-header donors-page-header">
+        <div class="page-title">
+          <span class="page-kicker">ניהול תורמים</span>
+          <h1>תורמים</h1>
+          <p>ניהול רשימת התורמים במערכת</p>
+        </div>
+      </header>
+
+      <section class="panel crm-form-panel donor-create-panel">
+        <h2>➕ הוספת תורם</h2>
+
+        <div class="form-grid">
+          <input
+            id="nameInput"
+            type="text"
+            placeholder="* שם מלא"
+            list="namesList"
+          />
+          <datalist id="namesList"></datalist>
+          <input id="phoneInput" type="tel" placeholder="* מספר טלפון" />
+          <input id="cityInput" type="text" placeholder="עיר" />
+          <input id="addressInput" type="text" placeholder="כתובת" />
+          <textarea id="notesInput" placeholder="הערות פנימיות"></textarea>
+        </div>
+
+        <div class="form-actions page-actions">
+          <button id="addDonorButton" class="primary-btn">הוסף תורם</button>
+          <button id="importButton" class="success-btn">📊 יבוא מאקסל</button>
+        </div>
+        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;" />
+
+        <p id="messageBox" class="message"></p>
+      </section>
+
+      <section class="panel crm-search-panel">
+        <h2>🔍 חיפוש, מיון וסינון</h2>
+        <input
+          id="searchInput"
+          class="search-input"
+          type="text"
+          placeholder="חפש לפי שם, טלפון, עיר או תגית..."
+        />
+        <div class="sort-row">
+          <label for="sortSelect">מיון:</label>
+          <select id="sortSelect" class="sort-select">
+            <option value="name-asc">שם (א-ת)</option>
+            <option value="name-desc">שם (ת-א)</option>
+            <option value="city-asc">עיר</option>
+            <option value="debt-desc">חוב גבוה</option>
+            <option value="paid-desc">תרומות גבוהות</option>
+            <option value="new-first">חדש קודם</option>
+            <option value="old-first">ישן קודם</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <select id="filterStatus">
+            <option value="">כל הסטטוסים</option>
+            <option value="פעיל">פעיל</option>
+            <option value="לא פעיל">לא פעיל</option>
+          </select>
+          <select id="filterCity">
+            <option value="">כל הערים</option>
+          </select>
+          <input id="filterTag" type="text" placeholder="🏷️ סנן לפי תגית..." />
+          <button id="filterClearBtn" class="filter-clear-btn">נקה סינון</button>
+        </div>
+      </section>
+
+      <section class="crm-list-shell">
+        <div class="section-heading">
+          <span class="page-kicker">מאגר תורמים</span>
+          <h2>רשימת תורמים</h2>
+        </div>
+
+        <div id="donorsStats" style="display:flex;gap:18px;flex-wrap:wrap;padding:10px 4px 6px;font-size:13px;color:var(--muted);border-bottom:1px solid var(--border,#333);margin-bottom:10px;"></div>
+
+        <div id="importSkippedReport" style="display:none;"></div>
+
+        <section class="donors-grid" id="donorsList"></section>
+      </section>
+    </main>
+    <script src="js/auth.js"></script>
+    <script src="js/database.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/hebcal-core.min.js"></script>
+    <script src="js/hebrew-date.js"></script>
+    <script src="js/vendor/xlsx.full.min.js"></script>
+    <script src="js/system-clock.js"></script>
+    <script src="js/audit-log.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/donors.js"></script>
+    <script src="js/notifications.js"></script>
+  </body>
+</html>

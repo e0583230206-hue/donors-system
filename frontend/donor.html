@@ -1,0 +1,340 @@
+﻿<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>כרטיס תורם</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+        <span>א בלאט גמרא</span>
+        <small>ניהול תורמים</small>
+      </div>
+
+      <nav>
+        <a href="index.html">🏠 דף הבית</a>
+        <a href="donors.html">👤 תורמים</a>
+        <a href="debts.html">⚠️ חובות</a>
+        <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+        <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+        <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+        <a href="reports.html">📊 דוחות</a>
+        <a href="logs.html">🕒 יומן מערכת</a>
+        <a href="approvals.html">✅ אישור חיובים</a>
+        <a href="settings.html">⚙️ הגדרות</a>
+        <a href="README.html">📖 מדריך משתמש</a>
+      </nav>
+      <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar page-header donor-page-header">
+        <div class="page-title">
+          <span class="page-kicker">תיק תורם</span>
+          <h1 id="donorNameTitle">כרטיס תורם</h1>
+          <p id="donorSubTitle">
+            פרטי תורם, תרומות, חובות והכנה למערכת הטלפונית
+          </p>
+        </div>
+
+        <div class="page-actions">
+          <a class="primary-btn" href="donors.html">חזרה לתורמים</a>
+        </div>
+      </header>
+
+      <section class="stats-grid">
+        <div class="stat-card success stat-card-paid">
+          <h3>💰 שולם</h3>
+          <strong id="paidTotal">₪0</strong>
+          <p>סך תרומות ששולמו</p>
+        </div>
+
+        <div class="stat-card danger stat-card-debt">
+          <h3>⚠️ חוב פתוח</h3>
+          <strong id="debtTotal">₪0</strong>
+          <p>סך חובות פתוחים</p>
+        </div>
+
+        <div class="stat-card stat-card-donations">
+          <h3>📊 תרומות</h3>
+          <strong id="donationsCount">0</strong>
+          <p>מספר תרומות</p>
+        </div>
+
+        <div class="stat-card warning stat-card-ivr">
+          <h3>📞 IVR</h3>
+          <strong id="ivrStatus">פעיל</strong>
+          <p>סטטוס מערכת טלפונית</p>
+        </div>
+      </section>
+
+      <section class="content-grid donor-workspace">
+        <div class="panel donor-profile-panel client-file-panel">
+          <h2>👤 פרטי תורם</h2>
+
+          <div id="donorDetails" class="details-box"></div>
+
+          <div class="profile-actions">
+            <button id="editDonorButton" class="warning-btn">✏️ ערוך פרטי תורם</button>
+          </div>
+
+          <div id="editDonorForm" class="form-grid one-column hidden">
+            <input id="editFullNameInput" type="text" placeholder="שם מלא" />
+            <input id="editPhoneInput" type="tel" placeholder="טלפון" />
+            <input id="editCityInput" type="text" placeholder="עיר" />
+            <input id="editAddressInput" type="text" placeholder="כתובת" />
+
+            <select id="editStatusSelect">
+              <option value="פעיל">פעיל</option>
+              <option value="לא פעיל">לא פעיל</option>
+            </select>
+
+            <textarea id="editNotesInput" placeholder="הערות פנימיות"></textarea>
+
+            <button id="saveDonorEditButton" class="primary-btn">שמור שינויים</button>
+            <button id="cancelDonorEditButton" class="secondary-btn">ביטול</button>
+            <p id="editDonorMessage" class="message"></p>
+          </div>
+
+          <div class="profile-actions">
+            <button id="printLetterButton" class="success-btn">📄 הפק מכתב לתורם</button>
+          </div>
+
+          <h3>📝 הערות</h3>
+
+          <label>הערה פנימית למזכירים</label>
+          <textarea
+            id="internalStaffNote"
+            placeholder="הערה שרק הצוות רואה"
+          ></textarea>
+
+          <label>הודעה/הערה שתוכל להישמע בטלפון</label>
+          <textarea
+            id="publicPhoneNote"
+            placeholder="הערה שיכולה לעבור למערכת הטלפונית"
+          ></textarea>
+
+          <button id="saveNotesButton" class="primary-btn">שמור הערות</button>
+          <p id="notesMessage" class="message"></p>
+
+          <h3>🏷️ תגיות</h3>
+          <div id="donorTagsDisplay" class="donor-tags"></div>
+          <div class="tag-input-row">
+            <input id="tagInput" type="text" placeholder="הוסף תגית..." />
+            <button id="addTagButton" class="small-btn">הוסף</button>
+          </div>
+        </div>
+
+        <div class="panel donation-entry-panel">
+          <h2>➕ הוספת תרומה / חוב</h2>
+
+          <div class="form-grid one-column">
+            <input
+              id="amountInput"
+              type="number"
+              min="0.01"
+              step="0.01"
+              placeholder="* סכום"
+            />
+
+            <input
+              id="parshaInput"
+              type="text"
+              placeholder="פרשה (אופציונלי)"
+            />
+
+            <select id="purposeSelect">
+              <option value="גליון מתאחדת">גליון מתאחדת</option>
+              <option value="פרנס">פרנס</option>
+              <option value="אחר">אחר</option>
+            </select>
+
+            <input
+              id="customPurposeInput"
+              type="text"
+              placeholder="כתוב מטרה אחרת"
+              class="hidden"
+            />
+
+            <select id="paymentMethodSelect">
+              <option value="מזומן">מזומן</option>
+              <option value="אשראי">אשראי</option>
+              <option value="העברה בנקאית">העברה בנקאית</option>
+              <option value="צ׳ק">צ׳ק</option>
+            </select>
+
+            <select id="paidSelect">
+              <option value="false">לא שולם</option>
+              <option value="true">שולם</option>
+            </select>
+
+            <textarea
+              id="donationNoteInput"
+              placeholder="הערה לתרומה"
+            ></textarea>
+          </div>
+
+          <button id="addDonationButton" class="primary-btn">הוסף תרומה</button>
+          <p id="donationMessage" class="message"></p>
+        </div>
+      </section>
+
+      <section class="panel ivr-settings-panel">
+        <h2>📞 הכנה למערכת הטלפונית</h2>
+
+        <div class="ivr-box">
+          <label>
+            <input type="checkbox" id="includeInCallsCheckbox" checked />
+            להכניס לרשימת חיוג
+          </label>
+
+          <label>
+            <input type="checkbox" id="allowPaymentCheckbox" checked />
+            לאפשר מעבר לתשלום
+          </label>
+
+          <label>
+            <input type="checkbox" id="allowPreviousDebtsCheckbox" checked />
+            לאפשר שמיעת חובות קודמים
+          </label>
+
+          <label>
+            <input type="checkbox" id="allowCallbackCheckbox" checked />
+            לאפשר השארת הודעה
+          </label>
+        </div>
+
+        <button id="saveIvrButton" class="primary-btn">שמור הגדרות IVR</button>
+
+        <div class="phone-preview" id="phonePreview"></div>
+      </section>
+
+      <section class="panel payment-panel">
+        <h2>💳 תשלום חלקי</h2>
+
+        <div class="form-grid">
+          <input
+            id="partialAmountInput"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="סכום ששולם חלקית"
+          />
+          <select id="partialPaymentMethod">
+            <option value="מזומן">מזומן</option>
+            <option value="אשראי">אשראי</option>
+            <option value="העברה בנקאית">העברה בנקאית</option>
+            <option value="צ׳ק">צ׳ק</option>
+          </select>
+        </div>
+
+        <button id="partialPaymentButton" class="primary-btn">
+          רשום תשלום חלקי על החוב הישן ביותר
+        </button>
+        <p id="partialMessage" class="message"></p>
+      </section>
+
+      <section class="panel history-panel">
+        <h2>📋 היסטוריית תרומות וחובות</h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>תאריך</th>
+                <th>פרשה</th>
+                <th>מטרה</th>
+                <th>סכום</th>
+                <th>שולם</th>
+                <th>אמצעי</th>
+                <th>יתרה</th>
+              </tr>
+            </thead>
+            <tbody id="donationsTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel timeline-panel">
+        <h2>📅 ציר זמן</h2>
+        <div class="timeline-legend">
+          <div class="timeline-legend-item"><div class="timeline-legend-dot" style="background:#7B8F5E"></div>תרומה</div>
+          <div class="timeline-legend-item"><div class="timeline-legend-dot" style="background:#1d4ed8"></div>משימה</div>
+          <div class="timeline-legend-item"><div class="timeline-legend-dot" style="background:#d97706"></div>תזכורת</div>
+          <div class="timeline-legend-item"><div class="timeline-legend-dot" style="background:#9333ea"></div>הודעה לחזרה</div>
+        </div>
+        <div class="timeline" id="donorTimeline"></div>
+      </section>
+
+      <!-- Print Letter Modal -->
+      <div id="printModal" class="modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center;">
+        <div class="modal-content" style="background:white;padding:0;border-radius:8px;width:90%;max-width:900px;max-height:85vh;overflow-y:auto;position:relative;box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+          <button class="close-btn" onclick="document.getElementById('printModal').style.display='none'" style="position:absolute;top:15px;right:15px;border:none;font-size:24px;cursor:pointer;background:none;color:#333;z-index:10;">×</button>
+          
+          <div style="padding:20px;border-bottom:1px solid #ddd;background:#f9f9f9;">
+            <label for="personalNoteInput" style="display:block;margin-bottom:8px;font-weight:bold;">הערה אישית לתורם:</label>
+            <textarea id="personalNoteInput" placeholder="הערה שתוכל להופיע במכתב המודפס..." style="width:100%;padding:10px;border:1px solid #ccc;border-radius:4px;min-height:80px;font-family:Arial,sans-serif;font-size:13px;"></textarea>
+          </div>
+          
+          <div id="printContent" class="print-content" style="padding:40px;background:white;color:black;direction:rtl;min-height:500px;">
+            <!-- Will be filled by JS -->
+          </div>
+          
+          <div style="padding:20px;border-top:1px solid #ddd;text-align:center;background:#f5f5f5;">
+            <button id="printPdfButton" class="primary-btn">📄 שמור / הדפס PDF</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Print CSS -->
+      <style>
+        @media print {
+          body, html {
+            margin: 0;
+            padding: 0;
+          }
+          #printModal {
+            position: static !important;
+            width: 100% !important;
+            height: 100% !important;
+            background: white !important;
+            display: flex !important;
+          }
+          .modal-content {
+            position: static !important;
+            width: 100% !important;
+            max-width: none !important;
+            max-height: none !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+          }
+          #printPdfButton, .close-btn {
+            display: none !important;
+          }
+          .print-content {
+            padding: 0 !important;
+            margin: 0 !important;
+            background: white !important;
+          }
+          @page {
+            size: A4;
+            margin: 12mm;
+          }
+        }
+      </style>
+    </main>
+    <script src="js/auth.js"></script>
+    <script src="js/database.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/hebcal-core.min.js"></script>
+    <script src="js/hebrew-date.js"></script>
+    <script src="js/system-clock.js"></script>
+    <script src="js/audit-log.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/donor.js"></script>
+    <script src="js/notifications.js"></script>
+  </body>
+</html>

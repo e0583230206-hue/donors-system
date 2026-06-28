@@ -1,0 +1,85 @@
+﻿<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>לוח שנה</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+        <span>א בלאט גמרא</span>
+        <small>ניהול תורמים</small>
+      </div>
+
+      <nav>
+        <a href="index.html">🏠 דף הבית</a>
+        <a href="donors.html">👤 תורמים</a>
+        <a href="debts.html">⚠️ חובות</a>
+        <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+        <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+        <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+        <a href="reports.html">📊 דוחות</a>
+        <a class="active" href="calendar.html">📅 לוח שנה</a>
+        <a href="logs.html">🕒 יומן מערכת</a>
+        <a href="approvals.html">✅ אישור חיובים</a>
+        <a href="settings.html">⚙️ הגדרות</a>
+        <a href="README.html">📖 מדריך משתמש</a>
+      </nav>
+      <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1>📅 לוח שנה</h1>
+          <p>משימות ותזכורות לפי תאריך</p>
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="calendar-nav">
+          <button id="prevMonth">&#8592; חודש קודם</button>
+          <h2 id="monthTitle"></h2>
+          <button id="nextMonth">חודש הבא &#8594;</button>
+        </div>
+
+        <div class="calendar-legend">
+          <div class="calendar-legend-item">
+            <div class="calendar-legend-dot task"></div>
+            <span>משימה</span>
+          </div>
+          <div class="calendar-legend-item">
+            <div class="calendar-legend-dot reminder"></div>
+            <span>תזכורת</span>
+          </div>
+        </div>
+
+        <div class="calendar-header-row">
+          <div>א</div>
+          <div>ב</div>
+          <div>ג</div>
+          <div>ד</div>
+          <div>ה</div>
+          <div>ו</div>
+          <div>ש</div>
+        </div>
+
+        <div class="calendar-grid" id="calendarGrid"></div>
+      </section>
+    </main>
+
+    <script src="js/auth.js"></script>
+    <script src="js/database.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/hebcal-core.min.js"></script>
+    <script src="js/hebrew-date.js"></script>
+    <script src="js/system-clock.js"></script>
+    <script src="js/audit-log.js"></script>
+    <script src="js/calendar.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/notifications.js"></script>
+  </body>
+</html>

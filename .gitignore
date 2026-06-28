@@ -1,0 +1,25 @@
+# Node
+frontend/backend/node_modules/
+npm-debug.log
+*.log
+
+# Environment (אסור להעלות לגיט — מכיל סודות!)
+.env
+*.env
+!.env.example
+
+# Database (מכיל נתוני משתמשים)
+*.sqlite
+*.db
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

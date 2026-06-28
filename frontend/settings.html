@@ -1,0 +1,185 @@
+﻿<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>הגדרות</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+
+  <body>
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+        <span>א בלאט גמרא</span>
+        <small>ניהול תורמים</small>
+      </div>
+
+      <nav>
+        <a href="index.html">🏠 דף הבית</a>
+        <a href="donors.html">👤 תורמים</a>
+        <a href="debts.html">⚠️ חובות</a>
+        <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+        <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+        <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+        <a href="reports.html">📊 דוחות</a>
+        <a href="logs.html">🕒 יומן מערכת</a>
+        <a href="approvals.html">✅ אישור חיובים</a>
+        <a class="active" href="settings.html">⚙️ הגדרות</a>
+        <a href="README.html">📖 מדריך משתמש</a>
+      </nav>
+      <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1>⚙️ הגדרות</h1>
+          <p>ניהול עובדים והגדרות בסיסיות למערכת</p>
+        </div>
+      </header>
+
+      <section class="stats-grid">
+        <div class="stat-card">
+          <h3>👥 עובדים</h3>
+          <strong id="workersCount">0</strong>
+          <p>עובדים במערכת</p>
+        </div>
+
+        <div class="stat-card success">
+          <h3>✅ פעילים</h3>
+          <strong id="activeWorkersCount">0</strong>
+          <p>עובדים פעילים</p>
+        </div>
+
+        <div class="stat-card warning">
+          <h3>⭐ מנהלים</h3>
+          <strong id="adminsCount">0</strong>
+          <p>מנהלים במערכת</p>
+        </div>
+
+        <div class="stat-card">
+          <h3>⚙️ מערכת</h3>
+          <strong>V1</strong>
+          <p>גרסה מקומית</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>💱 הגדרות מטבע</h2>
+        <div class="form-grid">
+          <label for="currencySelect">מטבע תצוגה במערכת:</label>
+          <select id="currencySelect">
+            <option value="ILS">₪ שקל ישראלי (ILS)</option>
+            <option value="USD">$ דולר אמריקאי (USD)</option>
+          </select>
+        </div>
+        <button id="saveCurrencyButton" class="primary-btn">שמור מטבע</button>
+        <p id="currencyMessage" class="message"></p>
+      </section>
+
+      <section class="panel">
+        <h2>➕ הוספת עובד</h2>
+
+        <div class="form-grid">
+          <input id="workerNameInput" type="text" placeholder="* שם עובד" />
+
+          <select id="workerRoleInput">
+            <option value="מזכיר">מזכיר</option>
+            <option value="מנהל">מנהל</option>
+          </select>
+
+          <select id="workerStatusInput">
+            <option value="פעיל">פעיל</option>
+            <option value="לא פעיל">לא פעיל</option>
+          </select>
+        </div>
+
+        <button id="addWorkerButton" class="primary-btn">הוסף עובד</button>
+
+        <p id="messageBox" class="message"></p>
+      </section>
+
+      <section class="panel">
+        <h2>👥 רשימת עובדים</h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>שם</th>
+                <th>תפקיד</th>
+                <th>סטטוס</th>
+                <th>תאריך יצירה</th>
+                <th>פעולה</th>
+              </tr>
+            </thead>
+
+            <tbody id="workersTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>🔑 שינוי סיסמה לעובד</h2>
+        <p style="color:#666;margin-bottom:12px;">רק מנהל רשאי לשנות סיסמאות. הסיסמה החדשה לא תוצג בשום מקום.</p>
+
+        <div class="form-grid">
+          <select id="changePasswordWorkerSelect">
+            <option value="">בחר עובד</option>
+          </select>
+
+          <input
+            id="changePasswordInput"
+            type="password"
+            placeholder="סיסמה חדשה (לפחות 4 תווים)"
+          />
+
+          <input
+            id="changePasswordConfirmInput"
+            type="password"
+            placeholder="אישור סיסמה חדשה"
+          />
+        </div>
+
+        <button id="changePasswordButton" class="primary-btn">שמור סיסמה</button>
+
+        <p id="changePasswordMessage" class="message"></p>
+      </section>
+
+      <section class="panel">
+        <h2>💾 גיבוי ושחזור</h2>
+
+        <div class="form-grid">
+          <button id="backupButton" class="success-btn">📥 הורד גיבוי</button>
+          <label for="restoreInput" class="secondary-btn" style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;">
+            📂 שחזר מקובץ JSON
+          </label>
+          <input type="file" id="restoreInput" accept=".json" style="display:none" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>🔄 גיבוי אוטומטי</h2>
+        <p style="color:var(--muted);margin-bottom:14px;font-size:14px">המערכת שומרת גיבוי אוטומטי אחרי כל 10 פעולות. הגיבוי נשמר לפי תאריך.</p>
+
+        <div class="form-grid">
+          <button id="restoreAutoBackupButton" class="warning-btn">♻️ שחזר מגיבוי אוטומטי</button>
+          <button id="listAutoBackupsButton" class="secondary-btn">📋 רשימת גיבויים</button>
+        </div>
+        <p id="autoBackupMessage" class="message"></p>
+        <ul id="autoBackupList" style="list-style:none;padding:0;margin-top:10px;font-size:13px;color:var(--muted)"></ul>
+      </section>
+    </main>
+    <script src="js/auth.js"></script>
+    <script src="js/database.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/hebcal-core.min.js"></script>
+    <script src="js/hebrew-date.js"></script>
+    <script src="js/audit-log.js"></script>
+    <script src="js/system-clock.js"></script>
+    <script src="js/settings.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/notifications.js"></script>
+  </body>
+</html>

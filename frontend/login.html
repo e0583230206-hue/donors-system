@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>כניסה למערכת</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+
+  <body>
+    <main class="main" style="margin: 0; max-width: 520px; margin-inline: auto">
+      <div class="login-brand">
+        <img src="images/סמל א בלאט גמרא.png" class="login-logo-img" alt="א בלאט גמרא" />
+        <div class="login-brand-title">א בלאט גמרא</div>
+        <div class="login-brand-sub">ניהול תורמים</div>
+      </div>
+      <section class="panel" style="margin-top: 0">
+        <h1 class="login-h1">כניסה למערכת</h1>
+        <p>בחר עובד והכנס סיסמה</p>
+
+        <div class="form-grid one-column">
+          <select id="userSelect">
+            <option value="">בחר משתמש</option>
+          </select>
+
+          <input
+            id="passwordInput"
+            type="password"
+            placeholder="סיסמה"
+          />
+        </div>
+
+        <button id="loginButton" class="primary-btn">
+          כניסה
+        </button>
+
+        <p id="messageBox" class="message"></p>
+      </section>
+    </main>
+
+    <script src="js/database.js"></script>
+    <script src="js/login.js"></script>
+  </body>
+</html>
