@@ -200,53 +200,34 @@ function markReminderDone(donorId, reminderId) {
 }
 
 function deleteReminder(donorId, reminderId) {
-  const donor = donors.find(function (item) {
-    return item.id === donorId;
-  });
-
+  const donor = donors.find(function (item) { return item.id === donorId; });
   if (!donor || !donor.reminders) return;
 
-  const reminder = donor.reminders.find(function (item) {
-    return item.id === reminderId;
+  const deletedReminder = donor.reminders.find(function (item) { return item.id === reminderId; });
+  if (!deletedReminder) return;
+
+  donor.reminders = donor.reminders.filter(function (item) { return item.id !== reminderId; });
+  donor.updatedAt = new Date().toISOString();
+  saveDonors();
+  AuditLog.record({
+    action: "delete",
+    entityType: "reminder",
+    entityId: deletedReminder.id,
+    entityName: donor.fullName,
+    details: "תזכורת נמחקה: " + deletedReminder.description,
   });
-
-  const pendingKey = donorId + ":" + reminderId;
-  if (!reminder || pendingReminderDeletions[pendingKey]) return;
-
-  var undo = false;
-  pendingReminderDeletions[pendingKey] = true;
   renderReminders();
 
   if (typeof showToast === "function") {
     showToast("תזכורת נמחקה", function () {
-      undo = true;
-      delete pendingReminderDeletions[pendingKey];
+      donor.reminders.push(deletedReminder);
+      donor.updatedAt = new Date().toISOString();
+      saveDonors();
       renderReminders();
     }, 5000);
   } else {
-    showMessage("התזכורת תימחק בעוד 5 שניות");
-  }
-
-  setTimeout(function () {
-    if (undo) return;
-
-    donor.reminders = donor.reminders.filter(function (item) {
-      return item.id !== reminderId;
-    });
-    donor.updatedAt = new Date().toISOString();
-    delete pendingReminderDeletions[pendingKey];
-
-    saveDonors();
-    AuditLog.record({
-      action: "delete",
-      entityType: "reminder",
-      entityId: reminder.id,
-      entityName: donor.fullName,
-      details: "תזכורת נמחקה: " + reminder.description,
-    });
-    renderReminders();
     showMessage("התזכורת נמחקה בהצלחה");
-  }, 5000);
+  }
 }
 
 function setReminderPage(n) {
@@ -458,6 +439,9 @@ if (reminderSearchInput) {
   });
 }
 
-ensureReminderArrays();
-fillDonorSelect();
-renderReminders();
+Database.whenReady(function () {
+  donors = Database.get("donors");
+  ensureReminderArrays();
+  fillDonorSelect();
+  renderReminders();
+});

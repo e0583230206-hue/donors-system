@@ -228,6 +228,7 @@ function renderAlerts(data) {
 
 Database.whenReady(function () {
   donors = Database.get("donors");
+  tasks  = Database.get("tasks");
   updateDashboard();
   renderChart();
 });

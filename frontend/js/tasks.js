@@ -185,45 +185,30 @@ function markTaskDone(id) {
 }
 
 function deleteTask(id) {
-  const deletedTask = tasks.find(function (task) {
-    return task.id === id;
-  });
-
+  const deletedTask = tasks.find(function (task) { return task.id === id; });
   if (!deletedTask || pendingTaskDeletions[id]) return;
 
-  var undo = false;
-  pendingTaskDeletions[id] = true;
+  tasks = tasks.filter(function (task) { return task.id !== id; });
+  saveTasks();
+  AuditLog.record({
+    action: "delete",
+    entityType: "task",
+    entityId: deletedTask.id,
+    entityName: deletedTask.title,
+    details: "משימה נמחקה",
+  });
   renderTasks();
 
   if (typeof showToast === "function") {
     showToast('משימה "' + deletedTask.title + '" נמחקה', function () {
-      undo = true;
-      delete pendingTaskDeletions[id];
+      tasks.push(deletedTask);
+      tasks.sort(function (a, b) { return (a.dueDate || "9999").localeCompare(b.dueDate || "9999"); });
+      saveTasks();
       renderTasks();
     }, 5000);
   } else {
-    showMessage("המשימה תימחק בעוד 5 שניות");
-  }
-
-  setTimeout(function () {
-    if (undo) return;
-
-    tasks = tasks.filter(function (task) {
-      return task.id !== id;
-    });
-
-    delete pendingTaskDeletions[id];
-    saveTasks();
-    renderTasks();
-    AuditLog.record({
-      action: "delete",
-      entityType: "task",
-      entityId: deletedTask.id,
-      entityName: deletedTask.title,
-      details: "משימה נמחקה",
-    });
     showMessage("המשימה נמחקה בהצלחה");
-  }, 5000);
+  }
 }
 
 function setTaskPage(n) {
@@ -444,6 +429,10 @@ if (taskSearchInput) {
   });
 }
 
-fillWorkerSelect();
-fillDonorSelect();
-renderTasks();
+Database.whenReady(function () {
+  donors  = Database.get("donors");
+  tasks   = Database.get("tasks");
+  fillWorkerSelect();
+  fillDonorSelect();
+  renderTasks();
+});

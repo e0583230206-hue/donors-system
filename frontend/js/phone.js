@@ -224,54 +224,35 @@ function markCallbackDone(donorId, callbackId) {
 }
 
 function deleteCallback(donorId, callbackId) {
-  const donor = donors.find(function (item) {
-    return item.id === donorId;
-  });
-
+  const donor = donors.find(function (item) { return item.id === donorId; });
   if (!donor || !donor.callbacks) return;
 
-  const deletedCallback = donor.callbacks.find(function (callback) {
-    return callback.id === callbackId;
+  const deletedCallback = donor.callbacks.find(function (callback) { return callback.id === callbackId; });
+  if (!deletedCallback) return;
+
+  donor.callbacks = donor.callbacks.filter(function (callback) { return callback.id !== callbackId; });
+  donor.updatedAt = new Date().toISOString();
+  saveDonors();
+  addLog("נמחקה הודעה לחזרה: " + donor.fullName);
+  AuditLog.record({
+    action: "delete",
+    entityType: "callback",
+    entityId: deletedCallback.id,
+    entityName: donor.fullName,
+    details: "נמחקה הודעה לחזרה: " + deletedCallback.reason,
   });
-
-  const pendingKey = donorId + ":" + callbackId;
-  if (!deletedCallback || pendingCallbackDeletions[pendingKey]) return;
-
-  var undo = false;
-  pendingCallbackDeletions[pendingKey] = true;
   renderCallbacks();
 
   if (typeof showToast === "function") {
     showToast("הודעה לחזרה נמחקה", function () {
-      undo = true;
-      delete pendingCallbackDeletions[pendingKey];
+      donor.callbacks.push(deletedCallback);
+      donor.updatedAt = new Date().toISOString();
+      saveDonors();
       renderCallbacks();
     }, 5000);
   } else {
-    showMessage("ההודעה תימחק בעוד 5 שניות");
-  }
-
-  setTimeout(function () {
-    if (undo) return;
-
-    donor.callbacks = donor.callbacks.filter(function (callback) {
-      return callback.id !== callbackId;
-    });
-    donor.updatedAt = new Date().toISOString();
-    delete pendingCallbackDeletions[pendingKey];
-
-    saveDonors();
-    addLog("נמחקה הודעה לחזרה: " + donor.fullName);
-    AuditLog.record({
-      action: "delete",
-      entityType: "callback",
-      entityId: deletedCallback.id,
-      entityName: donor.fullName,
-      details: "נמחקה הודעה לחזרה: " + deletedCallback.reason,
-    });
-    renderCallbacks();
     showMessage("ההודעה נמחקה בהצלחה");
-  }, 5000);
+  }
 }
 
 function setCallbackPage(n) {
@@ -487,7 +468,10 @@ if (callbackSearchInput) {
   });
 }
 
-ensureCallbackArrays();
-fillDonorSelect();
-fillWorkerSelect();
-renderCallbacks();
+Database.whenReady(function () {
+  donors = Database.get("donors");
+  ensureCallbackArrays();
+  fillDonorSelect();
+  fillWorkerSelect();
+  renderCallbacks();
+});

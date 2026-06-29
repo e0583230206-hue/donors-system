@@ -399,7 +399,12 @@ function buildAdvancedStats() {
   if (prevYearLbl)     prevYearLbl.innerText     = "שולם " + prevYear;
 }
 
-calculateTotals();
-buildFinanceReport();
-buildWorkersReport();
-buildAdvancedStats();
+Database.whenReady(function () {
+  donors  = Database.get("donors");
+  workers = Database.get("workers");
+  tasks   = Database.get("tasks");
+  calculateTotals();
+  buildFinanceReport();
+  buildWorkersReport();
+  buildAdvancedStats();
+});

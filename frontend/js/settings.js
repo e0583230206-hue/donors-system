@@ -520,16 +520,16 @@ var currencyMsg     = document.getElementById("currencyMessage");
 
 function loadCurrencySetting() {
   if (!currencySelect) return;
-  var settings = {};
-  try { settings = JSON.parse(localStorage.getItem("settings") || "{}"); } catch (_) {}
+  var settings = Database.get("settings");
+  if (Array.isArray(settings) || !settings || typeof settings !== "object") settings = {};
   currencySelect.value = settings.currency || "ILS";
 }
 
 function saveCurrencySetting() {
-  var settings = {};
-  try { settings = JSON.parse(localStorage.getItem("settings") || "{}"); } catch (_) {}
+  var settings = Database.get("settings");
+  if (Array.isArray(settings) || !settings || typeof settings !== "object") settings = {};
   settings.currency = currencySelect.value;
-  localStorage.setItem("settings", JSON.stringify(settings));
+  Database.save("settings", settings);
   if (currencyMsg) {
     currencyMsg.innerText = "המטבע נשמר בהצלחה";
     currencyMsg.className = "message show success";
@@ -537,8 +537,8 @@ function saveCurrencySetting() {
   }
 }
 
-loadCurrencySetting();
 if (saveCurrencyBtn) saveCurrencyBtn.addEventListener("click", saveCurrencySetting);
+Database.whenReady(function () { loadCurrencySetting(); });
 // ─────────────────────────────────────────────────────────────────────────────
 
 addWorkerButton.addEventListener("click", function () {

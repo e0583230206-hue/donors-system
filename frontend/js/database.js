@@ -88,6 +88,7 @@ const Database = {
 
   // Keys allowed to sync with server
   _serverKeys: ["donors", "tasks", "logs", "settings", "approvals"],
+  _serverLoadPromise: null,
 
   get: function (key) {
     if (key === "donors" && _CrmIDB.isUsingIDB()) {
@@ -169,7 +170,15 @@ const Database = {
   },
 
   whenReady: function (cb) {
-    _CrmIDB.whenReady(cb);
+    var self = this;
+    _CrmIDB.whenReady(function () {
+      var token = self._getToken();
+      if (!token) { cb(); return; }
+      if (!self._serverLoadPromise) {
+        self._serverLoadPromise = self.loadFromServer(token);
+      }
+      self._serverLoadPromise.then(function () { cb(); }).catch(function () { cb(); });
+    });
   },
 
   // ── Server sync ────────────────────────────────────────────────────────────

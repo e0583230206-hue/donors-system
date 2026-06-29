@@ -13,6 +13,7 @@ function updateSidebarCounts() {
 }
 
 updateSidebarCounts();
+Database.whenReady(function () { updateSidebarCounts(); });
 
 function setupSidebarToggle() {
   var nav = document.querySelector(".sidebar nav");

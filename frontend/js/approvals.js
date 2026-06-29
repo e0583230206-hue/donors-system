@@ -251,45 +251,29 @@ function returnToDraft(id) {
 }
 
 function deleteApproval(id) {
-  const deletedApproval = approvals.find(function (item) {
-    return item.id === id;
-  });
-
+  const deletedApproval = approvals.find(function (item) { return item.id === id; });
   if (!deletedApproval || pendingApprovalDeletions[id]) return;
 
-  var undo = false;
-  pendingApprovalDeletions[id] = true;
+  approvals = approvals.filter(function (item) { return item.id !== id; });
+  saveApprovals();
+  AuditLog.record({
+    action: "delete",
+    entityType: "approval",
+    entityId: deletedApproval.id,
+    entityName: deletedApproval.donorName,
+    details: "חיוב נמחק מהטיוטה",
+  });
   renderApprovals();
 
   if (typeof showToast === "function") {
     showToast('חיוב "' + deletedApproval.donorName + '" נמחק', function () {
-      undo = true;
-      delete pendingApprovalDeletions[id];
+      approvals.push(deletedApproval);
+      saveApprovals();
       renderApprovals();
     }, 5000);
   } else {
-    showMessage("החיוב יימחק בעוד 5 שניות");
-  }
-
-  setTimeout(function () {
-    if (undo) return;
-
-    approvals = approvals.filter(function (item) {
-      return item.id !== id;
-    });
-    delete pendingApprovalDeletions[id];
-
-    saveApprovals();
-    AuditLog.record({
-      action: "delete",
-      entityType: "approval",
-      entityId: deletedApproval.id,
-      entityName: deletedApproval.donorName,
-      details: "חיוב נמחק מהטיוטה",
-    });
-    renderApprovals();
     showMessage("החיוב נמחק מהטיוטה");
-  }, 5000);
+  }
 }
 
 function renderStats() {
@@ -413,7 +397,8 @@ function exportApprovalsExcel() {
 createDraftButton.addEventListener("click", createDraftApprovals);
 
 Database.whenReady(function () {
-  donors = Database.get("donors");
+  donors    = Database.get("donors");
+  approvals = Database.get("approvals");
   fillApproverSelect();
   renderApprovals();
 });

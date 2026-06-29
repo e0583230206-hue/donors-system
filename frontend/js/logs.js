@@ -1,4 +1,4 @@
-let logs = Database.get("logs");
+let logs = [];
 
 const logsTable = document.getElementById("logsTable");
 const clearLogsButton = document.getElementById("clearLogsButton");
@@ -73,4 +73,8 @@ function exportLogsExcel() {
 }
 
 clearLogsButton.addEventListener("click", clearLogs);
-renderLogs();
+
+Database.whenReady(function () {
+  logs = Database.get("logs");
+  renderLogs();
+});
