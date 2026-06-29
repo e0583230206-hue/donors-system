@@ -36,6 +36,8 @@ const FRONTEND_DIR = path.join(__dirname, "..");
 
 const app = express();
 
+app.set("trust proxy", 1);
+
 // ── Security headers ─────────────────────────────────────────────────────────
 app.use(
   helmet({

@@ -241,37 +241,32 @@ function deleteDonor(id) {
   const deletedDonor = donors.find(function (donor) { return donor.id === id; });
   if (!deletedDonor || pendingDonorDeletions[id]) return;
 
-  var undo = false;
-  pendingDonorDeletions[id] = true;
+  // Remove immediately from array and save to server/localStorage right away
+  donors = donors.filter(function (donor) { return donor.id !== id; });
+  saveDonors();
+  addLog("נמחק תורם: " + deletedDonor.fullName);
+  AuditLog.record({
+    action: "delete",
+    entityType: "donor",
+    entityId: deletedDonor.id,
+    entityName: deletedDonor.fullName,
+    details: "נמחק תורם מהמערכת",
+  });
   renderDonors();
 
   if (typeof showToast === "function") {
+    // Undo restores the donor back (client-side only, re-saves to server)
     showToast('תורם "' + deletedDonor.fullName + '" נמחק', function () {
-      undo = true;
-      delete pendingDonorDeletions[id];
+      donors.push(deletedDonor);
+      donors.sort(function (a, b) {
+        return (a.fullName || "").localeCompare(b.fullName || "", "he");
+      });
+      saveDonors();
       renderDonors();
     }, 5000);
   } else {
-    showMessage("התורם יימחק בעוד 5 שניות");
-  }
-
-  setTimeout(function () {
-    if (undo) return;
-
-    donors = donors.filter(function (donor) { return donor.id !== id; });
-    delete pendingDonorDeletions[id];
-    saveDonors();
-    renderDonors();
-    addLog("נמחק תורם: " + deletedDonor.fullName);
-    AuditLog.record({
-      action: "delete",
-      entityType: "donor",
-      entityId: deletedDonor.id,
-      entityName: deletedDonor.fullName,
-      details: "נמחק תורם מהמערכת",
-    });
     showMessage("התורם נמחק בהצלחה");
-  }, 5000);
+  }
 }
 
 function importFromExcel() {
