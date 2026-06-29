@@ -83,6 +83,7 @@ function initDatabase() {
 
   // ── Migrations ──────────────────────────────────────────────────
   try { db.exec("ALTER TABLE workers ADD COLUMN passwordHash TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE workers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
   try { db.exec("ALTER TABLE ivr_donations ADD COLUMN donorId INTEGER REFERENCES donors(id)"); } catch (_) {}
   try { db.exec("ALTER TABLE ivr_call_logs ADD COLUMN timestamp TEXT"); } catch (_) {}
 
@@ -127,8 +128,8 @@ function initDatabase() {
     const hash = bcrypt.hashSync("1234", SALT_ROUNDS);
     const now = nowIso();
     db.prepare(
-      "INSERT INTO workers (name, role, status, passwordHash, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run("מנהל מערכת", "מנהל", "פעיל", hash, now, now);
+      "INSERT INTO workers (name, role, status, passwordHash, must_change_password, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run("מנהל מערכת", "מנהל", "פעיל", hash, 1, now, now);
   }
 
   // ── Set bcrypt passwords for workers that only have legacy SHA-256 or no hash ──
@@ -141,6 +142,19 @@ function initDatabase() {
     const hash = bcrypt.hashSync(defaultPass, SALT_ROUNDS);
     db.prepare("UPDATE workers SET passwordHash = ?, updatedAt = ? WHERE id = ?")
       .run(hash, nowIso(), worker.id);
+  }
+
+  // ── Flag workers still using their default password (must change on next login) ──
+  const workersToCheck = db.prepare(
+    "SELECT id, role, passwordHash FROM workers WHERE must_change_password = 0"
+  ).all();
+
+  for (const w of workersToCheck) {
+    const defaultPass = w.role === "מנהל" ? "1234" : "1111";
+    if (w.passwordHash && bcrypt.compareSync(defaultPass, w.passwordHash)) {
+      db.prepare("UPDATE workers SET must_change_password = 1, updatedAt = ? WHERE id = ?")
+        .run(nowIso(), w.id);
+    }
   }
 }
 
@@ -159,9 +173,14 @@ function findWorkerById(id) {
 function createWorkerInDb(name, role, status, passwordHash) {
   const now = nowIso();
   const result = db.prepare(
-    "INSERT INTO workers (name, role, status, passwordHash, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(String(name).trim(), String(role).trim(), String(status).trim(), passwordHash, now, now);
+    "INSERT INTO workers (name, role, status, passwordHash, must_change_password, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(String(name).trim(), String(role).trim(), String(status).trim(), passwordHash, 1, now, now);
   return result.lastInsertRowid;
+}
+
+function clearMustChangePassword(id) {
+  return db.prepare("UPDATE workers SET must_change_password = 0, updatedAt = ? WHERE id = ?")
+    .run(nowIso(), Number(id));
 }
 
 function deleteWorkerById(id) {
@@ -341,6 +360,12 @@ function setAppState(key, data) {
   return true;
 }
 
+// ── Backup ───────────────────────────────────────────────────────────────────
+
+function backupDatabase(destPath) {
+  db.exec("VACUUM INTO '" + String(destPath).replace(/'/g, "''") + "'");
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 function getDashboardStats() {
@@ -377,12 +402,14 @@ function getDashboardStats() {
 initDatabase();
 
 module.exports = {
+  DB_PATH,
   // Workers
   getWorkers,
   findWorkerById,
   createWorkerInDb,
   deleteWorkerById,
   updateWorkerPasswordHash,
+  clearMustChangePassword,
   // Donors
   findDonorByPhone,
   upsertDonor,
@@ -399,6 +426,8 @@ module.exports = {
   // App state
   getAppState,
   setAppState,
+  // Backup
+  backupDatabase,
   // Dashboard
   getDashboardStats,
 };

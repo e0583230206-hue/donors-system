@@ -200,6 +200,21 @@ const Database = {
         "Authorization": "Bearer " + token,
       },
       body: JSON.stringify(data),
+    }).then(function () {
+      if (key !== "donors") return;
+      // Sync phone+name to IVR donors table so the phone system sees updates
+      var syncList = (Array.isArray(data) ? data : []).map(function (d) {
+        return { phone: d.phone, fullName: d.fullName };
+      }).filter(function (d) { return d.phone && d.fullName; });
+      if (syncList.length === 0) return;
+      return fetch("/api/donors/sync", {
+        method:  "POST",
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": "Bearer " + token,
+        },
+        body: JSON.stringify(syncList),
+      });
     }).catch(function (err) {
       console.warn("[DB] Server sync failed for key '" + key + "':", err.message);
     });
@@ -278,7 +293,8 @@ function escapeHTML(str) {
     .replace(/'/g, "&#39;");
 }
 
-// Kept for backward compatibility (used in settings.js change-password form)
+// Legacy SHA-256 hash — NOT used for authentication (server uses bcrypt).
+// Kept only so old backup files referencing this function don't break.
 async function hashPassword(password) {
   const encoder = new TextEncoder();
   const data    = encoder.encode(password);

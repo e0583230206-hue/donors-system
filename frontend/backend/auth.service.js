@@ -54,9 +54,14 @@ async function loginWorker(workerId, password) {
 
   return {
     token,
-    user:      { id: worker.id, name: worker.name, role },
-    expiresIn: SESSION_HOURS * 3600 * 1000,
+    user:              { id: worker.id, name: worker.name, role },
+    expiresIn:         SESSION_HOURS * 3600 * 1000,
+    mustChangePassword: !!worker.must_change_password,
   };
+}
+
+async function comparePassword(plain, hash) {
+  return bcrypt.compare(String(plain), hash);
 }
 
 async function hashPassword(password) {
@@ -105,6 +110,7 @@ module.exports = {
   normalizeRole,
   loginWorker,
   hashPassword,
+  comparePassword,
   requireAuth,
   requireRole,
   requireAdmin,

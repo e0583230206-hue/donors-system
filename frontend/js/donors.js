@@ -103,7 +103,6 @@ function addDonor() {
   cityInput.value = "";
   addressInput.value = "";
   notesInput.value = "";
-  addLog("נוסף תורם חדש: " + fullName);
   AuditLog.record({
     action: "create",
     entityType: "donor",
@@ -244,7 +243,6 @@ function deleteDonor(id) {
   // Remove immediately from array and save to server/localStorage right away
   donors = donors.filter(function (donor) { return donor.id !== id; });
   saveDonors();
-  addLog("נמחק תורם: " + deletedDonor.fullName);
   AuditLog.record({
     action: "delete",
     entityType: "donor",

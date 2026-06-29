@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
 const express     = require("express");
 const path        = require("path");
@@ -6,26 +6,31 @@ const helmet      = require("helmet");
 const cors        = require("cors");
 const rateLimit   = require("express-rate-limit");
 
+const fs = require("fs");
+
 const {
+  DB_PATH,
   getWorkers,
   findWorkerById,
   createWorkerInDb,
   deleteWorkerById,
   updateWorkerPasswordHash,
+  clearMustChangePassword,
   upsertDonor,
   getIvrDonations,
   getDashboardStats,
   getAppState,
   setAppState,
+  backupDatabase,
 } = require("./db");
 
 const {
   ROLES,
   loginWorker,
   hashPassword,
+  comparePassword,
   requireAuth,
   requireRole,
-  requireAdmin,
 } = require("./auth.service");
 
 const { handleIvrQuery, ivrErrorResponse } = require("./ivr.service");
@@ -218,6 +223,38 @@ app.delete("/api/workers/:id", requireRole([ROLES.ADMIN]), function (req, res, n
   }
 });
 
+// Self-service: any authenticated worker can change their own password
+// MUST be defined before /:id/password so Express doesn't treat "me" as an id
+app.put("/api/workers/me/password", requireAuth, async function (req, res, next) {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+
+    if (!newPassword || String(newPassword).length < 4) {
+      return res.status(400).json({ error: "Password must be at least 4 characters" });
+    }
+
+    const worker = findWorkerById(req.user.id);
+    if (!worker || !worker.passwordHash) {
+      return res.status(404).json({ error: "Worker not found" });
+    }
+
+    if (currentPassword) {
+      const valid = await comparePassword(String(currentPassword), worker.passwordHash);
+      if (!valid) {
+        return res.status(401).json({ error: "Current password is incorrect" });
+      }
+    }
+
+    const hash = await hashPassword(String(newPassword));
+    updateWorkerPasswordHash(worker.id, hash);
+    clearMustChangePassword(worker.id);
+
+    res.json({ updated: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.put("/api/workers/:id/password", requireRole([ROLES.ADMIN]), async function (req, res, next) {
   try {
     const id = Number(req.params.id);
@@ -234,6 +271,7 @@ app.put("/api/workers/:id/password", requireRole([ROLES.ADMIN]), async function 
 
     const hash = await hashPassword(String(newPassword));
     updateWorkerPasswordHash(id, hash);
+    clearMustChangePassword(id);
 
     res.json({ updated: true });
   } catch (err) {
@@ -362,3 +400,40 @@ app.use(function (err, req, res, _next) {
 app.listen(PORT, function () {
   console.log("[" + new Date().toISOString() + "] Server running on port " + PORT + " (NODE_ENV=" + (process.env.NODE_ENV || "development") + ")");
 });
+
+// ── Daily SQLite backup ───────────────────────────────────────────────────────
+(function scheduleDailyBackup() {
+  const BACKUP_DIR  = path.join(__dirname, "backups");
+  const MAX_BACKUPS = 7;
+
+  function runBackup() {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch (e) {
+        console.error("[Backup] Cannot create backup dir:", e.message);
+        return;
+      }
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
+    const dest  = path.join(BACKUP_DIR, "data-" + stamp + ".sqlite");
+
+    try {
+      backupDatabase(dest);
+      console.log("[Backup] Created:", dest);
+
+      // Prune oldest backups, keep MAX_BACKUPS most recent
+      const files = fs.readdirSync(BACKUP_DIR)
+        .filter(function (f) { return f.endsWith(".sqlite"); })
+        .sort();
+
+      while (files.length > MAX_BACKUPS) {
+        try { fs.unlinkSync(path.join(BACKUP_DIR, files.shift())); } catch (_) {}
+      }
+    } catch (e) {
+      console.error("[Backup] Failed:", e.message);
+    }
+  }
+
+  runBackup();
+  setInterval(runBackup, 24 * 60 * 60 * 1000);
+}());

@@ -399,6 +399,7 @@ createDraftButton.addEventListener("click", createDraftApprovals);
 Database.whenReady(function () {
   donors    = Database.get("donors");
   approvals = Database.get("approvals");
+  workers   = Database.get("workers");
   fillApproverSelect();
   renderApprovals();
 });

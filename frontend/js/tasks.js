@@ -432,6 +432,7 @@ if (taskSearchInput) {
 Database.whenReady(function () {
   donors  = Database.get("donors");
   tasks   = Database.get("tasks");
+  workers = Database.get("workers");
   fillWorkerSelect();
   fillDonorSelect();
   renderTasks();

@@ -41,6 +41,14 @@ function requireLogin() {
     window.location.href = "login.html?expired=1";
     return;
   }
+
+  if (sessionStorage.getItem("mustChangePassword") === "1") {
+    const onSettings = window.location.pathname.endsWith("settings.html");
+    if (!onSettings) {
+      window.location.href = "settings.html?forcePassword=1";
+      return;
+    }
+  }
 }
 
 // ── Role helpers ──────────────────────────────────────────────────────────────

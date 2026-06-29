@@ -146,7 +146,6 @@ function addCallback() {
   donor.updatedAt = new Date().toISOString();
 
   saveDonors();
-  addLog("נוספה הודעה לחזרה לתורם: " + donor.fullName);
   AuditLog.record({
     action: "create",
     entityType: "callback",
@@ -182,7 +181,6 @@ function setCallbackInProgress(donorId, callbackId) {
   donor.updatedAt = new Date().toISOString();
 
   saveDonors();
-  addLog("הודעה לחזרה הועברה לטיפול: " + donor.fullName);
   AuditLog.record({
     action: "status",
     entityType: "callback",
@@ -212,7 +210,6 @@ function markCallbackDone(donorId, callbackId) {
   donor.updatedAt = new Date().toISOString();
 
   saveDonors();
-  addLog("הודעה לחזרה טופלה: " + donor.fullName);
   AuditLog.record({
     action: "complete",
     entityType: "callback",
@@ -233,7 +230,6 @@ function deleteCallback(donorId, callbackId) {
   donor.callbacks = donor.callbacks.filter(function (callback) { return callback.id !== callbackId; });
   donor.updatedAt = new Date().toISOString();
   saveDonors();
-  addLog("נמחקה הודעה לחזרה: " + donor.fullName);
   AuditLog.record({
     action: "delete",
     entityType: "callback",
@@ -469,7 +465,8 @@ if (callbackSearchInput) {
 }
 
 Database.whenReady(function () {
-  donors = Database.get("donors");
+  donors  = Database.get("donors");
+  workers = Database.get("workers");
   ensureCallbackArrays();
   fillDonorSelect();
   fillWorkerSelect();

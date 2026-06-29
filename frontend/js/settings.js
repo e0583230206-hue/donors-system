@@ -377,6 +377,31 @@ function recordAuditLog(action, entityName, details) {
   });
 }
 
+// After restoring localStorage, push all data keys to the server so the
+// next page load doesn't overwrite the restored data with stale server data.
+async function pushRestoredDataToServer() {
+  var serverKeys = ["donors", "tasks", "logs", "settings", "approvals"];
+  var token = sessionStorage.getItem("authToken") || "";
+  if (!token) return;
+
+  var promises = serverKeys.map(function (key) {
+    var raw = localStorage.getItem(key);
+    if (!raw) return Promise.resolve();
+    var data;
+    try { data = JSON.parse(raw); } catch (_) { return Promise.resolve(); }
+    return fetch("/api/data/" + key, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token,
+      },
+      body: JSON.stringify(data),
+    }).catch(function () {});
+  });
+
+  return Promise.all(promises);
+}
+
 function createBackup() {
   const backupData = getFullLocalStorageBackup();
 
@@ -438,11 +463,11 @@ function restoreBackup(event) {
         "בוצע שחזור נתוני מערכת מקובץ גיבוי",
       );
 
-      showMessage("השחזור הושלם בהצלחה");
+      showMessage("השחזור הושלם — מסנכרן עם השרת...");
 
-      setTimeout(function () {
-        location.reload();
-      }, 1000);
+      pushRestoredDataToServer().finally(function () {
+        setTimeout(function () { location.reload(); }, 500);
+      });
     } catch (error) {
       showMessage("קובץ גיבוי לא תקין", "error");
     }
@@ -488,8 +513,10 @@ function restoreFromAutoBackup() {
     downloadBackupFile(getFullLocalStorageBackup(), getBackupFileName("donors-system-before-auto-restore"));
     Object.keys(snap).forEach(function (k) { localStorage.removeItem(k); });
     Object.keys(snap).forEach(function (k) { localStorage.setItem(k, snap[k]); });
-    showAutoMsg("שוחזר בהצלחה מגיבוי " + latestDate);
-    setTimeout(function () { location.reload(); }, 1200);
+    showAutoMsg("שוחזר בהצלחה מגיבוי " + latestDate + " — מסנכרן עם השרת...");
+    pushRestoredDataToServer().finally(function () {
+      setTimeout(function () { location.reload(); }, 500);
+    });
   } catch (e) {
     showAutoMsg("שגיאה בשחזור הגיבוי", "error");
   }
@@ -567,3 +594,93 @@ if (restoreInput) {
 
 // Load workers from server then render
 reloadWorkers().then(function () { renderWorkers(); });
+
+// ── Forced password change overlay (shown when ?forcePassword=1) ──────────────
+(function () {
+  if (new URLSearchParams(window.location.search).get("forcePassword") !== "1") return;
+
+  var overlay = document.createElement("div");
+  overlay.id = "forcePasswordOverlay";
+  overlay.style.cssText = [
+    "position:fixed", "inset:0", "background:rgba(0,0,0,0.88)",
+    "z-index:9999", "display:flex", "align-items:center", "justify-content:center",
+  ].join(";");
+
+  overlay.innerHTML = [
+    '<div style="background:var(--bg2,#1e1e2e);padding:32px;border-radius:12px;',
+    'max-width:420px;width:90%;direction:rtl;text-align:right;border:2px solid #e74c3c;">',
+    '<h2 style="color:#e74c3c;margin-top:0;font-size:20px;">⚠️ שינוי סיסמה נדרש</h2>',
+    '<p style="color:var(--muted,#aaa);margin-bottom:20px;font-size:14px;line-height:1.6;">',
+    'אתה מחובר עם סיסמת ברירת המחדל. עליך לבחור סיסמה חדשה לפני הכניסה למערכת.</p>',
+    '<div style="margin-bottom:14px;">',
+    '<label style="display:block;margin-bottom:6px;font-size:14px;">סיסמה חדשה</label>',
+    '<input type="password" id="fpNewPass" minlength="4" placeholder="לפחות 4 תווים"',
+    ' style="width:100%;box-sizing:border-box;padding:10px;border-radius:6px;',
+    'border:1px solid #555;background:var(--bg,#151521);color:inherit;font-size:14px;">',
+    '</div>',
+    '<div style="margin-bottom:18px;">',
+    '<label style="display:block;margin-bottom:6px;font-size:14px;">אימות סיסמה</label>',
+    '<input type="password" id="fpConfirmPass" placeholder="חזור על הסיסמה"',
+    ' style="width:100%;box-sizing:border-box;padding:10px;border-radius:6px;',
+    'border:1px solid #555;background:var(--bg,#151521);color:inherit;font-size:14px;">',
+    '</div>',
+    '<div id="fpMsg" style="min-height:18px;font-size:13px;margin-bottom:14px;color:#e74c3c;"></div>',
+    '<button id="fpBtn" style="width:100%;padding:12px;background:#4ade80;color:#000;',
+    'border:none;border-radius:8px;font-size:15px;font-weight:bold;cursor:pointer;">',
+    'שמור סיסמה חדשה</button>',
+    '</div>',
+  ].join("");
+
+  document.body.appendChild(overlay);
+
+  document.getElementById("fpBtn").addEventListener("click", async function () {
+    var newPass  = document.getElementById("fpNewPass").value;
+    var confirm  = document.getElementById("fpConfirmPass").value;
+    var msgEl    = document.getElementById("fpMsg");
+    var btn      = document.getElementById("fpBtn");
+
+    if (!newPass || newPass.length < 4) {
+      msgEl.textContent = "הסיסמה חייבת להיות לפחות 4 תווים";
+      return;
+    }
+    if (newPass !== confirm) {
+      msgEl.textContent = "הסיסמאות אינן תואמות";
+      return;
+    }
+
+    btn.disabled    = true;
+    btn.textContent = "שומר...";
+
+    try {
+      var token = sessionStorage.getItem("authToken") || "";
+      var res = await fetch("/api/workers/me/password", {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body:    JSON.stringify({ newPassword: newPass }),
+      });
+
+      if (!res.ok) {
+        var err = await res.json().catch(function () { return {}; });
+        msgEl.textContent   = err.error || "שגיאה בשינוי הסיסמה";
+        btn.disabled        = false;
+        btn.textContent     = "שמור סיסמה חדשה";
+        return;
+      }
+
+      sessionStorage.removeItem("mustChangePassword");
+      overlay.remove();
+      window.location.href = "index.html";
+    } catch (e) {
+      msgEl.textContent = "שגיאה בהתחברות לשרת";
+      btn.disabled      = false;
+      btn.textContent   = "שמור סיסמה חדשה";
+    }
+  });
+
+  document.getElementById("fpNewPass").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") document.getElementById("fpBtn").click();
+  });
+  document.getElementById("fpConfirmPass").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") document.getElementById("fpBtn").click();
+  });
+}());

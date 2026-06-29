@@ -330,16 +330,16 @@ function generateDonorLetterContent() {
       </div>
 
       <div style="margin-bottom:25px;font-size:14px;">
-        <p style="margin:6px 0;color:black;"><strong>שם התורם:</strong> ${donor.fullName || '---'}</p>
-        <p style="margin:6px 0;color:black;"><strong>טלפון:</strong> ${donor.phone || '---'}</p>
-        <p style="margin:6px 0;color:black;"><strong>עיר:</strong> ${donor.city || '---'}</p>
-        <p style="margin:6px 0;color:black;"><strong>כתובת:</strong> ${donor.address || '---'}</p>
+        <p style="margin:6px 0;color:black;"><strong>שם התורם:</strong> ${escapeHTML(donor.fullName || '---')}</p>
+        <p style="margin:6px 0;color:black;"><strong>טלפון:</strong> ${escapeHTML(donor.phone || '---')}</p>
+        <p style="margin:6px 0;color:black;"><strong>עיר:</strong> ${escapeHTML(donor.city || '---')}</p>
+        <p style="margin:6px 0;color:black;"><strong>כתובת:</strong> ${escapeHTML(donor.address || '---')}</p>
       </div>
 
       <div style="margin:25px 0;padding:18px;background-color:#f5f5f5;border:2px solid #333;border-radius:4px;font-size:14px;">
         <h3 style="margin:0 0 12px 0;font-size:16px;color:#8b0000;border-bottom:1px solid #333;padding-bottom:8px;">סיכום:</h3>
-        <p style="margin:8px 0;color:black;"><strong>סך ששולם:</strong> <span style="color:green;font-weight:bold;font-size:15px;">${formatMoney(paidTotalAmount)}</span></p>
-        <p style="margin:8px 0;color:black;"><strong>סך חוב פתוח:</strong> <span style="color:${debtTotalAmount > 0 ? 'red' : 'green'};font-weight:bold;font-size:15px;">${formatMoney(debtTotalAmount)}</span></p>
+        <p style="margin:8px 0;color:black;"><strong>סך ששולם:</strong> <span style="color:green;font-weight:bold;font-size:15px;">${escapeHTML(formatMoney(paidTotalAmount))}</span></p>
+        <p style="margin:8px 0;color:black;"><strong>סך חוב פתוח:</strong> <span style="color:${debtTotalAmount > 0 ? 'red' : 'green'};font-weight:bold;font-size:15px;">${escapeHTML(formatMoney(debtTotalAmount))}</span></p>
       </div>
 
       ${donationsDetailsHTML}
@@ -523,7 +523,6 @@ function saveDonorEdit() {
   donor.updatedAt = new Date().toISOString();
 
   saveDonors();
-  addLog("עודכנו פרטי תורם: " + donor.fullName);
   AuditLog.record({
     action: "update",
     entityType: "donor",

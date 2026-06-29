@@ -94,7 +94,13 @@ async function login() {
       await Database.loadFromServer(data.token);
     } catch (_) {}
 
-    window.location.href = "index.html";
+    if (data.mustChangePassword) {
+      sessionStorage.setItem("mustChangePassword", "1");
+      window.location.href = "settings.html?forcePassword=1";
+    } else {
+      sessionStorage.removeItem("mustChangePassword");
+      window.location.href = "index.html";
+    }
   } catch (_) {
     showMessage("שגיאה בהתחברות לשרת");
   } finally {
