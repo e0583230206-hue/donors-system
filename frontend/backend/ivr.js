@@ -7,10 +7,52 @@
 //   payment     — creditCard result (OK / anything else)
 //   voiceMessage — record result
 
+// ── Texts ─────────────────────────────────────────────────────────────────────
+// All TTS phrases are defined here. To switch languages, replace the values.
+// Static phrases are strings; dynamic phrases (with variables) are functions.
+
+var T = {
+  // ── Greetings ──────────────────────────────────────────────────────────────
+  GREETING_KNOWN:   function (name)            { return "שלום " + name + "."; },
+  GREETING_UNKNOWN: "ברוך הבא.",
+
+  // ── Debt announcement (follows greeting) ───────────────────────────────────
+  HAS_DEBT:         function (amount, purpose) { return " יש לך חוב על סכום " + amount + " שקלים עבור " + purpose + "."; },
+  NO_OPEN_DEBT:     " לא נמצא חוב פתוח.",
+
+  // ── Main menu options (appended after greeting + debt) ─────────────────────
+  MENU_WITH_PREV_DEBTS:    " למעבר לתשלום הקישו 1. לשמיעת חובות קודמים הקישו 2. להשארת הודעה הקישו 3.",
+  MENU_WITHOUT_PREV_DEBTS: " למעבר לתשלום הקישו 1. להשארת הודעה הקישו 3.",
+  MENU_DONATION_ONLY:      " לתרומה הקישו 1. להשארת הודעה הקישו 3.",
+
+  // ── Payment sub-menu ───────────────────────────────────────────────────────
+  PAY_FULL_OR_CUSTOM: function (amount) { return "לתשלום הסכום המלא, " + amount + " שקלים, הקישו 1. לתשלום סכום אחר הקישו 2."; },
+  ENTER_AMOUNT:       "אנא הזינו את הסכום בשקלים ולחצו סולמית.",
+  AMOUNT_INVALID:     "הסכום שהוזן אינו תקין. אנא נסה שנית.",
+
+  // ── Debt list ──────────────────────────────────────────────────────────────
+  DEBT_ITEM:         function (n, amount, purpose) { return n + ". סכום " + amount + " שקלים עבור " + purpose + "."; },
+  DEBT_MENU_CHOICES: "לתשלום כל החובות הקישו 1. לתשלום סכום אחר הקישו 2. לסיום הקישו 9.",
+  NO_PREVIOUS_DEBTS: "לא נמצאו חובות קודמים.",
+
+  // ── Voice recording ────────────────────────────────────────────────────────
+  LEAVE_MESSAGE:         "אנא השאירו הודעתכם לאחר הצליל.",
+  VOICE_MSG_RECEIVED:    "הודעתכם התקבלה. תודה.",
+
+  // ── Payment result ─────────────────────────────────────────────────────────
+  PAYMENT_SUCCESS: function (name) { return (name ? "תודה " + name + ". " : "") + "התשלום התקבל בהצלחה. תודה רבה."; },
+  PAYMENT_FAILED:  "התשלום לא הושלם. אנא נסה שנית מאוחר יותר.",
+
+  // ── Fallback when credit-card terminal is not configured ───────────────────
+  PAYMENT_UNAVAILABLE: "התשלום בכרטיס אשראי אינו זמין כרגע. נציג ייצור איתך קשר בהקדם. תודה.",
+
+  // ── Goodbye ────────────────────────────────────────────────────────────────
+  GOODBYE: "תודה על התקשרותך. להתראות.",
+};
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function txt(text)    { return { text: text }; }
-function spokenNum(n) { return { number: String(n) }; }
 
 // Technoline may accumulate duplicate params as an array; always take last value.
 function p(query, name) {
@@ -78,7 +120,7 @@ function creditCardModule(amount) {
 
 function paymentPlaceholder() {
   return [
-    simpleMessage([txt("התשלום בכרטיס אשראי אינו זמין כרגע. נציג ייצור איתך קשר בהקדם. תודה.")]),
+    simpleMessage([txt(T.PAYMENT_UNAVAILABLE)]),
     hangup(),
   ];
 }
@@ -106,16 +148,15 @@ function buildResponse(query, donor) {
 
   // ── Voice message received → thank and end ────────────────────────────────
   if (voiceMsg !== undefined) {
-    return [simpleMessage([txt("הודעתכם התקבלה. תודה.")]), hangup()];
+    return [simpleMessage([txt(T.VOICE_MSG_RECEIVED)]), hangup()];
   }
 
   // ── Payment result ────────────────────────────────────────────────────────
   if (payment !== undefined) {
     if (payment === "OK") {
-      var okGreeting = donorName ? "תודה " + donorName + ". " : "";
-      return [simpleMessage([txt(okGreeting + "התשלום התקבל בהצלחה. תודה רבה.")]), hangup()];
+      return [simpleMessage([txt(T.PAYMENT_SUCCESS(donorName))]), hangup()];
     }
-    return [simpleMessage([txt("התשלום לא הושלם. אנא נסה שנית מאוחר יותר.")]), hangup()];
+    return [simpleMessage([txt(T.PAYMENT_FAILED)]), hangup()];
   }
 
   // ── mainChoice = 1 — Payment / Donation ──────────────────────────────────
@@ -124,7 +165,7 @@ function buildResponse(query, donor) {
     // Donor has debt → show payment sub-menu (pay full or custom)
     if (currentDebt && !payChoice) {
       return simpleMenu(
-        [txt("לתשלום הסכום המלא, " + currentDebt.amount + " שקלים, הקישו 1. לתשלום סכום אחר הקישו 2.")],
+        [txt(T.PAY_FULL_OR_CUSTOM(currentDebt.amount))],
         "payChoice", "1,2", 3, 7
       );
     }
@@ -139,13 +180,13 @@ function buildResponse(query, donor) {
     if (amount !== undefined) {
       var numAmount = parseFloat(amount);
       if (isNaN(numAmount) || numAmount <= 0) {
-        return [simpleMessage([txt("הסכום שהוזן אינו תקין. אנא נסה שנית.")]), hangup()];
+        return [simpleMessage([txt(T.AMOUNT_INVALID)]), hangup()];
       }
       if (!hasTerminal) return paymentPlaceholder();
       return creditCardModule(numAmount);
     }
 
-    return getDTMF("amount", [txt("אנא הזינו את הסכום בשקלים ולחצו סולמית.")], 6, 1, 7);
+    return getDTMF("amount", [txt(T.ENTER_AMOUNT)], 6, 1, 7);
   }
 
   // ── mainChoice = 2 — Previous debts ──────────────────────────────────────
@@ -153,7 +194,7 @@ function buildResponse(query, donor) {
 
     // debtChoice=9 → end call
     if (debtChoice === "9") {
-      return [simpleMessage([txt("תודה על התקשרותך. להתראות.")]), hangup()];
+      return [simpleMessage([txt(T.GOODBYE)]), hangup()];
     }
 
     // Aggregate: all open debts for paying "all"
@@ -171,30 +212,30 @@ function buildResponse(query, donor) {
       if (amount !== undefined) {
         var customAmt = parseFloat(amount);
         if (isNaN(customAmt) || customAmt <= 0) {
-          return [simpleMessage([txt("הסכום שהוזן אינו תקין. אנא נסה שנית.")]), hangup()];
+          return [simpleMessage([txt(T.AMOUNT_INVALID)]), hangup()];
         }
         if (!hasTerminal) return paymentPlaceholder();
         return creditCardModule(customAmt);
       }
-      return getDTMF("amount", [txt("אנא הזינו את הסכום בשקלים ולחצו סולמית.")], 6, 1, 7);
+      return getDTMF("amount", [txt(T.ENTER_AMOUNT)], 6, 1, 7);
     }
 
     // No debtChoice yet → read all debts then show debt menu
     if (allDebts.length === 0) {
-      return [simpleMessage([txt("לא נמצאו חובות קודמים.")]), hangup()];
+      return [simpleMessage([txt(T.NO_PREVIOUS_DEBTS)]), hangup()];
     }
 
     var debtFiles = allDebts.map(function (d, i) {
-      return txt((i + 1) + ". סכום " + d.amount + " שקלים עבור " + d.purpose + ".");
+      return txt(T.DEBT_ITEM(i + 1, d.amount, d.purpose));
     });
-    debtFiles.push(txt("לתשלום כל החובות הקישו 1. לתשלום סכום אחר הקישו 2. לסיום הקישו 9."));
+    debtFiles.push(txt(T.DEBT_MENU_CHOICES));
     return simpleMenu(debtFiles, "debtChoice", "1,2,9", 2, 7);
   }
 
   // ── mainChoice = 3 — Leave a voice message ────────────────────────────────
   if (mainChoice === "3") {
     return [
-      simpleMessage([txt("אנא השאירו הודעתכם לאחר הצליל.")]),
+      simpleMessage([txt(T.LEAVE_MESSAGE)]),
       record("voiceMessage"),
     ];
   }
@@ -204,23 +245,21 @@ function buildResponse(query, donor) {
   var greeting, menuText, enabledKeys;
 
   if (donorName && currentDebt) {
-    greeting = "שלום " + donorName + "." + noteSegment +
-      " יש לך חוב על סכום " + currentDebt.amount +
-      " שקלים עבור " + currentDebt.purpose + ".";
+    greeting = T.GREETING_KNOWN(donorName) + noteSegment + T.HAS_DEBT(currentDebt.amount, currentDebt.purpose);
     if (previousDebts.length > 0) {
-      menuText = " למעבר לתשלום הקישו 1. לשמיעת חובות קודמים הקישו 2. להשארת הודעה הקישו 3.";
+      menuText    = T.MENU_WITH_PREV_DEBTS;
       enabledKeys = "1,2,3";
     } else {
-      menuText = " למעבר לתשלום הקישו 1. להשארת הודעה הקישו 3.";
+      menuText    = T.MENU_WITHOUT_PREV_DEBTS;
       enabledKeys = "1,3";
     }
   } else if (donorName) {
-    greeting = "שלום " + donorName + "." + noteSegment + " לא נמצא חוב פתוח.";
-    menuText  = " לתרומה הקישו 1. להשארת הודעה הקישו 3.";
+    greeting    = T.GREETING_KNOWN(donorName) + noteSegment + T.NO_OPEN_DEBT;
+    menuText    = T.MENU_DONATION_ONLY;
     enabledKeys = "1,3";
   } else {
-    greeting  = "ברוך הבא.";
-    menuText  = " לתרומה הקישו 1. להשארת הודעה הקישו 3.";
+    greeting    = T.GREETING_UNKNOWN;
+    menuText    = T.MENU_DONATION_ONLY;
     enabledKeys = "1,3";
   }
 
