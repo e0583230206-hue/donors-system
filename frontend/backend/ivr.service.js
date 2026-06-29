@@ -52,9 +52,11 @@ function detectIvrStep(q) {
 
 function handleIvrQuery(query) {
   var q      = query || {};
-  var callId = asText(q.PBXcallId);
+  var callId = asText(q.PBXcallId) || asText(q.PBXphone) + "-" + Date.now();
   var phone  = normalizePhone(q.PBXphone);
   var step   = detectIvrStep(q);
+
+  console.log("[IVR:handleIvrQuery] callId:", callId, "phone:", phone, "step:", step);
 
   safeInsertCallLog(callId, phone, step, q);
 
@@ -62,12 +64,13 @@ function handleIvrQuery(query) {
     return { hangup: true };
   }
 
-  if (!callId || !phone) {
-    safeInsertCallLog(callId, phone, "error", { reason: "missing_pbx_data", query: q });
+  if (!phone) {
+    console.warn("[IVR] Missing PBXphone — cannot process");
     return { response: ivrErrorResponse() };
   }
 
   var donor = getDonorForIvr(phone);
+  console.log("[IVR:handleIvrQuery] donor:", donor ? donor.fullName : "null", "currentDebt:", donor && donor.currentDebt ? donor.currentDebt.amount : "none");
 
   // Log voice message receipt
   if (q.voiceMessage !== undefined) {
@@ -111,7 +114,9 @@ function handleIvrQuery(query) {
     });
   }
 
-  return { response: buildResponse(q, donor) };
+  var ivrResponse = buildResponse(q, donor);
+  console.log("[IVR:handleIvrQuery] response type:", Array.isArray(ivrResponse) ? "array" : (ivrResponse && ivrResponse.type) || typeof ivrResponse, "| name:", ivrResponse && ivrResponse.name);
+  return { response: ivrResponse };
 }
 
 module.exports = {
