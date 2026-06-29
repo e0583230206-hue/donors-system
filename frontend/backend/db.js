@@ -423,6 +423,18 @@ function getCallLogsByCallId(callId) {
 // ── Click-to-Call Logs ───────────────────────────────────────────────────────
 
 function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, donorPhone, agentExtension, status, errorCode, errorNote }) {
+  // donorId is a FK to donors(id) — validate before INSERT to avoid constraint errors.
+  // The client may send an app-level donor ID that hasn't been synced to SQLite.
+  var safeDonorId = null;
+  if (donorId != null) {
+    var donorRow = db.prepare("SELECT id FROM donors WHERE id = ? LIMIT 1").get(Number(donorId));
+    if (donorRow) {
+      safeDonorId = Number(donorId);
+    } else {
+      console.warn("[DB] logClick2Call: donorId " + donorId + " not in donors table — storing NULL");
+    }
+  }
+
   return db.prepare(`
     INSERT INTO click2call_logs
       (pbxCallId, workerId, workerName, donorId, donorName, donorPhone, agentExtension, status, errorCode, errorNote, createdAt)
@@ -431,7 +443,7 @@ function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, do
     pbxCallId      || null,
     workerId       || null,
     workerName     || null,
-    donorId        || null,
+    safeDonorId,
     donorName      || null,
     String(donorPhone).trim(),
     String(agentExtension).trim(),

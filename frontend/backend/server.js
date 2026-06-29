@@ -425,18 +425,22 @@ app.post(
       var techBody = await techRes.json();
       var success  = techBody && String(techBody.status).toUpperCase() === "OK";
 
-      logClick2Call({
-        pbxCallId:      success ? (techBody.callId || null) : null,
-        workerId:       req.user ? req.user.id   : null,
-        workerName:     req.user ? req.user.name : null,
-        donorId:        donorId,
-        donorName:      donorName || null,
-        donorPhone:     phone,
-        agentExtension: extension,
-        status:         success ? "success" : "error",
-        errorCode:      success ? null : (techBody.errorCode != null ? techBody.errorCode : null),
-        errorNote:      success ? null : (techBody.note || null),
-      });
+      try {
+        logClick2Call({
+          pbxCallId:      success ? (techBody.callId || null) : null,
+          workerId:       req.user ? req.user.id   : null,
+          workerName:     req.user ? req.user.name : null,
+          donorId:        donorId,
+          donorName:      donorName || null,
+          donorPhone:     phone,
+          agentExtension: extension,
+          status:         success ? "success" : "error",
+          errorCode:      success ? null : (techBody.errorCode != null ? techBody.errorCode : null),
+          errorNote:      success ? null : (techBody.note || null),
+        });
+      } catch (logErr) {
+        console.error("[Click2Call] Failed to write log — call result unaffected:", logErr.message);
+      }
 
       if (!success) {
         console.error("[Click2Call] Technoline error:", JSON.stringify(techBody));
