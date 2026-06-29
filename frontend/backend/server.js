@@ -364,6 +364,8 @@ app.get(
 // The route stays stateless: only req.query and SQLite are used.
 app.get("/ivr", ivrLimiter, requireIvrKey, function (req, res) {
   try {
+    console.log("[IVR] QUERY:", JSON.stringify(req.query));
+    console.log("[IVR] mainChoice =", req.query.mainChoice, "| payChoice =", req.query.payChoice, "| debtChoice =", req.query.debtChoice);
     var result = handleIvrQuery(req.query || {});
 
     if (result.hangup) {
