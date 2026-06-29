@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>מוניטור IVR</title>
+    <link rel="stylesheet" href="css/style.css" />
+    <style>
+      /* ── Stats row ── */
+      .monitor-stats {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .monitor-stats .stat-card { text-align: center; }
+      .monitor-stats .stat-card strong { font-size: 2rem; }
+
+      /* ── Two-panel layout ── */
+      .monitor-grid {
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        gap: 20px;
+        align-items: start;
+      }
+
+      /* ── Alert list ── */
+      .alert-list { list-style: none; padding: 0; margin: 0; }
+      .alert-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        font-size: 13px;
+        line-height: 1.4;
+        cursor: pointer;
+        transition: opacity .15s;
+      }
+      .alert-item:hover { opacity: .85; }
+      .alert-item.info    { background: #eff6ff; border-right: 3px solid #3b82f6; }
+      .alert-item.warning { background: #fffbeb; border-right: 3px solid #f59e0b; }
+      .alert-item.danger  { background: #fef2f2; border-right: 3px solid #ef4444; }
+      .alert-icon { font-size: 18px; flex-shrink: 0; }
+      .alert-body {}
+      .alert-label { font-weight: 600; }
+      .alert-meta  { color: #666; font-size: 11px; margin-top: 2px; }
+
+      /* ── Sessions table ── */
+      .sessions-table th, .sessions-table td { font-size: 12px; padding: 6px 8px; }
+      .sessions-table tr.selected td { background: #eff6ff; }
+      .sessions-table tr { cursor: pointer; }
+      .sessions-table tr:hover td { background: #f8fafc; }
+      .outcome-badge {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .outcome-payment  { background:#dcfce7; color:#166534; }
+      .outcome-hangup   { background:#f1f5f9; color:#475569; }
+      .outcome-message  { background:#dbeafe; color:#1e40af; }
+      .outcome-error    { background:#fee2e2; color:#991b1b; }
+      .outcome-failed   { background:#fee2e2; color:#991b1b; }
+
+      /* ── Debug panel ── */
+      #debugPanel { display: none; }
+      .debug-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+      .debug-meta { font-size: 13px; color: #555; margin-bottom: 12px; }
+      .step-list { list-style: none; padding: 0; margin: 0; }
+      .step-item {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        overflow: hidden;
+      }
+      .step-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        background: #f8fafc;
+        cursor: pointer;
+        user-select: none;
+      }
+      .step-header:hover { background: #f1f5f9; }
+      .step-time { font-size: 11px; color: #888; margin-right: auto; }
+      .step-label { font-weight: 600; font-size: 13px; }
+      .step-body {
+        display: none;
+        padding: 12px 14px;
+        background: #fff;
+        border-top: 1px solid #e2e8f0;
+      }
+      .step-body.open { display: block; }
+      .step-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .step-field { font-size: 12px; }
+      .step-field .field-key { color: #666; font-size: 11px; }
+      .step-field .field-val { font-weight: 600; }
+      .json-block {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 6px;
+        padding: 12px;
+        font-family: monospace;
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 320px;
+        overflow-y: auto;
+        margin-top: 8px;
+      }
+
+      /* ── Refresh indicator ── */
+      .refresh-info { font-size: 12px; color: #888; }
+      .refresh-dot {
+        display: inline-block;
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        background: #22c55e;
+        margin-left: 6px;
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+      @media (max-width: 900px) {
+        .monitor-stats { grid-template-columns: repeat(3,1fr); }
+        .monitor-grid  { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+        <span>א בלאט גמרא</span>
+        <small>ניהול תורמים</small>
+      </div>
+      <nav>
+        <a href="index.html">🏠 דף הבית</a>
+        <a href="donors.html">👤 תורמים</a>
+        <a href="debts.html">⚠️ חובות</a>
+        <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+        <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+        <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+        <a href="reports.html">📊 דוחות</a>
+        <a href="logs.html">🕒 יומן מערכת</a>
+        <a href="approvals.html">✅ אישור חיובים</a>
+        <a class="active" href="ivr-monitor.html">📺 מוניטור IVR</a>
+        <a href="settings.html">⚙️ הגדרות</a>
+        <a href="README.html">📖 מדריך משתמש</a>
+      </nav>
+      <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar page-header">
+        <div class="page-title">
+          <span class="page-kicker">ניטור בזמן אמת</span>
+          <h1>📺 מוניטור IVR</h1>
+          <p>שיחות, תשלומים, הודעות ושגיאות — היום</p>
+        </div>
+        <div class="page-actions" style="align-items:center;gap:12px;">
+          <span class="refresh-info"><span class="refresh-dot"></span>מתרענן אוטומטית</span>
+          <button onclick="loadData()" class="primary-btn">🔄 רענן עכשיו</button>
+        </div>
+      </header>
+
+      <!-- Stats -->
+      <div class="monitor-stats">
+        <div class="stat-card stat-card-donations">
+          <h3>☎️ שיחות</h3>
+          <strong id="statCalls">—</strong>
+          <p>היום</p>
+        </div>
+        <div class="stat-card success stat-card-paid">
+          <h3>💰 תשלומים</h3>
+          <strong id="statPayments">—</strong>
+          <p>היום</p>
+        </div>
+        <div class="stat-card stat-card-ivr">
+          <h3>💵 סכום</h3>
+          <strong id="statAmount">—</strong>
+          <p>היום</p>
+        </div>
+        <div class="stat-card">
+          <h3>🎤 הודעות</h3>
+          <strong id="statVoicemails">—</strong>
+          <p>היום</p>
+        </div>
+        <div class="stat-card danger stat-card-debt">
+          <h3>❌ שגיאות</h3>
+          <strong id="statErrors">—</strong>
+          <p>היום</p>
+        </div>
+      </div>
+
+      <!-- Alerts + Sessions -->
+      <div class="monitor-grid">
+        <!-- Alerts -->
+        <div class="panel">
+          <h2>🔔 התראות</h2>
+          <ul class="alert-list" id="alertList">
+            <li style="color:#888;font-size:13px;">טוען...</li>
+          </ul>
+        </div>
+
+        <!-- Sessions -->
+        <div class="panel">
+          <h2>📋 שיחות אחרונות — לחץ לפירוט Debug</h2>
+          <div class="table-wrap">
+            <table class="sessions-table">
+              <thead>
+                <tr>
+                  <th>שעה</th>
+                  <th>טלפון</th>
+                  <th>תורם</th>
+                  <th>משך</th>
+                  <th>סיום</th>
+                  <th>סכום</th>
+                </tr>
+              </thead>
+              <tbody id="sessionsTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Debug Panel -->
+      <div class="panel" id="debugPanel">
+        <div class="debug-header">
+          <h2>🔍 פירוט שיחה</h2>
+          <button onclick="closeDebug()" class="secondary-btn">✕ סגור</button>
+        </div>
+        <div class="debug-meta" id="debugMeta"></div>
+        <ul class="step-list" id="stepList"></ul>
+      </div>
+    </main>
+
+    <script src="js/auth.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/notifications.js"></script>
+    <script>
+      var STEP_LABELS = {
+        call_start:             "📞 התחלת שיחה",
+        donor_identified:       "👤 זוהה תורם",
+        unknown_caller:         "❓ מתקשר לא מוכר",
+        menu_selection:         "🎛 בחירה בתפריט",
+        payment_submenu:        "💳 תפריט תשלום",
+        debt_submenu:           "📊 תפריט חובות",
+        amount_entered:         "🔢 סכום הוזן",
+        voice_message_received: "🎤 הודעה קולית נשמרה",
+        payment_success:        "✅ תשלום הצליח",
+        payment_failed:         "❌ תשלום נכשל",
+        call_end:               "📵 שיחה הסתיימה",
+        error:                  "⚠️ שגיאת מערכת",
+        response_json:          "📤 JSON שנשלח ל-PBX",
+      };
+
+      var OUTCOME_CONFIG = {
+        payment_success: { label: "✅ תשלום",           cls: "outcome-payment" },
+        payment_failed:  { label: "❌ תשלום נכשל",     cls: "outcome-failed"  },
+        voice_message:   { label: "🎤 הודעה",           cls: "outcome-message" },
+        error:           { label: "⚠️ שגיאה",           cls: "outcome-error"   },
+        hangup:          { label: "🔴 נגמרה",           cls: "outcome-hangup"  },
+      };
+
+      var ALERT_CONFIG = {
+        voice_message:  { icon: "🎤", label: "תורם השאיר הודעה קולית", cls: "info"    },
+        system_error:   { icon: "⚠️", label: "שגיאת מערכת",            cls: "danger"  },
+        payment_failed: { icon: "❌", label: "תשלום נכשל",             cls: "danger"  },
+        interrupted:    { icon: "📵", label: "שיחה נקטעה באמצע",       cls: "warning" },
+      };
+
+      var CHOICE_LABELS = {
+        mainChoice: {
+          "1": "תשלום",
+          "2": "חובות קודמים",
+          "3": "השארת הודעה",
+        },
+        payChoice: {
+          "1": "תשלום מלא",
+          "2": "סכום אחר",
+        },
+        debtChoice: {
+          "1": "שלם הכל",
+          "2": "סכום אחר",
+          "9": "סיים",
+        },
+      };
+
+      var currentSelectedRow = null;
+      var refreshTimer = null;
+
+      // ── Helpers ────────────────────────────────────────────────────────────
+
+      function fmtTime(iso) {
+        if (!iso) return "—";
+        try {
+          return new Date(iso).toLocaleTimeString("he-IL", {
+            timeZone: "Asia/Jerusalem",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+          });
+        } catch (_) { return iso.slice(11, 19); }
+      }
+
+      function fmtDate(iso) {
+        if (!iso) return "—";
+        try {
+          return new Date(iso).toLocaleDateString("he-IL", {
+            timeZone: "Asia/Jerusalem",
+            day: "2-digit", month: "2-digit",
+          }) + " " + fmtTime(iso);
+        } catch (_) { return iso; }
+      }
+
+      function fmtDuration(sec) {
+        if (sec == null) return "—";
+        var m = Math.floor(sec / 60);
+        var s = sec % 60;
+        return (m > 0 ? m + "ד " : "") + s + "ש";
+      }
+
+      function fmtAmount(n) {
+        if (n == null || n === 0) return null;
+        return "₪" + Number(n).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+      }
+
+      function escHtml(s) {
+        return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      }
+
+      // ── Stats ──────────────────────────────────────────────────────────────
+
+      function renderStats(s) {
+        document.getElementById("statCalls").textContent      = s.calls;
+        document.getElementById("statPayments").textContent   = s.payments;
+        document.getElementById("statAmount").textContent     = fmtAmount(s.paymentsTotal) || "₪0";
+        document.getElementById("statVoicemails").textContent = s.voicemails;
+        document.getElementById("statErrors").textContent     = s.errors;
+
+        var errCard = document.querySelector(".stat-card.danger.stat-card-debt");
+        if (errCard) errCard.classList.toggle("blink-danger", s.errors > 0);
+      }
+
+      // ── Alerts ─────────────────────────────────────────────────────────────
+
+      function renderAlerts(alerts) {
+        var list = document.getElementById("alertList");
+        if (!alerts || !alerts.length) {
+          list.innerHTML = '<li style="color:#888;font-size:13px;padding:8px 0;">אין התראות חדשות 🎉</li>';
+          return;
+        }
+        list.innerHTML = alerts.map(function(a) {
+          var cfg = ALERT_CONFIG[a.alertType] || { icon: "❓", label: a.alertType, cls: "info" };
+          return '<li class="alert-item ' + cfg.cls + '" onclick="selectSessionById(' + JSON.stringify(a.callId) + ')">' +
+            '<span class="alert-icon">' + cfg.icon + '</span>' +
+            '<div class="alert-body">' +
+              '<div class="alert-label">' + cfg.label + '</div>' +
+              '<div class="alert-meta">' + escHtml(a.donor) + ' · ' + fmtDate(a.time) + '</div>' +
+            '</div>' +
+          '</li>';
+        }).join("");
+      }
+
+      // ── Sessions ───────────────────────────────────────────────────────────
+
+      var sessionsCache = [];
+
+      function renderSessions(sessions) {
+        sessionsCache = sessions || [];
+        var tbody = document.getElementById("sessionsTable");
+        if (!sessions || !sessions.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#888;padding:20px;">אין שיחות עדיין</td></tr>';
+          return;
+        }
+        tbody.innerHTML = sessions.map(function(s) {
+          var oc = OUTCOME_CONFIG[s.outcome] || { label: s.outcome || "—", cls: "outcome-hangup" };
+          var amt = fmtAmount(s.amountPaid);
+          return '<tr onclick="selectSession(this, ' + JSON.stringify(s.callId) + ')" data-callid="' + escHtml(s.callId) + '">' +
+            '<td>' + fmtTime(s.startedAt) + '</td>' +
+            '<td>' + escHtml(s.phone) + '</td>' +
+            '<td>' + escHtml(s.donorName || "—") + '</td>' +
+            '<td>' + fmtDuration(s.durationSec) + '</td>' +
+            '<td><span class="outcome-badge ' + oc.cls + '">' + oc.label + '</span></td>' +
+            '<td>' + (amt ? '<strong>' + amt + '</strong>' : '—') + '</td>' +
+          '</tr>';
+        }).join("");
+      }
+
+      function selectSession(tr, callId) {
+        if (currentSelectedRow) currentSelectedRow.classList.remove("selected");
+        tr.classList.add("selected");
+        currentSelectedRow = tr;
+        loadDebug(callId);
+      }
+
+      function selectSessionById(callId) {
+        var tr = document.querySelector('[data-callid="' + callId + '"]');
+        if (tr) selectSession(tr, callId);
+        else loadDebug(callId);
+      }
+
+      // ── Debug ──────────────────────────────────────────────────────────────
+
+      function loadDebug(callId) {
+        var panel = document.getElementById("debugPanel");
+        var meta  = document.getElementById("debugMeta");
+        var list  = document.getElementById("stepList");
+
+        panel.style.display = "block";
+        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        meta.textContent = "טוען...";
+        list.innerHTML   = "";
+
+        var sess = sessionsCache.find(function(s) { return s.callId === callId; });
+        if (sess) {
+          meta.innerHTML =
+            "<strong>callId:</strong> " + escHtml(callId) +
+            " &nbsp;|&nbsp; <strong>טלפון:</strong> " + escHtml(sess.phone) +
+            " &nbsp;|&nbsp; <strong>תורם:</strong> " + escHtml(sess.donorName || "לא מוכר") +
+            " &nbsp;|&nbsp; <strong>משך:</strong> " + fmtDuration(sess.durationSec) +
+            " &nbsp;|&nbsp; <strong>התחיל:</strong> " + fmtDate(sess.startedAt);
+        }
+
+        apiFetch("/api/ivr/sessions/" + encodeURIComponent(callId) + "/logs")
+          .then(function(r) { return r.json(); })
+          .then(function(logs) { renderDebugLogs(logs); })
+          .catch(function() {
+            list.innerHTML = '<li style="color:red;padding:10px;">שגיאה בטעינת פירוט</li>';
+          });
+      }
+
+      function renderDebugLogs(logs) {
+        var list = document.getElementById("stepList");
+        if (!logs || !logs.length) {
+          list.innerHTML = '<li style="color:#888;padding:10px;">אין לוגים לשיחה זו</li>';
+          return;
+        }
+
+        list.innerHTML = logs.map(function(log, i) {
+          var label = STEP_LABELS[log.step] || ("⚙️ " + log.step);
+          var payload = {};
+          try { payload = JSON.parse(log.payload); } catch (_) {}
+
+          var isJson = log.step === "response_json";
+          var isCritical = log.step === "error" || log.step === "payment_failed";
+          var headerBg = isCritical ? "background:#fef2f2;" :
+                         isJson     ? "background:#f0fdf4;" : "";
+
+          var fieldsHtml = "";
+
+          if (isJson) {
+            // Show the JSON modules sent to PBX
+            fieldsHtml = '<div style="margin-top:4px;">' +
+              '<div class="field-key">מודולים שנשלחו ל-PBX:</div>' +
+              '<div class="json-block">' + escHtml(JSON.stringify(payload.modules || payload, null, 2)) + '</div>' +
+            '</div>';
+          } else {
+            // Build key-value display
+            var fields = [];
+            if (payload.PBXphone)    fields.push(["PBXphone",    payload.PBXphone]);
+            if (payload.PBXcallId)   fields.push(["PBXcallId",   payload.PBXcallId]);
+            if (payload.phone)       fields.push(["טלפון",        payload.phone]);
+            if (payload.donorId)     fields.push(["donorId",     payload.donorId]);
+            if (payload.donorName)   fields.push(["תורם",         payload.donorName]);
+            if (payload.choice)      fields.push(["בחירה",        payload.choice]);
+            if (payload.menu)        fields.push(["תפריט",        payload.menu]);
+            if (payload.label) {
+              var labelTxt = CHOICE_LABELS[payload.menu === "main" ? "mainChoice" : (payload.menu || "")]?.[payload.choice] || payload.label;
+              fields.push(["פעולה", labelTxt]);
+            }
+            if (payload.amount != null) fields.push(["סכום",     "₪" + payload.amount]);
+            if (payload.outcome)     fields.push(["תוצאה",       payload.outcome]);
+            if (payload.amountPaid)  fields.push(["שולם",        "₪" + payload.amountPaid]);
+            if (payload.reason)      fields.push(["סיבה",        payload.reason]);
+            if (payload.result)      fields.push(["result",      payload.result]);
+            if (payload.hasDebt != null) fields.push(["יש חוב",  payload.hasDebt ? "כן" : "לא"]);
+            if (payload.debtAmount)  fields.push(["סכום חוב",    "₪" + payload.debtAmount]);
+            if (payload.duplicate != null) fields.push(["כפול",  payload.duplicate ? "כן" : "לא"]);
+
+            if (fields.length) {
+              fieldsHtml = '<div class="step-fields">' +
+                fields.map(function(f) {
+                  return '<div class="step-field">' +
+                    '<div class="field-key">' + escHtml(f[0]) + '</div>' +
+                    '<div class="field-val">' + escHtml(String(f[1])) + '</div>' +
+                  '</div>';
+                }).join("") +
+              '</div>';
+            }
+
+            // Show raw payload toggle
+            fieldsHtml += '<details style="margin-top:8px;">' +
+              '<summary style="font-size:11px;color:#888;cursor:pointer;">פרמטרים גולמיים</summary>' +
+              '<div class="json-block">' + escHtml(JSON.stringify(payload, null, 2)) + '</div>' +
+            '</details>';
+          }
+
+          return '<li class="step-item" id="step-' + i + '">' +
+            '<div class="step-header" style="' + headerBg + '" onclick="toggleStep(' + i + ')">' +
+              '<span class="step-label">' + label + '</span>' +
+              '<span class="step-time">' + fmtTime(log.timestamp) + '</span>' +
+              '<span style="font-size:12px;color:#999;">▾</span>' +
+            '</div>' +
+            '<div class="step-body' + (isJson || isCritical ? ' open' : '') + '" id="step-body-' + i + '">' +
+              fieldsHtml +
+            '</div>' +
+          '</li>';
+        }).join("");
+      }
+
+      function toggleStep(i) {
+        var body = document.getElementById("step-body-" + i);
+        body.classList.toggle("open");
+      }
+
+      function closeDebug() {
+        document.getElementById("debugPanel").style.display = "none";
+        if (currentSelectedRow) { currentSelectedRow.classList.remove("selected"); currentSelectedRow = null; }
+      }
+
+      // ── Data loading ───────────────────────────────────────────────────────
+
+      function loadData() {
+        apiFetch("/api/admin/ivr-monitor")
+          .then(function(r) {
+            if (r.status === 403) {
+              document.querySelector(".main").innerHTML =
+                '<div style="padding:40px;text-align:center;">' +
+                '<h2>⛔ גישה מוגבלת</h2>' +
+                '<p>מסך זה זמין למנהל מערכת בלבד.</p></div>';
+              return null;
+            }
+            return r.json();
+          })
+          .then(function(data) {
+            if (!data) return;
+            renderStats(data.stats);
+            renderAlerts(data.alerts);
+            renderSessions(data.sessions);
+          })
+          .catch(function(err) {
+            console.error("loadData error:", err);
+          });
+      }
+
+      // ── Init ───────────────────────────────────────────────────────────────
+
+      document.addEventListener("DOMContentLoaded", function() {
+        loadData();
+        refreshTimer = setInterval(loadData, 30000);
+      });
+    </script>
+  </body>
+</html>

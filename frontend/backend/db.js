@@ -74,6 +74,39 @@ function initDatabase() {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS ivr_call_sessions (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      callId      TEXT    NOT NULL UNIQUE,
+      phone       TEXT    NOT NULL,
+      donorId     INTEGER REFERENCES donors(id),
+      donorName   TEXT,
+      startedAt   TEXT    NOT NULL,
+      endedAt     TEXT,
+      durationSec INTEGER,
+      outcome     TEXT,
+      amountPaid  REAL,
+      createdAt   TEXT    NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS click2call_logs (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      pbxCallId      TEXT,
+      workerId       INTEGER,
+      workerName     TEXT,
+      donorId        INTEGER REFERENCES donors(id),
+      donorName      TEXT,
+      donorPhone     TEXT NOT NULL,
+      agentExtension TEXT NOT NULL,
+      status         TEXT NOT NULL,
+      errorCode      INTEGER,
+      errorNote      TEXT,
+      createdAt      TEXT NOT NULL
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS app_state (
       key       TEXT PRIMARY KEY,
       value     TEXT NOT NULL,
@@ -95,15 +128,20 @@ function initDatabase() {
   } catch (_) {}
 
   // ── Indexes ─────────────────────────────────────────────────────
-  db.exec("CREATE INDEX IF NOT EXISTS idx_donors_phone          ON donors(phone)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_call_logs_callId  ON ivr_call_logs(callId)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_call_logs_phone   ON ivr_call_logs(phone)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_call_logs_ts      ON ivr_call_logs(timestamp)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_donations_callId  ON ivr_donations(callId)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_donations_phone   ON ivr_donations(phone)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_payments_callId       ON payments(callId)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_payments_phone        ON payments(phone)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_payments_ts           ON payments(timestamp)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_donors_phone             ON donors(phone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_call_logs_callId     ON ivr_call_logs(callId)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_call_logs_phone      ON ivr_call_logs(phone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_call_logs_ts         ON ivr_call_logs(timestamp)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_donations_callId     ON ivr_donations(callId)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_donations_phone      ON ivr_donations(phone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_payments_callId          ON payments(callId)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_payments_phone           ON payments(phone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_payments_ts              ON payments(timestamp)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_call_sessions_callId     ON ivr_call_sessions(callId)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_call_sessions_phone      ON ivr_call_sessions(phone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_call_sessions_startedAt  ON ivr_call_sessions(startedAt)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_click2call_donorPhone    ON click2call_logs(donorPhone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_click2call_createdAt     ON click2call_logs(createdAt)");
 
   // ── Backfill payments from legacy ivr_donations ─────────────────
   const missingPayments = db.prepare(`
@@ -331,6 +369,79 @@ function insertCallLog(callId, phone, step, payload) {
   );
 }
 
+// ── Call Sessions ────────────────────────────────────────────────────────────
+
+function startCallSession(callId, phone) {
+  const now = nowIso();
+  const result = db.prepare(`
+    INSERT OR IGNORE INTO ivr_call_sessions (callId, phone, startedAt, createdAt)
+    VALUES (?, ?, ?, ?)
+  `).run(String(callId).trim(), String(phone).trim(), now, now);
+  return result.changes > 0; // true if new session was created
+}
+
+function updateCallSessionDonor(callId, donorId, donorName) {
+  db.prepare(`
+    UPDATE ivr_call_sessions
+    SET donorId = ?, donorName = ?
+    WHERE callId = ? AND donorId IS NULL
+  `).run(donorId || null, donorName || null, String(callId).trim());
+}
+
+function endCallSession(callId, outcome, amountPaid) {
+  const now = nowIso();
+  db.prepare(`
+    UPDATE ivr_call_sessions
+    SET endedAt     = ?,
+        durationSec = CAST((julianday(?) - julianday(startedAt)) * 86400 AS INTEGER),
+        outcome     = ?,
+        amountPaid  = ?
+    WHERE callId = ? AND endedAt IS NULL
+  `).run(now, now, outcome || "hangup", amountPaid || null, String(callId).trim());
+}
+
+function getCallSessions(limit) {
+  return db.prepare(`
+    SELECT s.id, s.callId, s.phone, s.donorId, s.donorName,
+           s.startedAt, s.endedAt, s.durationSec,
+           s.outcome, s.amountPaid, s.createdAt
+    FROM ivr_call_sessions s
+    ORDER BY s.startedAt DESC
+    LIMIT ?
+  `).all(Number(limit) || 100);
+}
+
+function getCallLogsByCallId(callId) {
+  return db.prepare(`
+    SELECT id, callId, phone, step, payload, timestamp
+    FROM ivr_call_logs
+    WHERE callId = ?
+    ORDER BY id ASC
+  `).all(String(callId).trim());
+}
+
+// ── Click-to-Call Logs ───────────────────────────────────────────────────────
+
+function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, donorPhone, agentExtension, status, errorCode, errorNote }) {
+  return db.prepare(`
+    INSERT INTO click2call_logs
+      (pbxCallId, workerId, workerName, donorId, donorName, donorPhone, agentExtension, status, errorCode, errorNote, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    pbxCallId      || null,
+    workerId       || null,
+    workerName     || null,
+    donorId        || null,
+    donorName      || null,
+    String(donorPhone).trim(),
+    String(agentExtension).trim(),
+    String(status).trim(),
+    errorCode != null ? Number(errorCode) : null,
+    errorNote      || null,
+    nowIso()
+  );
+}
+
 // ── App State (key-value store for frontend data) ────────────────────────────
 
 const ALLOWED_APP_STATE_KEYS = new Set([
@@ -397,6 +508,82 @@ function getDashboardStats() {
   };
 }
 
+// ── IVR Monitor ──────────────────────────────────────────────────────────────
+
+function getIvrMonitorStats() {
+  var today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jerusalem",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+
+  var callsRow = db.prepare(
+    "SELECT COUNT(DISTINCT callId) AS count FROM ivr_call_sessions WHERE substr(startedAt,1,10)=?"
+  ).get(today);
+
+  var paymentsRow = db.prepare(
+    "SELECT COUNT(*) AS count, COALESCE(SUM(amount),0) AS total FROM payments WHERE status='success' AND substr(COALESCE(timestamp,createdAt),1,10)=?"
+  ).get(today);
+
+  var voicemailsRow = db.prepare(
+    "SELECT COUNT(*) AS count FROM ivr_call_sessions WHERE outcome='voice_message' AND substr(startedAt,1,10)=?"
+  ).get(today);
+
+  var errorsRow = db.prepare(
+    "SELECT COUNT(*) AS count FROM ivr_call_logs WHERE step='error' AND substr(COALESCE(timestamp,createdAt),1,10)=?"
+  ).get(today);
+
+  return {
+    date:          today,
+    calls:         callsRow.count      || 0,
+    payments:      paymentsRow.count   || 0,
+    paymentsTotal: paymentsRow.total   || 0,
+    voicemails:    voicemailsRow.count || 0,
+    errors:        errorsRow.count     || 0,
+  };
+}
+
+function getIvrAlerts(limit) {
+  var n = Math.min(Number(limit) || 30, 100);
+
+  var voicemails = db.prepare(`
+    SELECT 'voice_message' AS alertType, phone,
+           COALESCE(donorName, phone) AS donor, startedAt AS time, callId
+    FROM ivr_call_sessions WHERE outcome = 'voice_message'
+    ORDER BY startedAt DESC LIMIT ?
+  `).all(n);
+
+  var errors = db.prepare(`
+    SELECT 'system_error' AS alertType, COALESCE(phone,'—') AS phone,
+           COALESCE(phone,'—') AS donor,
+           COALESCE(timestamp, createdAt) AS time, callId
+    FROM ivr_call_logs WHERE step = 'error'
+    ORDER BY COALESCE(timestamp, createdAt) DESC LIMIT ?
+  `).all(n);
+
+  var failedPayments = db.prepare(`
+    SELECT 'payment_failed' AS alertType, phone,
+           COALESCE(donorName, phone) AS donor, startedAt AS time, callId
+    FROM ivr_call_sessions WHERE outcome = 'payment_failed'
+    ORDER BY startedAt DESC LIMIT ?
+  `).all(n);
+
+  var interrupted = db.prepare(`
+    SELECT 'interrupted' AS alertType, s.phone,
+           COALESCE(s.donorName, s.phone) AS donor, s.startedAt AS time, s.callId
+    FROM ivr_call_sessions s
+    WHERE s.outcome = 'hangup'
+      AND EXISTS (
+        SELECT 1 FROM ivr_call_logs l WHERE l.callId = s.callId
+          AND l.step IN ('menu_selection','payment_submenu','debt_submenu','amount_entered')
+      )
+    ORDER BY s.startedAt DESC LIMIT ?
+  `).all(n);
+
+  var all = voicemails.concat(errors).concat(failedPayments).concat(interrupted);
+  all.sort(function(a, b) { return b.time < a.time ? -1 : b.time > a.time ? 1 : 0; });
+  return all.slice(0, n);
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 initDatabase();
@@ -423,6 +610,14 @@ module.exports = {
   savePaymentInTransaction,
   // Logs
   insertCallLog,
+  // Call Sessions
+  startCallSession,
+  updateCallSessionDonor,
+  endCallSession,
+  getCallSessions,
+  getCallLogsByCallId,
+  // Click-to-Call
+  logClick2Call,
   // App state
   getAppState,
   setAppState,
@@ -430,4 +625,7 @@ module.exports = {
   backupDatabase,
   // Dashboard
   getDashboardStats,
+  // IVR Monitor
+  getIvrMonitorStats,
+  getIvrAlerts,
 };

@@ -27,7 +27,7 @@ function getDonorForIvr(phone) {
   var donor = findDonorByPhone(normalizedPhone);
   if (!donor) return null;
 
-  // Pull full donor data (donations, notes) from app_state JSON
+  // Pull full donor data (donations, notes, IVR settings) from app_state JSON
   var appDonors = getAppState("donors");
   var appDonor  = null;
   if (Array.isArray(appDonors)) {
@@ -39,6 +39,14 @@ function getDonorForIvr(phone) {
   var publicPhoneNote = appDonor && appDonor.publicPhoneNote
     ? String(appDonor.publicPhoneNote).trim()
     : "";
+
+  // Respect per-donor IVR settings; default everything to allowed
+  var rawSettings = (appDonor && appDonor.phoneMessageSettings) || {};
+  var settings = {
+    allowPayment:       rawSettings.allowPayment       !== false,
+    allowPreviousDebts: rawSettings.allowPreviousDebts !== false,
+    allowCallback:      rawSettings.allowCallback      !== false,
+  };
 
   // Build open debt list sorted newest first
   var openDebts = [];
@@ -64,9 +72,10 @@ function getDonorForIvr(phone) {
     id:              donor.id,
     phone:           donor.phone,
     fullName:        donor.fullName,
-    currentDebt:     openDebts[0]    || null,
+    currentDebt:     openDebts[0]  || null,
     previousDebts:   openDebts.slice(1),
     publicPhoneNote: publicPhoneNote,
+    settings:        settings,
   };
 }
 

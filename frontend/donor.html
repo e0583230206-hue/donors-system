@@ -22,7 +22,8 @@
         <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
         <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
         <a href="reports.html">📊 דוחות</a>
-        <a href="logs.html">🕒 יומן מערכת</a>
+        
+        <a href="ivr-monitor.html">📺 מוניטור IVR</a>
         <a href="approvals.html">✅ אישור חיובים</a>
         <a href="settings.html">⚙️ הגדרות</a>
         <a href="README.html">📖 מדריך משתמש</a>
@@ -79,6 +80,7 @@
 
           <div class="profile-actions">
             <button id="editDonorButton" class="warning-btn">✏️ ערוך פרטי תורם</button>
+            <button id="callDonorButton" class="success-btn">📞 התקשר לתורם</button>
           </div>
 
           <div id="editDonorForm" class="form-grid one-column hidden">
@@ -268,6 +270,25 @@
         </div>
         <div class="timeline" id="donorTimeline"></div>
       </section>
+
+      <!-- Click-to-Call Modal -->
+      <div id="callDonorModal" class="modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center;">
+        <div class="modal-content" style="background:white;padding:28px 32px;border-radius:10px;width:90%;max-width:380px;position:relative;box-shadow:0 4px 20px rgba(0,0,0,0.3);direction:rtl;">
+          <h3 style="margin:0 0 8px;">📞 התקשרות לתורם</h3>
+          <p id="callDonorInfo" style="margin:0 0 18px;color:#555;font-size:14px;"></p>
+
+          <label style="display:block;font-weight:600;margin-bottom:6px;">מספר השלוחה שלך:</label>
+          <input id="agentExtensionInput" type="text" inputmode="numeric" placeholder="לדוגמה: 101"
+            style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:16px;box-sizing:border-box;margin-bottom:6px;" />
+          <small style="color:#888;display:block;margin-bottom:18px;">ייזכר לשיחה הבאה</small>
+
+          <div style="display:flex;gap:10px;">
+            <button id="confirmCallButton" class="primary-btn" style="flex:1;">חייג</button>
+            <button id="cancelCallButton" class="secondary-btn" style="flex:1;">ביטול</button>
+          </div>
+          <p id="callDonorStatus" class="message" style="margin-top:12px;"></p>
+        </div>
+      </div>
 
       <!-- Print Letter Modal -->
       <div id="printModal" class="modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center;">

@@ -1038,4 +1038,81 @@ Database.whenReady(function () {
   customPurposeInput.addEventListener("keydown", function (event) {
     if (event.key === "Enter") { addDonation(); }
   });
+
+  // ── Click-to-Call ───────────────────────────────────────────────────────────
+  var callDonorButton    = document.getElementById("callDonorButton");
+  var callDonorModal     = document.getElementById("callDonorModal");
+  var callDonorInfo      = document.getElementById("callDonorInfo");
+  var agentExtInput      = document.getElementById("agentExtensionInput");
+  var confirmCallButton  = document.getElementById("confirmCallButton");
+  var cancelCallButton   = document.getElementById("cancelCallButton");
+  var callDonorStatus    = document.getElementById("callDonorStatus");
+
+  agentExtInput.value = localStorage.getItem("agentExtension") || "";
+
+  callDonorButton.addEventListener("click", function () {
+    if (!donor || !donor.phone) {
+      showToast("לא נמצא מספר טלפון לתורם");
+      return;
+    }
+    callDonorInfo.textContent = "מתקשר אל: " + donor.fullName + " (" + donor.phone + ")";
+    callDonorStatus.textContent = "";
+    callDonorStatus.className = "message";
+    callDonorModal.style.display = "flex";
+    agentExtInput.focus();
+  });
+
+  cancelCallButton.addEventListener("click", function () {
+    callDonorModal.style.display = "none";
+  });
+
+  callDonorModal.addEventListener("click", function (e) {
+    if (e.target === callDonorModal) callDonorModal.style.display = "none";
+  });
+
+  agentExtInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") confirmCallButton.click();
+  });
+
+  confirmCallButton.addEventListener("click", async function () {
+    var ext = agentExtInput.value.trim();
+    if (!ext) {
+      callDonorStatus.textContent = "יש להזין מספר שלוחה";
+      callDonorStatus.className = "message show error";
+      return;
+    }
+
+    localStorage.setItem("agentExtension", ext);
+    confirmCallButton.disabled = true;
+    confirmCallButton.textContent = "מחייג...";
+    callDonorStatus.textContent = "";
+    callDonorStatus.className = "message";
+
+    try {
+      var res = await apiFetch("/api/technoline/click2call", {
+        method: "POST",
+        body: JSON.stringify({
+          phone:     donor.phone,
+          donorName: donor.fullName,
+          donorId:   donor.id,
+          extension: ext,
+        }),
+      });
+      var data = await res.json();
+
+      if (!res.ok) {
+        callDonorStatus.textContent = data.error || "שגיאה בחיוג";
+        callDonorStatus.className = "message show error";
+      } else {
+        callDonorModal.style.display = "none";
+        showToast("הטלפון שלך יצלצל — כשתענה, תחובר אוטומטית אל " + donor.fullName);
+      }
+    } catch (_) {
+      callDonorStatus.textContent = "שגיאת תקשורת עם השרת";
+      callDonorStatus.className = "message show error";
+    } finally {
+      confirmCallButton.disabled = false;
+      confirmCallButton.textContent = "חייג";
+    }
+  });
 });

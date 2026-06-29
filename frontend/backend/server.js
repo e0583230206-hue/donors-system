@@ -18,7 +18,13 @@ const {
   clearMustChangePassword,
   upsertDonor,
   getIvrDonations,
+  getCallSessions,
+  getCallLogsByCallId,
+  insertCallLog,
+  logClick2Call,
   getDashboardStats,
+  getIvrMonitorStats,
+  getIvrAlerts,
   getAppState,
   setAppState,
   backupDatabase,
@@ -327,6 +333,107 @@ app.get(
   }
 );
 
+// ── IVR call sessions (audit log) ─────────────────────────────────────────────
+app.get(
+  "/api/ivr/sessions",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var limit = Math.min(Number(req.query.limit) || 100, 500);
+      res.json(getCallSessions(limit));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── IVR call log for a specific callId ───────────────────────────────────────
+app.get(
+  "/api/ivr/sessions/:callId/logs",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var callId = String(req.params.callId).trim();
+      if (!callId) return res.status(400).json({ error: "callId is required" });
+      res.json(getCallLogsByCallId(callId));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Click-to-Call (Technoline) ────────────────────────────────────────────────
+app.post(
+  "/api/technoline/click2call",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var body      = req.body || {};
+      var phone     = String(body.phone     || "").trim();
+      var donorName = String(body.donorName || "").trim();
+      var donorId   = body.donorId  || null;
+      var extension = String(body.extension || process.env.TECHNOLINE_AGENT_EXTENSION || "").trim();
+      var apiKey    = process.env.TECHNOLINE_API_KEY || "";
+
+      if (!apiKey) {
+        return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
+      }
+      if (!extension) {
+        return res.status(400).json({ error: "נדרשת שלוחת מזכיר. הגדר TECHNOLINE_AGENT_EXTENSION ב-.env או שלח extension בגוף הבקשה" });
+      }
+      if (!phone) {
+        return res.status(400).json({ error: "מספר טלפון חסר" });
+      }
+
+      const techParams = new URLSearchParams({
+        action:     "click2call",
+        apiKey:     apiKey,
+        extension:  extension,
+        target:     phone,
+        targetName: donorName || phone,
+        ringSec:    "30",
+      });
+
+      var techRes  = await fetch("https://app.ipsales.co.il/ivrFilesApi.php", {
+        method:  "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body:    techParams.toString(),
+        signal:  AbortSignal.timeout(15000),
+      });
+
+      var techBody = await techRes.json();
+      var success  = techBody && String(techBody.status).toUpperCase() === "OK";
+
+      logClick2Call({
+        pbxCallId:      success ? (techBody.callId || null) : null,
+        workerId:       req.user ? req.user.id   : null,
+        workerName:     req.user ? req.user.name : null,
+        donorId:        donorId,
+        donorName:      donorName || null,
+        donorPhone:     phone,
+        agentExtension: extension,
+        status:         success ? "success" : "error",
+        errorCode:      success ? null : (techBody.errorCode != null ? techBody.errorCode : null),
+        errorNote:      success ? null : (techBody.note || null),
+      });
+
+      if (!success) {
+        console.error("[Click2Call] Technoline error:", JSON.stringify(techBody));
+        return res.status(502).json({
+          error: "טכנוליין: " + (techBody.note || "שגיאה " + techBody.errorCode),
+        });
+      }
+
+      console.log("[Click2Call] initiated | donor:", donorName, "| phone:", phone,
+                  "| ext:", extension, "| callId:", techBody.callId);
+      return res.json({ ok: true, callId: techBody.callId, extension: extension, target: techBody.target });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── Donor sync ────────────────────────────────────────────────────────────────
 app.post(
   "/api/donors/sync",
@@ -359,6 +466,25 @@ app.get(
   }
 );
 
+// ── IVR Monitor (admin only) ──────────────────────────────────────────────────
+app.get(
+  "/api/admin/ivr-monitor",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      var sessLimit = Math.min(Number(req.query.limit) || 50, 200);
+      res.json({
+        stats:    getIvrMonitorStats(),
+        alerts:   getIvrAlerts(30),
+        sessions: getCallSessions(sessLimit),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── IVR webhook (Technoline PBX) ──────────────────────────────────────────────
 // Technoline sends all accumulated query params on every step.
 // The route stays stateless: only req.query and SQLite are used.
@@ -366,11 +492,17 @@ app.get("/ivr", ivrLimiter, requireIvrKey, function (req, res) {
   try {
     console.log("[IVR] QUERY:", JSON.stringify(req.query));
     console.log("[IVR] mainChoice =", req.query.mainChoice, "| payChoice =", req.query.payChoice, "| debtChoice =", req.query.debtChoice);
-    var result = handleIvrQuery(req.query || {});
+    var q      = req.query || {};
+    var result = handleIvrQuery(q);
 
     if (result.hangup) {
       return res.status(200).end();
     }
+
+    // Log the JSON we're sending back to the PBX (visible in debug panel)
+    var debugId    = String(q.PBXcallId  || "").trim() || (String(q.PBXphone || "").trim() + "-" + Date.now());
+    var debugPhone = String(q.PBXphone   || "").trim() || null;
+    try { insertCallLog(debugId, debugPhone, "response_json", { modules: result.response }); } catch (_) {}
 
     return res
       .status(200)
