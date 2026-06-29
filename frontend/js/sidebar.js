@@ -18,25 +18,7 @@ Database.whenReady(function () { updateSidebarCounts(); });
 function setupSidebarToggle() {
   var nav = document.querySelector(".sidebar nav");
 
-  // 1. Inject calendar link if not present
-  if (nav) {
-    var hasCalendar = Array.from(nav.querySelectorAll("a")).some(function(a) {
-      return a.getAttribute("href") === "calendar.html";
-    });
-    if (!hasCalendar) {
-      var calLink = document.createElement("a");
-      calLink.href = "calendar.html";
-      calLink.textContent = "📅 לוח שנה";
-      if (window.location.href.includes("calendar.html")) calLink.className = "active";
-      var logsLink = Array.from(nav.querySelectorAll("a")).find(function(a) {
-        return a.getAttribute("href") === "logs.html";
-      });
-      if (logsLink) logsLink.insertAdjacentElement("beforebegin", calLink);
-      else nav.appendChild(calLink);
-    }
-  }
-
-  // 2. Split nav link text into icon + label wrapper so flex doesn't separate them
+  // 1. Split nav link text into icon + label wrapper so flex doesn't separate them
   document.querySelectorAll("nav a").forEach(function(a) {
     var textNode = null;
     a.childNodes.forEach(function(n) {
