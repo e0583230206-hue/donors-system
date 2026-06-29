@@ -229,7 +229,7 @@ const Database = {
 
     var keys = this._serverKeys;
 
-    return Promise.all(keys.map(function (key) {
+    var dataPromise = Promise.all(keys.map(function (key) {
       return fetch("/api/data/" + key, {
         headers: { "Authorization": "Bearer " + tok },
       })
@@ -247,6 +247,25 @@ const Database = {
         })
         .catch(function () {});
     }));
+
+    // Workers use a separate endpoint (not part of /api/data).
+    // Admin/secretary get the full list; others fall back to the public list.
+    var workersPromise = fetch("/api/workers", {
+      headers: { "Authorization": "Bearer " + tok },
+    }).then(function (res) {
+      if (!res.ok) {
+        return fetch("/api/workers/list").then(function (r) {
+          return r.ok ? r.json() : undefined;
+        });
+      }
+      return res.json();
+    }).then(function (data) {
+      if (Array.isArray(data)) {
+        localStorage.setItem("workers", JSON.stringify(data));
+      }
+    }).catch(function () {});
+
+    return Promise.all([dataPromise, workersPromise]);
   },
 };
 

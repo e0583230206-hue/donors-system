@@ -96,14 +96,13 @@ function getDTMF(name, files, max, min, timeout) {
   };
 }
 
-// NOTE: verify exact `record` module params with Technoline support before using.
 function record(name) {
   return {
     type: "record",
     name: name,
-    timeout: 5,
-    maxTime: 60,
-    skipKey: "#",
+    max: 60,
+    min: 1,
+    confirm: false,
   };
 }
 
@@ -179,11 +178,20 @@ function buildResponse(query, donor) {
     return [simpleMessage([txt(T.PAYMENT_FAILED)]), hangup()];
   }
 
+  // ── mainChoice = ERROR — caller timed out without selecting ─────────────
+  if (mainChoice === "ERROR") {
+    return [simpleMessage([txt(T.GOODBYE)]), hangup()];
+  }
+
   // ── mainChoice = 1 — Payment / Donation ──────────────────────────────────
   if (mainChoice === "1") {
     if (!settings.allowPayment) {
       // Donor has payment disabled — treat as unknown and offer goodbye
       return [simpleMessage([txt(T.PAYMENT_UNAVAILABLE)]), hangup()];
+    }
+
+    if (payChoice === "ERROR") {
+      return [simpleMessage([txt(T.GOODBYE)]), hangup()];
     }
 
     // Donor has debt → show payment sub-menu (pay full or custom)
@@ -247,7 +255,12 @@ function buildResponse(query, donor) {
       return getDTMF("amount", [txt(T.ENTER_AMOUNT)], 6, 1, 7);
     }
 
-    // Unexpected debtChoice value (anything other than 1, 2, 9) — show menu again
+    // debtChoice=ERROR — caller timed out → say goodbye
+    if (debtChoice === "ERROR") {
+      return [simpleMessage([txt(T.GOODBYE)]), hangup()];
+    }
+
+    // Other unexpected debtChoice value — show menu again
     if (debtChoice !== undefined && debtChoice !== "1" && debtChoice !== "2" && debtChoice !== "9") {
       console.warn("[IVR] Unexpected debtChoice:", debtChoice, "— re-showing debt list");
     }

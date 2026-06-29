@@ -28,6 +28,7 @@ const {
   getAppState,
   setAppState,
   backupDatabase,
+  dbHealthCheck,
 } = require("./db");
 
 const {
@@ -109,6 +110,14 @@ const apiLimiter = rateLimit({
 });
 
 // ── IVR key middleware ────────────────────────────────────────────────────────
+
+function maskSecret(value) {
+  if (!value) return "<empty>";
+  var s = String(value);
+  if (s.length <= 12) return s[0] + "***" + s[s.length - 1];
+  return s.slice(0, 6) + "..." + s.slice(-6);
+}
+
 function requireIvrKey(req, res, next) {
   if (!IVR_KEY) {
     console.warn("[IVR] IVR_KEY not configured — access is unrestricted. Set IVR_KEY in .env.");
@@ -116,7 +125,14 @@ function requireIvrKey(req, res, next) {
   }
   const provided = req.headers["x-ivr-key"] || req.query.ivrKey || "";
   if (provided !== IVR_KEY) {
-    console.warn("[IVR] Rejected request with invalid IVR key from " + req.ip);
+    console.warn("[IVR] Rejected request with invalid IVR key", {
+      hasHeader:   !!req.headers["x-ivr-key"],
+      hasQuery:    !!req.query.ivrKey,
+      provided:    maskSecret(provided),
+      expected:    maskSecret(IVR_KEY),
+      originalUrl: req.originalUrl,
+      queryKeys:   Object.keys(req.query || {}),
+    });
     return res.status(403).json({ error: "Invalid IVR key" });
   }
   next();
@@ -127,6 +143,10 @@ function requireIvrKey(req, res, next) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.get("/health", function (req, res) {
+  var db = dbHealthCheck();
+  if (!db.ok) {
+    return res.status(500).json({ ok: false, database: "error", error: db.error });
+  }
   res.json({ ok: true, database: "connected", ts: new Date().toISOString() });
 });
 

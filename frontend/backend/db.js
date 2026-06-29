@@ -584,6 +584,17 @@ function getIvrAlerts(limit) {
   return all.slice(0, n);
 }
 
+// ── Health check ─────────────────────────────────────────────────────────────
+
+function dbHealthCheck() {
+  try {
+    db.prepare("SELECT 1 AS ok").get();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 initDatabase();
@@ -628,4 +639,6 @@ module.exports = {
   // IVR Monitor
   getIvrMonitorStats,
   getIvrAlerts,
+  // Health
+  dbHealthCheck,
 };

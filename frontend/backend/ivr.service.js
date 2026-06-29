@@ -173,7 +173,11 @@ function logStepDetails(callId, phone, step, q, donor) {
 
 function handleIvrQuery(query) {
   var q      = query || {};
-  var callId = asText(q.PBXcallId) || (asText(q.PBXphone) + "-" + Date.now());
+  var rawCallId = asText(q.PBXcallId);
+  var callId    = rawCallId || ("phone-" + asText(q.PBXphone));
+  if (!rawCallId) {
+    console.warn("[IVR] PBXcallId missing — using phone-based fallback callId", { callId: callId });
+  }
   var phone  = normalizePhone(q.PBXphone);
   var step   = detectIvrStep(q);
 
