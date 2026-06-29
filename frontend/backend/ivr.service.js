@@ -10,7 +10,7 @@ function asText(value) {
 
 function ivrErrorResponse() {
   return [
-    { type: "simpleMessage", text: "אירעה שגיאה. אנא נסה שוב מאוחר יותר." },
+    { type: "simpleMessage", files: [{ text: "אירעה שגיאה. אנא נסה שוב מאוחר יותר." }] },
     { type: "hangup" },
   ];
 }

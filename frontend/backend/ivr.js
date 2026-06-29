@@ -1,34 +1,46 @@
 // Technoline PBX IVR — stateless flow
-// Every request from the PBX carries ALL accumulated query params.
+// PBX sends GET with ALL accumulated query params on every round-trip.
 // State is derived solely from which params exist in req.query.
 //
 // buildResponse(query, donor)
-//   query  — req.query from Express (all PBX params)
-//   donor  — { id, fullName } from DB, or null/undefined for anonymous
+//   query — req.query from Express (PBX fixed params + accumulated name values)
+//   donor — { id, fullName, suggestedAmount } from DB, or null
+
+// ── Audio item helpers ───────────────────────────────────────────
+
+function txt(text)    { return { text: text }; }
+function fName(name)  { return { fileName: name }; }
+function spokenNum(n) { return { number: String(n) }; }
 
 // ── Module builders ──────────────────────────────────────────────
 
-function simpleMenu(options) {
-  return { type: "simpleMenu", options: options };
+function simpleMessage(files) {
+  return { type: "simpleMessage", files: files };
 }
 
-function getDTMF(name, description) {
-  return { type: "getDTMF", name: name, description: description };
-}
-
-function creditCard(name, sum) {
+function simpleMenu(files, name, enabledKeys, times, timeout) {
   return {
-    type: "creditCard",
+    type: "simpleMenu",
     name: name,
-    sum: String(sum),
-    cvv: "yes",
-    tz: "yes",
-    payments: "1",
+    enabledKeys: enabledKeys,
+    times: times || 3,
+    timeout: timeout || 5,
+    extensionChange: "..",
+    files: files,
   };
 }
 
-function simpleMessage(text) {
-  return { type: "simpleMessage", text: text };
+function getDTMF(name, files, max, min, timeout, skipKey, confirmType) {
+  return {
+    type: "getDTMF",
+    name: name,
+    max: max || 6,
+    min: min || 1,
+    timeout: timeout || 7,
+    skipKey: skipKey || "#",
+    confirmType: confirmType || "number",
+    files: files,
+  };
 }
 
 function hangup() {
@@ -37,11 +49,13 @@ function hangup() {
 
 // ── Flow ─────────────────────────────────────────────────────────
 //
-//  Step 0 — HANGUP:          PBXcallStatus === "HANGUP"  → null (empty 200)
-//  Step 4 — payment result:  payment param exists        → message + hangup
-//  Step 3 — creditCard:      menuChoice=1 + amount       → creditCard module
-//  Step 2 — get amount:      menuChoice=1                → getDTMF(amount)
-//  Step 1 — initial menu:    no menuChoice               → simpleMenu
+//  HANGUP:         PBXcallStatus === "HANGUP"     → null (empty 200)
+//  payment result: payment param exists            → thank-you or error + hangup
+//  amount entered: menuChoice=1 + amount exists    → placeholder until creditCard terminal ready
+//  choice 1:       menuChoice=1, no amount         → getDTMF(amount)
+//  choice 2:       menuChoice=2                    → inquiry + hangup
+//  choice 3:       menuChoice=3                    → goodbye + hangup
+//  initial:        no menuChoice                   → simpleMenu
 
 function buildResponse(query, donor) {
   var callStatus = query.PBXcallStatus;
@@ -49,75 +63,96 @@ function buildResponse(query, donor) {
   var amount     = query.amount;
   var payment    = query.payment;
 
-  var donorName  = donor ? donor.fullName : null;
+  var donorName       = donor ? donor.fullName : null;
   var suggestedAmount = donor && donor.suggestedAmount ? donor.suggestedAmount : null;
 
-  // ── Step 0: HANGUP ──────────────────────────────────────────
+  // ── HANGUP ─────────────────────────────────────────────────────
   if (callStatus === "HANGUP") {
     return null;
   }
 
-  // ── Step 4: Payment result ───────────────────────────────────
+  // ── Payment result ─────────────────────────────────────────────
   if (payment !== undefined) {
     if (payment === "OK") {
-      var thankYou = donorName
-        ? "שלום " + donorName + ", תודה על תרומתך"
-        : "תודה על תרומתך! הסכום התקבל בהצלחה.";
-      return [simpleMessage(thankYou), hangup()];
+      var thankFiles = donorName
+        ? [txt("תודה " + donorName + "."), fName("thank_you")]
+        : [fName("thank_you")];
+      return [simpleMessage(thankFiles), hangup()];
     }
     return [
-      simpleMessage("אירעה שגיאה בביצוע התשלום. אנא נסה שנית."),
+      simpleMessage([txt("הסכום לא חויב. אנא נסה שנית מאוחר יותר.")]),
       hangup(),
     ];
   }
 
-  // ── Step 3: Trigger credit-card module ───────────────────────
+  // ── Amount entered → creditCard (pending terminal) ─────────────
   if (menuChoice === "1" && amount !== undefined) {
     var numericAmount = parseFloat(amount);
     if (isNaN(numericAmount) || numericAmount <= 0) {
       return [
-        simpleMessage("הסכום שהוזן אינו תקין. אנא נסה שנית."),
+        simpleMessage([txt("הסכום שהוזן אינו תקין. אנא נסה שנית.")]),
         hangup(),
       ];
     }
-    return creditCard("payment", numericAmount);
+
+    // TODO: uncomment when CREDIT_CARD_TERMINAL is set in .env
+    //
+    // return {
+    //   type:          "creditCard",
+    //   name:          "payment",
+    //   sum:           numericAmount,
+    //   sumChangeable: "no",
+    //   cvv:           "yes",
+    //   tz:            "yes",
+    //   payments:      1,
+    //   category:      "תרומה",
+    //   terminal:      process.env.CREDIT_CARD_TERMINAL || "",
+    // };
+
+    return [
+      simpleMessage([txt("קיבלנו את פנייתך. נציג ייצור איתך קשר לביצוע התרומה. תודה.")]),
+      hangup(),
+    ];
   }
 
-  // ── Step 2: Collect donation amount ──────────────────────────
+  // ── Menu choice 1 → collect donation amount ────────────────────
   if (menuChoice === "1") {
-    var amountPrompt = donorName
-      ? "שלום " + donorName + ". אנא הזן את סכום התרומה ולחץ על סולמית"
-      : "אנא הזן את סכום התרומה ולחץ על סולמית";
-
-    if (suggestedAmount) {
-      amountPrompt += ". סכום התרומה הקודם שלך היה " + suggestedAmount + " שקלים";
+    var amountFiles;
+    if (donorName && suggestedAmount) {
+      amountFiles = [
+        txt("שלום " + donorName + "."),
+        txt("תרומתך הקודמת הייתה "),
+        spokenNum(suggestedAmount),
+        txt("שקלים."),
+        fName("enter_amount"),
+      ];
+    } else if (donorName) {
+      amountFiles = [txt("שלום " + donorName + "."), fName("enter_amount")];
+    } else {
+      amountFiles = [fName("enter_amount")];
     }
-
-    return getDTMF("amount", amountPrompt);
+    return getDTMF("amount", amountFiles, 6, 1, 7, "#", "number");
   }
 
-  // ── menuChoice=2: Inquiry ────────────────────────────────────
+  // ── Menu choice 2 → inquiry ────────────────────────────────────
   if (menuChoice === "2") {
     return [
-      simpleMessage("לבירורים, אנא פנה למשרד בשעות הפעילות. תודה."),
+      simpleMessage([txt("לבירורים, אנא פנה למשרד בשעות הפעילות. תודה.")]),
       hangup(),
     ];
   }
 
-  // ── menuChoice=3: End call ───────────────────────────────────
+  // ── Menu choice 3 → goodbye ────────────────────────────────────
   if (menuChoice === "3") {
-    return [
-      simpleMessage("תודה על התקשרותך. להתראות."),
-      hangup(),
-    ];
+    return [simpleMessage([fName("goodbye")]), hangup()];
   }
 
-  // ── Step 1: Initial menu ─────────────────────────────────────
-  return simpleMenu([
-    { num: "1", description: "תרומה" },
-    { num: "2", description: "בירור" },
-    { num: "3", description: "סיום" },
-  ]);
+  // ── Initial menu ───────────────────────────────────────────────
+  var menuFiles = donorName
+    ? [txt("שלום " + donorName + "."), fName("main_menu")]
+    : [fName("unknown_donor"), fName("main_menu")];
+
+  return simpleMenu(menuFiles, "menuChoice", "1,2,3", 3, 5);
 }
 
 module.exports = { buildResponse };
