@@ -232,20 +232,67 @@ function updateWorkerPasswordHash(id, passwordHash) {
 
 // ── Donors ──────────────────────────────────────────────────────────────────
 
+// Strips all formatting (dashes, spaces, parens, +) and resolves 972/00 prefix
+// so that "052-1234-567", "+972-52-1234567", "0521234567" all become "0521234567".
+function normalizePhoneForDb(phone) {
+  var digits = String(phone || "").trim().replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("00"))  digits = digits.slice(2);
+  if (digits.startsWith("972") && digits.length >= 11) return "0" + digits.slice(3);
+  // Excel sometimes drops the leading 0 (stores number, not text): 9 digits → add 0
+  if (digits.length === 9 && !digits.startsWith("0")) return "0" + digits;
+  return digits;
+}
+
+// SQL expression that strips common separators from a stored phone column
+var STRIP_PHONE_SQL = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone,'-',''),' ',''),'+',''),'(',''),')','')";
+
 function findDonorByPhone(phone) {
-  if (!phone) return undefined;
-  return db.prepare("SELECT id, phone, fullName FROM donors WHERE phone = ? LIMIT 1")
-    .get(String(phone).trim());
+  var normalized = normalizePhoneForDb(phone);
+  if (!normalized) return undefined;
+  // Also prepare the international variant (e.g. "972521234567") in case
+  // the stored phone was synced in 972-prefixed format.
+  var intl = (normalized.startsWith("0") && normalized.length >= 9)
+    ? "972" + normalized.slice(1)
+    : null;
+  if (intl) {
+    return db.prepare(
+      "SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " IN (?,?) LIMIT 1"
+    ).get(normalized, intl);
+  }
+  return db.prepare(
+    "SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " = ? LIMIT 1"
+  ).get(normalized);
 }
 
 function upsertDonor(phone, fullName) {
+  var normalized = normalizePhoneForDb(phone);
+  if (!normalized) return;
+  var name = String(fullName).trim();
+  // Migrate any existing row stored with a non-normalized version of this phone
+  var existing = db.prepare(
+    "SELECT id FROM donors WHERE " + STRIP_PHONE_SQL + " IN (?,?) AND phone != ? LIMIT 1"
+  ).get(normalized,
+    normalized.startsWith("0") && normalized.length >= 9 ? "972" + normalized.slice(1) : normalized,
+    normalized);
+  if (existing) {
+    try {
+      db.prepare("UPDATE donors SET phone = ?, fullName = ?, updatedAt = ? WHERE id = ?")
+        .run(normalized, name, nowIso(), existing.id);
+    } catch (_) {
+      // Normalized phone already exists as a separate row — just update name
+      db.prepare("UPDATE donors SET fullName = ?, updatedAt = ? WHERE id = ?")
+        .run(name, nowIso(), existing.id);
+    }
+    return;
+  }
   db.prepare(`
     INSERT INTO donors (phone, fullName, updatedAt)
     VALUES (?, ?, ?)
     ON CONFLICT(phone) DO UPDATE SET
       fullName  = excluded.fullName,
       updatedAt = excluded.updatedAt
-  `).run(String(phone).trim(), String(fullName).trim(), nowIso());
+  `).run(normalized, name, nowIso());
 }
 
 // ── IVR Donations ────────────────────────────────────────────────────────────
