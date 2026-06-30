@@ -460,6 +460,12 @@ footer.foot kbd{
   let dialed = '', callStart = 0, timerHandle = null, domainForCalls = '';
   let currentCallNumber = '';
 
+  const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
+  ];
+
   const SETTINGS_LS = 'softphone_settings_200';
   const SPEAKER_LS  = 'softphone_speaker_200';
   const HIST_LS     = 'softphone_history_200';
@@ -687,7 +693,8 @@ footer.foot kbd{
       password: c.pass,
       register: true,
       session_timers: false,
-      user_agent: 'WebSoftphone/1.0'
+      user_agent: 'WebSoftphone/1.0',
+      pcConfig: { iceServers: ICE_SERVERS, iceTransportPolicy: 'all' }
     });
 
     ua.on('connecting',  function(){ setState('connecting','מתחבר…'); log('פותח WebSocket → '+c.serverUrl,'info'); });
@@ -749,7 +756,8 @@ footer.foot kbd{
     setState('connecting','מחייג…');
     ua.call(target, {
       mediaConstraints:{audio:true,video:false},
-      rtcOfferConstraints:{offerToReceiveAudio:1,offerToReceiveVideo:0}
+      rtcOfferConstraints:{offerToReceiveAudio:1,offerToReceiveVideo:0},
+      pcConfig:{ iceServers: ICE_SERVERS, iceTransportPolicy:'all' }
     });
   }
 
@@ -817,8 +825,13 @@ footer.foot kbd{
   }
   function answerIncoming(){
     if(!incomingSession) return;
-    try{ incomingSession.answer({mediaConstraints:{audio:true,video:false},rtcOfferConstraints:{offerToReceiveAudio:1,offerToReceiveVideo:0}}); }
-    catch(e){ log('שגיאת מענה: '+(e.message||e),'err'); }
+    try{
+      incomingSession.answer({
+        mediaConstraints:{audio:true,video:false},
+        rtcOfferConstraints:{offerToReceiveAudio:1,offerToReceiveVideo:0},
+        pcConfig:{ iceServers: ICE_SERVERS, iceTransportPolicy:'all' }
+      });
+    }catch(e){ log('שגיאת מענה: '+(e.message||e),'err'); }
     hideIncoming();
   }
   function rejectIncoming(){
@@ -879,7 +892,17 @@ footer.foot kbd{
     function attachRemote(pc){
       if(!pc||pc._remoteHooked) return;
       pc._remoteHooked=true;
+
+      // Log ICE state changes — useful for diagnosing one-way/no audio
+      pc.addEventListener('iceconnectionstatechange', function(){
+        const st = pc.iceConnectionState;
+        const lvl = (st==='connected'||st==='completed') ? 'ok' : (st==='failed'||st==='disconnected') ? 'err' : 'info';
+        log('ICE: '+st, lvl);
+        if (st==='failed') log('⚠ שמע לא עובד — בעיית NAT/STUN. בדוק חיבור לאינטרנט.','err');
+      });
+
       pc.addEventListener('track', function(ev){
+        log('שמע התקבל — מחבר לאודיו','ok');
         const ra=document.getElementById('remoteAudio');
         ra.srcObject=ev.streams&&ev.streams[0]?ev.streams[0]:new MediaStream([ev.track]);
         applySpeaker(getSpeaker());
