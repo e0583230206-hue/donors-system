@@ -345,8 +345,15 @@ footer.foot kbd{font-family:'JetBrains Mono',monospace;font-size:.72rem;padding:
   'use strict';
 
   // ── Auth guard ──────────────────────────────────────────────────────────────
-  var authToken = sessionStorage.getItem('authToken') || '';
-  if (!authToken) { window.location.href = '/'; return; }
+  // sessionStorage is tab-isolated; the main app writes a one-time token to
+  // localStorage so the new tab can pick it up and then immediately clear it.
+  var authToken = sessionStorage.getItem('authToken') || localStorage.getItem('_sp_token') || '';
+  if (authToken) {
+    sessionStorage.setItem('authToken', authToken);  // promote to this tab's session
+    localStorage.removeItem('_sp_token');            // clean up immediately
+  } else {
+    window.location.href = '/'; return;
+  }
 
   // Add auth header to all jQuery AJAX requests
   $.ajaxSetup({

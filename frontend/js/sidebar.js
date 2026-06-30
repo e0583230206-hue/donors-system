@@ -24,6 +24,11 @@ function setupSidebarToggle() {
     phoneA.href = "softphone.html";
     phoneA.target = "_blank";
     phoneA.textContent = "📞 טלפון רשת";
+    // Pass auth token via localStorage so the new tab can authenticate itself
+    phoneA.addEventListener("click", function () {
+      var token = sessionStorage.getItem("authToken") || "";
+      if (token) localStorage.setItem("_sp_token", token);
+    });
     var anchor = nav.querySelector('a[href="ivr-monitor.html"]') || null;
     if (anchor && anchor.nextSibling) {
       nav.insertBefore(phoneA, anchor.nextSibling);
