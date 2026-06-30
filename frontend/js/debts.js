@@ -1,4 +1,6 @@
 let donors = Database.get("donors");
+var debtPage = 0;
+var DEBT_PAGE_SIZE = 50;
 
 const debtorsCount = document.getElementById("debtorsCount");
 const totalDebts = document.getElementById("totalDebts");
@@ -8,6 +10,21 @@ const filteredCount = document.getElementById("filteredCount");
 const searchInput = document.getElementById("searchInput");
 const purposeFilter = document.getElementById("purposeFilter");
 const debtsTable = document.getElementById("debtsTable");
+
+function setDebtPage(n) { debtPage = n; renderDebts(); }
+
+function renderDebtPagination(total) {
+  var totalPages = Math.ceil(total / DEBT_PAGE_SIZE);
+  var html = "";
+  if (totalPages > 1) {
+    for (var i = 0; i < totalPages; i++) {
+      html += '<button class="page-btn' + (i === debtPage ? " active" : "") +
+              '" onclick="setDebtPage(' + i + ')">' + (i + 1) + '</button>';
+    }
+  }
+  var el = document.getElementById("debtsPaginationBar");
+  if (el) el.innerHTML = html;
+}
 
 function getDaysOpen(dateString) {
   if (!dateString) return 0;
@@ -104,6 +121,8 @@ function renderDebts() {
   openDebtsCount.innerText = allDebts.length;
   filteredCount.innerText = filteredDebts.length;
 
+  renderDebtPagination(filteredDebts.length);
+
   debtsTable.innerHTML = "";
 
   if (filteredDebts.length === 0) {
@@ -115,7 +134,9 @@ function renderDebts() {
     return;
   }
 
-  filteredDebts.forEach(function (debt) {
+  var pagedDebts = filteredDebts.slice(debtPage * DEBT_PAGE_SIZE, (debtPage + 1) * DEBT_PAGE_SIZE);
+
+  pagedDebts.forEach(function (debt) {
     const daysOpen = getDaysOpen(debt.createdAt);
     const status = getDebtStatus(daysOpen);
     const statusClass = getStatusClass(daysOpen);
@@ -140,8 +161,9 @@ function renderDebts() {
   });
 }
 
-searchInput.addEventListener("input", renderDebts);
-purposeFilter.addEventListener("change", renderDebts);
+function resetDebtPageAndRender() { debtPage = 0; renderDebts(); }
+searchInput.addEventListener("input", resetDebtPageAndRender);
+purposeFilter.addEventListener("change", resetDebtPageAndRender);
 
 Database.whenReady(function () {
   donors = Database.get("donors");

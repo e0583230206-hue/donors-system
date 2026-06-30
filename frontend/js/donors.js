@@ -11,6 +11,29 @@ const searchInput = document.getElementById("searchInput");
 const messageBox = document.getElementById("messageBox");
 const namesList = document.getElementById("namesList");
 const pendingDonorDeletions = {};
+var donorPage = 0;
+var DONOR_PAGE_SIZE = 50;
+
+function setDonorPage(n) {
+  donorPage = n;
+  renderDonors();
+}
+
+function renderDonorPagination(total) {
+  var totalPages = Math.ceil(total / DONOR_PAGE_SIZE);
+  var html = "";
+  if (totalPages > 1) {
+    for (var i = 0; i < totalPages; i++) {
+      html += '<button class="page-btn' + (i === donorPage ? " active" : "") +
+              '" onclick="setDonorPage(' + i + ')">' + (i + 1) + '</button>';
+    }
+  }
+  var el  = document.getElementById("donorsPaginationBar");
+  var el2 = document.getElementById("donorsPaginationBar2");
+  if (el)  el.innerHTML  = html;
+  if (el2) el2.innerHTML = html;
+}
+
 function updateNamesList() {
   if (!namesList) return;
 
@@ -42,6 +65,15 @@ function createDonorId() {
   return Date.now();
 }
 
+function normalizePhoneLocal(p) {
+  var digits = String(p === undefined || p === null ? "" : p).trim().replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("972") && digits.length >= 11) return "0" + digits.slice(3);
+  if (digits.length === 9 && !digits.startsWith("0")) return "0" + digits;
+  return digits;
+}
+
 function getCurrentHebrewYear() {
   if (window.HebrewDate) {
     var fullText = window.HebrewDate.getHebrewDateText(new Date());
@@ -68,8 +100,9 @@ function addDonor() {
     return;
   }
 
+  const normPhone = normalizePhoneLocal(phone);
   const phoneExists = donors.some(function (donor) {
-    return donor.phone === phone;
+    return normalizePhoneLocal(donor.phone) === normPhone;
   });
 
   if (phoneExists) {
@@ -194,13 +227,16 @@ function renderDonors() {
   });
 
   renderDonorsStats(donors.filter(function(d){ return !pendingDonorDeletions[d.id]; }).length, filteredDonors.length);
+  renderDonorPagination(filteredDonors.length);
 
   if (filteredDonors.length === 0) {
     donorsList.innerHTML = `<div class="empty-box">לא נמצאו תורמים</div>`;
     return;
   }
 
-  filteredDonors.forEach(function (donor) {
+  var pagedDonors = filteredDonors.slice(donorPage * DONOR_PAGE_SIZE, (donorPage + 1) * DONOR_PAGE_SIZE);
+
+  pagedDonors.forEach(function (donor) {
     const debt = getDonorDebt(donor);
     const paidTotal = getPaidTotal(donor);
     const tagsHtml = (donor.tags && donor.tags.length > 0)
@@ -312,7 +348,14 @@ function handleFileUpload(event) {
         return { value: isNaN(num) ? NaN : num, currency: currency };
       };
 
-      var normalizePhone = function (p) { return String(p).replace(/[\s\-()]/g, ""); };
+      var normalizePhone = function (p) {
+        var digits = String(p === undefined || p === null ? "" : p).trim().replace(/\D/g, "");
+        if (!digits) return "";
+        if (digits.startsWith("00")) digits = digits.slice(2);
+        if (digits.startsWith("972") && digits.length >= 11) return "0" + digits.slice(3);
+        if (digits.length === 9 && !digits.startsWith("0")) return "0" + digits;
+        return digits;
+      };
       var donorsCreated  = 0;
       var donorsUpdated  = 0;
       var donationsAdded = 0;
@@ -477,14 +520,19 @@ function renderImportSkippedReport(skippedRows) {
     "</table></div>";
 }
 
+function resetDonorPageAndRender() {
+  donorPage = 0;
+  renderDonors();
+}
+
 addDonorButton.addEventListener("click", addDonor);
-searchInput.addEventListener("input", renderDonors);
+searchInput.addEventListener("input", resetDonorPageAndRender);
 var sortSelectEl = document.getElementById("sortSelect");
-if (sortSelectEl) sortSelectEl.addEventListener("change", renderDonors);
+if (sortSelectEl) sortSelectEl.addEventListener("change", resetDonorPageAndRender);
 
 ["filterStatus","filterCity","filterTag"].forEach(function(id) {
   var el = document.getElementById(id);
-  if (el) el.addEventListener(id === "filterTag" ? "input" : "change", renderDonors);
+  if (el) el.addEventListener(id === "filterTag" ? "input" : "change", resetDonorPageAndRender);
 });
 
 var filterClearBtn = document.getElementById("filterClearBtn");

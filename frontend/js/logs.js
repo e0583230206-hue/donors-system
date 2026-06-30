@@ -1,7 +1,24 @@
 let logs = [];
+var logPage = 0;
+var LOG_PAGE_SIZE = 50;
 
 const logsTable = document.getElementById("logsTable");
 const clearLogsButton = document.getElementById("clearLogsButton");
+
+function setLogPage(n) { logPage = n; renderLogs(); }
+
+function renderLogPagination(total) {
+  var totalPages = Math.ceil(total / LOG_PAGE_SIZE);
+  var html = "";
+  if (totalPages > 1) {
+    for (var i = 0; i < totalPages; i++) {
+      html += '<button class="page-btn' + (i === logPage ? " active" : "") +
+              '" onclick="setLogPage(' + i + ')">' + (i + 1) + '</button>';
+    }
+  }
+  var el = document.getElementById("logsPaginationBar");
+  if (el) el.innerHTML = html;
+}
 
 function saveLogs() {
   Database.save("logs", logs);
@@ -18,14 +35,19 @@ function deleteLog(id) {
 }
 
 function renderLogs() {
+  var reversed = logs.slice().reverse();
+  renderLogPagination(reversed.length);
+
   logsTable.innerHTML = "";
 
-  if (logs.length === 0) {
+  if (reversed.length === 0) {
     logsTable.innerHTML = `<tr class="empty-state-row"><td colspan="3">🕒 אין עדיין פעולות ביומן</td></tr>`;
     return;
   }
 
-  logs.slice().reverse().forEach(function(log) {
+  var paged = reversed.slice(logPage * LOG_PAGE_SIZE, (logPage + 1) * LOG_PAGE_SIZE);
+
+  paged.forEach(function(log) {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${formatDate(log.date)}</td>

@@ -12,6 +12,8 @@ const cancelledCount = document.getElementById("cancelledCount");
 const approvedAmount = document.getElementById("approvedAmount");
 const approvalsTable = document.getElementById("approvalsTable");
 var pendingApprovalDeletions = {};
+var approvalPage = 0;
+var APPROVAL_PAGE_SIZE = 25;
 
 function saveApprovals() {
   Database.save("approvals", approvals);
@@ -299,6 +301,23 @@ function renderStats() {
   approvedAmount.innerText = formatMoney(approvedSum);
 }
 
+function setApprovalPage(n) { approvalPage = n; renderApprovals(); }
+
+function renderApprovalPagination(total) {
+  var totalPages = Math.ceil(total / APPROVAL_PAGE_SIZE);
+  var html = "";
+  if (totalPages > 1) {
+    for (var i = 0; i < totalPages; i++) {
+      html += '<button class="page-btn' + (i === approvalPage ? " active" : "") +
+              '" onclick="setApprovalPage(' + i + ')">' + (i + 1) + '</button>';
+    }
+  }
+  var el  = document.getElementById("approvalsPaginationBar");
+  var el2 = document.getElementById("approvalsPaginationBar2");
+  if (el)  el.innerHTML  = html;
+  if (el2) el2.innerHTML = html;
+}
+
 function getStatusClass(status) {
   if (status === "אושר") return "green-text";
   if (status === "בוטל") return "red-text";
@@ -314,6 +333,8 @@ function renderApprovals() {
     return !pendingApprovalDeletions[item.id];
   });
 
+  renderApprovalPagination(visibleApprovals.length);
+
   if (visibleApprovals.length === 0) {
     approvalsTable.innerHTML = `
       <tr class="empty-state-row">
@@ -323,7 +344,12 @@ function renderApprovals() {
     return;
   }
 
-  visibleApprovals.forEach(function (item) {
+  var pagedApprovals = visibleApprovals.slice(
+    approvalPage * APPROVAL_PAGE_SIZE,
+    (approvalPage + 1) * APPROVAL_PAGE_SIZE
+  );
+
+  pagedApprovals.forEach(function (item) {
     const row = document.createElement("tr");
 
     row.innerHTML = `

@@ -109,6 +109,14 @@ const apiLimiter = rateLimit({
   message: { error: "Too many requests" },
 });
 
+const passwordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "יותר מדי ניסיונות שינוי סיסמה. נסה שוב עוד 15 דקות." },
+});
+
 // ── IVR key middleware ────────────────────────────────────────────────────────
 
 function maskSecret(value) {
@@ -123,15 +131,13 @@ function requireIvrKey(req, res, next) {
     console.warn("[IVR] IVR_KEY not configured — access is unrestricted. Set IVR_KEY in .env.");
     return next();
   }
-  const provided = req.headers["x-ivr-key"] || req.query.ivrKey || "";
+  const provided = req.headers["x-ivr-key"] || "";
   if (provided !== IVR_KEY) {
     console.warn("[IVR] Rejected request with invalid IVR key", {
       hasHeader:   !!req.headers["x-ivr-key"],
-      hasQuery:    !!req.query.ivrKey,
       provided:    maskSecret(provided),
       expected:    maskSecret(IVR_KEY),
       originalUrl: req.originalUrl,
-      queryKeys:   Object.keys(req.query || {}),
     });
     return res.status(403).json({ error: "Invalid IVR key" });
   }
@@ -251,7 +257,7 @@ app.delete("/api/workers/:id", requireRole([ROLES.ADMIN]), function (req, res, n
 
 // Self-service: any authenticated worker can change their own password
 // MUST be defined before /:id/password so Express doesn't treat "me" as an id
-app.put("/api/workers/me/password", requireAuth, async function (req, res, next) {
+app.put("/api/workers/me/password", passwordLimiter, requireAuth, async function (req, res, next) {
   try {
     const { currentPassword, newPassword } = req.body || {};
 
@@ -281,7 +287,7 @@ app.put("/api/workers/me/password", requireAuth, async function (req, res, next)
   }
 });
 
-app.put("/api/workers/:id/password", requireRole([ROLES.ADMIN]), async function (req, res, next) {
+app.put("/api/workers/:id/password", passwordLimiter, requireRole([ROLES.ADMIN]), async function (req, res, next) {
   try {
     const id = Number(req.params.id);
     const { newPassword } = req.body || {};
