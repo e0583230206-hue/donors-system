@@ -1,4 +1,4 @@
-// Technoline PBX IVR — stateless flow
+// Technoline PBX IVR — stateless flow — v2026.06.30
 // Accumulated query params drive the state machine:
 //   mainChoice  — initial menu (1=pay, 2=prev-debts, 3=record)
 //   payChoice   — payment sub-menu (1=full debt, 2=custom) — only when mainChoice=1 + has debt
