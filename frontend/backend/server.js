@@ -41,6 +41,7 @@ const {
 } = require("./auth.service");
 
 const { handleIvrQuery, ivrErrorResponse } = require("./ivr.service");
+const { getDonorForIvr, normalizePhone }   = require("./donor.service");
 
 const PORT         = Number(process.env.PORT || 3000);
 const IVR_KEY      = process.env.IVR_KEY || "";
@@ -514,6 +515,34 @@ app.get(
     }
   }
 );
+
+// ── Softphone: SIP config (served to authenticated workers) ──────────────────
+app.get("/api/sip-config", requireAuth, function (req, res) {
+  res.json({
+    server: process.env.SIP_SERVER || "",
+    ext:    process.env.SIP_EXT    || "",
+    user:   process.env.SIP_USER   || "",
+    pass:   process.env.SIP_PASS   || "",
+  });
+});
+
+// ── Softphone: caller context (donor lookup by phone number) ──────────────────
+app.get("/api/softphone/context", requireAuth, function (req, res, next) {
+  try {
+    var phone = normalizePhone(req.query.phone || "");
+    if (!phone) return res.json({ context: null });
+    var donor = getDonorForIvr(phone);
+    if (!donor) return res.json({ context: null });
+    res.json({
+      context: {
+        phone:   donor.phone,
+        name:    donor.fullName,
+        debt:    donor.currentDebt ? donor.currentDebt.amount  : 0,
+        purpose: donor.currentDebt ? donor.currentDebt.purpose : "",
+      },
+    });
+  } catch (err) { next(err); }
+});
 
 // ── IVR webhook (Technoline PBX) ──────────────────────────────────────────────
 // Technoline sends all accumulated query params on every step.
