@@ -18,6 +18,20 @@ Database.whenReady(function () { updateSidebarCounts(); });
 function setupSidebarToggle() {
   var nav = document.querySelector(".sidebar nav");
 
+  // Inject softphone link (opens in new tab so it stays open while working)
+  if (nav && !nav.querySelector('a[href="softphone.html"]')) {
+    var phoneA = document.createElement("a");
+    phoneA.href = "softphone.html";
+    phoneA.target = "_blank";
+    phoneA.textContent = "📞 טלפון רשת";
+    var anchor = nav.querySelector('a[href="ivr-monitor.html"]') || null;
+    if (anchor && anchor.nextSibling) {
+      nav.insertBefore(phoneA, anchor.nextSibling);
+    } else {
+      nav.appendChild(phoneA);
+    }
+  }
+
   // 1. Split nav link text into icon + label wrapper so flex doesn't separate them
   document.querySelectorAll("nav a").forEach(function(a) {
     var textNode = null;
