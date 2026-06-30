@@ -85,6 +85,9 @@ app.use(function (req, res, next) {
 // ── Static frontend ───────────────────────────────────────────────────────────
 app.use(express.static(FRONTEND_DIR));
 
+// Explicit route for /lib so client-side libraries are always reachable
+app.use("/lib", express.static(path.join(__dirname, "..", "lib")));
+
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
