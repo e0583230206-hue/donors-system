@@ -48,6 +48,9 @@ var T = {
   // ── Fallback when credit-card terminal is not configured ───────────────────
   PAYMENT_UNAVAILABLE: "התשלום בכרטיס אשראי אינו זמין כרגע. נציג ייצור איתך קשר בהקדם. תודה.",
 
+  // ── Opening ────────────────────────────────────────────────────────────────
+  OPENING: "שלום וברכה, הגעתם למערכת תשלומים של א בלאט גמרא.",
+
   // ── Goodbye ────────────────────────────────────────────────────────────────
   GOODBYE: "תודה על התקשרותך. להתראות.",
 };
@@ -316,10 +319,10 @@ function buildResponse(query, donor) {
   } else {
     // Nothing allowed — politely say goodbye
     greeting = donorName ? T.GREETING_KNOWN(donorName) + noteSegment : T.GREETING_UNKNOWN;
-    return [simpleMessage([txt(greeting + " " + T.GOODBYE)]), hangup()];
+    return [simpleMessage([txt(T.OPENING), txt(greeting + " " + T.GOODBYE)]), hangup()];
   }
 
-  return simpleMenu([txt(greeting + menuText)], "mainChoice", enabledKeys, 3, 5);
+  return simpleMenu([txt(T.OPENING), txt(greeting + menuText)], "mainChoice", enabledKeys, 3, 5);
 }
 
 module.exports = { buildResponse };

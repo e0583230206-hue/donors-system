@@ -412,7 +412,7 @@ app.post(
         extension:  extension,
         target:     phone,
         targetName: donorName || phone,
-        ringSec:    "30",
+        ringSec:    30,
       });
 
       var techRes  = await fetch("https://app.ipsales.co.il/ivrFilesApi.php", {
@@ -444,7 +444,7 @@ app.post(
 
       if (!success) {
         console.error("[Click2Call] Technoline error:", JSON.stringify(techBody));
-        return res.status(502).json({
+        return res.status(400).json({
           error: "טכנוליין: " + (techBody.note || "שגיאה " + techBody.errorCode),
         });
       }
