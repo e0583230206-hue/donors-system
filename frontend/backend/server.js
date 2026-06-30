@@ -135,10 +135,13 @@ function requireIvrKey(req, res, next) {
     console.warn("[IVR] IVR_KEY not configured — access is unrestricted. Set IVR_KEY in .env.");
     return next();
   }
-  const provided = req.headers["x-ivr-key"] || "";
+  // Technoline sends the key as a query param (ivrKey=...).
+  // Also accept it from the x-ivr-key header for direct API calls.
+  const provided = req.headers["x-ivr-key"] || req.query.ivrKey || "";
   if (provided !== IVR_KEY) {
     console.warn("[IVR] Rejected request with invalid IVR key", {
       hasHeader:   !!req.headers["x-ivr-key"],
+      hasQueryKey: !!req.query.ivrKey,
       provided:    maskSecret(provided),
       expected:    maskSecret(IVR_KEY),
       originalUrl: req.originalUrl,
