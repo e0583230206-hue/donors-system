@@ -438,6 +438,16 @@ app.post(
         ringSec:    30,
       });
 
+      // Log exactly what we send (apiKey masked)
+      console.log("[Click2Call] → Technoline request:", JSON.stringify({
+        action:     "click2call",
+        apiKey:     maskSecret(apiKey),
+        extension:  extension,
+        target:     phone,
+        targetName: donorName || phone,
+        ringSec:    30,
+      }));
+
       var techRes  = await fetch("https://app.ipsales.co.il/ivrFilesApi.php", {
         method:  "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -445,7 +455,12 @@ app.post(
         signal:  AbortSignal.timeout(15000),
       });
 
+      var techHttpStatus = techRes.status;
       var techBody = await techRes.json();
+
+      // Always log the full Technoline response for diagnostics
+      console.log("[Click2Call] ← Technoline HTTP", techHttpStatus, "| body:", JSON.stringify(techBody));
+
       var success  = techBody && String(techBody.status).toUpperCase() === "OK";
 
       try {
@@ -466,10 +481,9 @@ app.post(
       }
 
       if (!success) {
-        console.error("[Click2Call] Technoline error:", JSON.stringify(techBody));
-        return res.status(400).json({
-          error: "טכנוליין: " + (techBody.note || "שגיאה " + techBody.errorCode),
-        });
+        var errMsg = techBody.note || techBody.message || techBody.error || ("שגיאה " + (techBody.errorCode ?? techHttpStatus));
+        console.error("[Click2Call] Technoline rejected call | error:", errMsg);
+        return res.status(400).json({ error: "טכנוליין: " + errMsg });
       }
 
       console.log("[Click2Call] initiated | donor:", donorName, "| phone:", phone,
