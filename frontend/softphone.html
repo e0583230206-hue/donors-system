@@ -759,7 +759,11 @@ footer.foot kbd{
     ua.on('newRTCSession', function(data){
       if(!live()) return; // ignore sessions from a stale UA
       const sx = data.session;
-      if (sx.direction==='incoming'){
+      const dir = sx.direction;
+      const remoteUri = (sx.remote_identity&&sx.remote_identity.uri) ? String(sx.remote_identity.uri) : '?';
+      console.log('[SIP] newRTCSession | direction:', dir, '| remote:', remoteUri);
+      log('newRTCSession [' + (dir==='incoming'?'נכנסת':'יוצאת') + '] remote=' + remoteUri, 'info');
+      if (dir==='incoming'){
         if (session){ try{ sx.terminate({status_code:486,reason_phrase:'Busy Here'}); }catch(e){} return; }
         const from = fmtPhone((sx.remote_identity&&sx.remote_identity.uri&&sx.remote_identity.uri.user)||'');
         currentCallNumber=from; renderNum();
@@ -783,7 +787,9 @@ footer.foot kbd{
     if (!ua||!ua.isRegistered()){ log('יש להתחבר תחילה','warn'); setExtInfo('התחבר תחילה'); return; }
     if (!dialed){ log('אין מספר לחייג','warn'); return; }
     const target='sip:'+dialed+'@'+(domainForCalls||'localhost');
-    log('מתקשר → '+target,'info');
+    // Full diagnostic — visible in browser console and in the on-screen log
+    console.log('[SIP] placeCall | dialed:', dialed, '| domain:', domainForCalls, '| full target:', target);
+    log('מחייג → ' + target, 'info');
     currentCallNumber=dialed; dialed=''; renderNum();
     $who.text('מחייג את '+currentCallNumber);
     setState('connecting','מחייג…');
@@ -893,8 +899,20 @@ footer.foot kbd{
     $('#btnHangup').prop('disabled',false);
     hideFailureState();
 
-    s.on('progress', function(){
-      setState('connecting','מצלצל…'); log('מצלצל','info');
+    s.on('sending', function(e){
+      const req = e && e.request;
+      const ruri = req ? String(req.ruri||req.to||'?') : '?';
+      console.log('[SIP] sending INVITE | ruri:', ruri, '| request:', req);
+      log('שולח INVITE → ' + ruri, 'ok');
+    });
+
+    s.on('progress', function(e){
+      const code   = (e.response&&e.response.status_code)||'';
+      const reason = (e.response&&e.response.reason_phrase)||'';
+      const orig   = e.originator||'';
+      console.log('[SIP] progress | originator:', orig, '| code:', code, '| reason:', reason);
+      log('progress' + (code?' ['+code+(reason?' '+reason:'')+']':'') + (orig?' ('+orig+')':''), 'info');
+      setState('connecting','מצלצל…');
       if(dir==='out') $who.text('מצלצל אצל '+(currentCallNumber||peerNum));
     });
     s.on('accepted', function(){
@@ -905,15 +923,24 @@ footer.foot kbd{
     });
     s.on('confirmed', function(){});
     s.on('ended', function(e){
-      log('שיחה הסתיימה: '+(e.cause||''),'info');
+      const cause = e.cause||'';
+      const orig  = e.originator||'';
+      console.log('[SIP] ended | cause:', cause, '| originator:', orig);
+      log('שיחה הסתיימה: '+cause+(orig?' ('+orig+')':''),'info');
       const dur=acceptedAt?Math.round((Date.now()-acceptedAt)/1000):0;
-      historyAdd({ts:Date.now(),dir,number:peerNum,duration:dur,cause:e.cause||'ended'});
+      historyAdd({ts:Date.now(),dir,number:peerNum,duration:dur,cause:cause||'ended'});
       cleanupCall();
     });
     s.on('failed', function(e){
-      const cause=e.cause||'';
-      const statusCode=(e.response&&e.response.status_code)||0;
-      log('שיחה נכשלה: '+cause+(statusCode?' ('+statusCode+')':''),'err');
+      const cause      = e.cause||'';
+      const statusCode = (e.response&&e.response.status_code)||0;
+      const reason     = (e.response&&e.response.reason_phrase)||'';
+      const orig       = e.originator||'';
+      console.log('[SIP] call failed | cause:', cause, '| originator:', orig,
+                  '| status:', statusCode, '| reason:', reason, '| full event:', e);
+      log('שיחה נכשלה: '+cause
+          + (statusCode?' ['+statusCode+(reason?' '+reason:'')+']':'')
+          + (orig?' ('+orig+')':''), 'err');
       historyAdd({ts:Date.now(),dir,number:peerNum,duration:0,cause:cause||'failed'});
       if(cause==='Canceled'||cause==='Terminated'){ cleanupCall(); return; }
       session=null; stopTimer(); clearDtmf();
