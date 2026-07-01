@@ -613,7 +613,7 @@ app.listen(PORT, function () {
 // ── Daily SQLite backup ───────────────────────────────────────────────────────
 (function scheduleDailyBackup() {
   const BACKUP_DIR  = path.join(__dirname, "backups");
-  const MAX_BACKUPS = 7;
+  const MAX_BACKUPS = 30;
 
   function runBackup() {
     if (!fs.existsSync(BACKUP_DIR)) {

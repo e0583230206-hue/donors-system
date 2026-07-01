@@ -223,17 +223,13 @@ function buildWorkersReport() {
 }
 
 function downloadXLSX(filename, sheetName, rows) {
-  const workbook = XLSX.utils.book_new();
+  const workbook  = XLSX.utils.book_new();
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
 
-  worksheet["!cols"] = rows[0].map(function () {
-    return { wch: 22 };
-  });
+  worksheet["!cols"] = rows[0].map(function () { return { wch: 24 }; });
+  worksheet["!rtl"]  = true;
 
-  worksheet["!rtl"] = true;
-  workbook.Workbook = {
-    Views: [{ RTL: true }],
-  };
+  workbook.Workbook = { Views: [{ RTL: true }] };
 
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
   XLSX.writeFile(workbook, filename);
@@ -338,6 +334,195 @@ if (exportWorkersButton) {
   exportWorkersButton.addEventListener("click", exportWorkers);
 }
 
+// ── Period / category filter ──────────────────────────────────────────────────
+
+var periodFilter = { from: "", to: "", category: "" };
+
+function getFilteredDonations() {
+  var all = getAllDonations();
+  return all.filter(function (d) {
+    var dateStr = d.regularDate || d.date || d.createdAt || "";
+    var date    = dateStr ? new Date(dateStr) : null;
+
+    if (periodFilter.from && date) {
+      if (date < new Date(periodFilter.from)) return false;
+    }
+    if (periodFilter.to && date) {
+      var toEnd = new Date(periodFilter.to);
+      toEnd.setHours(23, 59, 59, 999);
+      if (date > toEnd) return false;
+    }
+    if (periodFilter.category) {
+      if ((d.finalPurpose || "לא מוגדר") !== periodFilter.category) return false;
+    }
+    return true;
+  });
+}
+
+function buildCategoryDropdown() {
+  var select = document.getElementById("filterCategory");
+  if (!select) return;
+  var all      = getAllDonations();
+  var purposes = {};
+  all.forEach(function (d) {
+    purposes[d.finalPurpose || "לא מוגדר"] = true;
+  });
+  var saved = select.value;
+  select.innerHTML = '<option value="">הכל</option>';
+  Object.keys(purposes).sort(function (a, b) { return a.localeCompare(b, "he"); })
+    .forEach(function (p) {
+      var opt = document.createElement("option");
+      opt.value       = p;
+      opt.textContent = p;
+      if (p === saved) opt.selected = true;
+      select.appendChild(opt);
+    });
+}
+
+function buildPeriodReport() {
+  var filtered    = getFilteredDonations();
+  var periodStats = document.getElementById("periodStats");
+  var periodTable = document.getElementById("periodTable");
+  if (!periodStats || !periodTable) return;
+
+  var totalCommitted = 0, totalPaid = 0, totalDebt = 0;
+  filtered.forEach(function (d) {
+    totalCommitted += Number(d.amount || 0);
+    totalPaid      += Number(d.paidPartial || 0);
+    totalDebt      += Number(d.remainingDebt || 0);
+  });
+
+  periodStats.innerHTML =
+    '<div class="stat-card"><h3>📊 תרומות</h3><strong>' + filtered.length + '</strong><p>מספר רשומות</p></div>' +
+    '<div class="stat-card warning"><h3>📋 התחייבו</h3><strong>' + formatMoney(totalCommitted) + '</strong><p>סה"כ התחייבויות</p></div>' +
+    '<div class="stat-card success"><h3>✅ שולם</h3><strong>' + formatMoney(totalPaid) + '</strong><p>סה"כ שולם</p></div>' +
+    '<div class="stat-card danger"><h3>⚠️ חוב</h3><strong>' + formatMoney(totalDebt) + '</strong><p>סה"כ חוב</p></div>';
+
+  if (filtered.length === 0) {
+    periodTable.innerHTML = '<tr class="empty-state-row"><td colspan="8">אין נתונים בתקופה זו</td></tr>';
+    return;
+  }
+
+  var sorted = filtered.slice().sort(function (a, b) {
+    var da = new Date(a.regularDate || a.date || a.createdAt || 0);
+    var db = new Date(b.regularDate || b.date || b.createdAt || 0);
+    return db - da;
+  });
+
+  periodTable.innerHTML = sorted.map(function (d) {
+    return "<tr>" +
+      "<td>" + escapeHTML(d.donorName  || "")          + "</td>" +
+      "<td>" + escapeHTML(d.donorPhone || "")          + "</td>" +
+      "<td>" + escapeHTML(d.donorCity  || "")          + "</td>" +
+      "<td>" + escapeHTML(d.finalPurpose || "לא מוגדר") + "</td>" +
+      "<td>" + formatMoney(d.amount || 0)              + "</td>" +
+      '<td class="green-text">' + formatMoney(d.paidPartial   || 0) + "</td>" +
+      '<td class="red-text">'   + formatMoney(d.remainingDebt || 0) + "</td>" +
+      "<td>" + escapeHTML(d.regularDate || d.date || "") + "</td>" +
+    "</tr>";
+  }).join("");
+}
+
+function buildMonthlyBreakdown() {
+  var all     = getAllDonations();
+  var byMonth = {};
+
+  all.forEach(function (d) {
+    var dateStr = d.regularDate || d.date || d.createdAt || "";
+    if (!dateStr) return;
+    var dt = new Date(dateStr);
+    if (isNaN(dt)) return;
+    var key = dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0");
+    if (!byMonth[key]) byMonth[key] = { count: 0, committed: 0, paid: 0, debt: 0 };
+    byMonth[key].count++;
+    byMonth[key].committed += Number(d.amount || 0);
+    byMonth[key].paid      += Number(d.paidPartial   || 0);
+    byMonth[key].debt      += Number(d.remainingDebt || 0);
+  });
+
+  var monthlyTable = document.getElementById("monthlyTable");
+  if (!monthlyTable) return;
+
+  var keys = Object.keys(byMonth).sort().reverse();
+  if (keys.length === 0) {
+    monthlyTable.innerHTML = '<tr class="empty-state-row"><td colspan="5">אין נתונים</td></tr>';
+    return;
+  }
+
+  var hebrewMonths = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני",
+                      "יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+
+  monthlyTable.innerHTML = keys.map(function (key) {
+    var parts = key.split("-");
+    var label = hebrewMonths[Number(parts[1]) - 1] + " " + parts[0];
+    var item  = byMonth[key];
+    return "<tr>" +
+      "<td>" + label + "</td>" +
+      "<td>" + item.count + "</td>" +
+      "<td>" + formatMoney(item.committed) + "</td>" +
+      '<td class="green-text">' + formatMoney(item.paid) + "</td>" +
+      '<td class="red-text">'   + formatMoney(item.debt) + "</td>" +
+    "</tr>";
+  }).join("");
+}
+
+function clearPeriodFilter() {
+  periodFilter = { from: "", to: "", category: "" };
+  var fromEl = document.getElementById("filterFrom");
+  var toEl   = document.getElementById("filterTo");
+  var catEl  = document.getElementById("filterCategory");
+  if (fromEl) fromEl.value = "";
+  if (toEl)   toEl.value   = "";
+  if (catEl)  catEl.value  = "";
+  buildPeriodReport();
+}
+
+function exportFilteredDonations() {
+  var filtered = getFilteredDonations();
+  var rows     = [["שם תורם","טלפון","עיר","קטגוריה","התחייב","שולם","חוב","תאריך","הערה"]];
+
+  filtered.forEach(function (d) {
+    rows.push([
+      d.donorName    || "",
+      d.donorPhone   || "",
+      d.donorCity    || "",
+      d.finalPurpose || "",
+      Number(d.amount        || 0),
+      Number(d.paidPartial   || 0),
+      Number(d.remainingDebt || 0),
+      d.regularDate || d.date || "",
+      d.note || "",
+    ]);
+  });
+
+  var suffix = "";
+  if (periodFilter.from || periodFilter.to) {
+    suffix = "_" + (periodFilter.from || "start") + "_עד_" + (periodFilter.to || "end");
+  }
+  downloadXLSX("תרומות" + suffix + ".xlsx", "תרומות", rows);
+}
+
+(function wirePeriodFilter() {
+  var fromEl  = document.getElementById("filterFrom");
+  var toEl    = document.getElementById("filterTo");
+  var catEl   = document.getElementById("filterCategory");
+  var expBtn  = document.getElementById("exportPeriodButton");
+
+  if (fromEl) fromEl.addEventListener("change", function () {
+    periodFilter.from = this.value;
+    buildPeriodReport();
+  });
+  if (toEl) toEl.addEventListener("change", function () {
+    periodFilter.to = this.value;
+    buildPeriodReport();
+  });
+  if (catEl) catEl.addEventListener("change", function () {
+    periodFilter.category = this.value;
+    buildPeriodReport();
+  });
+  if (expBtn) expBtn.addEventListener("click", exportFilteredDonations);
+}());
+
 function buildAdvancedStats() {
   var topDonorsList   = document.getElementById("topDonorsList");
   var avgDonationEl   = document.getElementById("avgDonation");
@@ -407,4 +592,7 @@ Database.whenReady(function () {
   buildFinanceReport();
   buildWorkersReport();
   buildAdvancedStats();
+  buildCategoryDropdown();
+  buildPeriodReport();
+  buildMonthlyBreakdown();
 });

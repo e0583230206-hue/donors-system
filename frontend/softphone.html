@@ -461,6 +461,7 @@ footer.foot kbd{
   let ua = null, session = null;
   let dialed = '', callStart = 0, timerHandle = null, domainForCalls = '';
   let currentCallNumber = '';
+  let uaGen = 0; // incremented each time a new UA is created; guards stale events
 
   const ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -541,7 +542,7 @@ footer.foot kbd{
   function resetFailureIfAny(){
     if (!session && ($('#failBlock').hasClass('show') || currentCallNumber)){
       hideFailureState(); currentCallNumber=''; $who.html('&nbsp;');
-      if (ua && ua.isRegistered && ua.isRegistered()) setState('registered','רשום בשרת');
+      if (ua && ua.isRegistered && ua.isRegistered()) setState('registered','מחובר');
     }
   }
   function pressKey(d){
@@ -699,24 +700,53 @@ footer.foot kbd{
       pcConfig: { iceServers: ICE_SERVERS, iceTransportPolicy: 'all' }
     });
 
-    ua.on('connecting',  function(){ setState('connecting','מתחבר…'); log('פותח WebSocket → '+c.serverUrl,'info'); });
-    ua.on('connected',   function(){ log('WebSocket מחובר','ok'); });
-    ua.on('disconnected',function(){
-      setState('failed','מנותק');
-      log('WebSocket לא מחובר — לחץ "חבר" להתחברות מחדש','warn');
-      setExtInfo('מנותק מהשרת');
-      $('#btnQuickReconnect').show();
+    // Each UA instance captures its own generation number.
+    // If a newer UA was created (uaGen > gen), these callbacks are stale and ignored.
+    const gen = ++uaGen;
+    function live(){ return uaGen === gen; }
+    let disconnectedTimer = null;
+
+    ua.on('connecting',  function(){
+      if(!live()) return;
+      setState('connecting','מתחבר…');
+      log('פותח WebSocket → '+c.serverUrl,'info');
+    });
+    ua.on('connected',   function(){
+      if(!live()) return;
+      log('WebSocket מחובר','ok');
+    });
+    ua.on('disconnected', function(){
+      if(!live()) return;
+      // Debounce: JsSIP auto-reconnects within seconds — wait 4s before showing error,
+      // so a brief network blip or server-side keepalive close doesn't flash "מנותק".
+      clearTimeout(disconnectedTimer);
+      disconnectedTimer = setTimeout(function(){
+        if(!live()) return;
+        setState('failed','מנותק');
+        log('WebSocket לא מחובר — לחץ "חבר" להתחברות מחדש','warn');
+        setExtInfo('מנותק מהשרת');
+        $('#btnQuickReconnect').show();
+      }, 4000);
     });
     ua.on('registered',  function(){
-      setState('registered','רשום בשרת');
+      if(!live()) return;
+      clearTimeout(disconnectedTimer); // cancel any pending disconnected state
+      setState('registered','מחובר');
       log('רשום בהצלחה ב-PBX','ok');
-      setExtInfo('רשום בשרת ✓ · שלוחה ' + c.ext);
-      // Auto-collapse settings panel on successful registration
+      setExtInfo('מחובר ✓ · שלוחה ' + c.ext);
       $('#connForm').hide(); $('#connToggle').text('▼ הצג');
       $('#btnQuickReconnect').hide();
     });
-    ua.on('unregistered',function(){ setState('idle','לא מחובר'); log('בוטל רישום','warn'); setExtInfo('לא מחובר'); });
+    ua.on('unregistered', function(){
+      if(!live()) return;
+      clearTimeout(disconnectedTimer);
+      setState('idle','לא מחובר');
+      log('בוטל רישום','warn');
+      setExtInfo('לא מחובר');
+    });
     ua.on('registrationFailed', function(e){
+      if(!live()) return;
+      clearTimeout(disconnectedTimer);
       setState('failed','כשל רישום');
       const code   = (e.response&&e.response.status_code)||0;
       const reason = (e.response&&e.response.reason_phrase)||'';
@@ -727,6 +757,7 @@ footer.foot kbd{
     });
 
     ua.on('newRTCSession', function(data){
+      if(!live()) return; // ignore sessions from a stale UA
       const sx = data.session;
       if (sx.direction==='incoming'){
         if (session){ try{ sx.terminate({status_code:486,reason_phrase:'Busy Here'}); }catch(e){} return; }
@@ -840,7 +871,7 @@ footer.foot kbd{
     if(!incomingSession) return;
     try{ incomingSession.terminate({status_code:486,reason_phrase:'Busy Here'}); }catch(e){}
     hideIncoming();
-    if(ua&&ua.isRegistered()) setState('registered','רשום בשרת');
+    if(ua&&ua.isRegistered()) setState('registered','מחובר');
   }
 
   // ---------- failure UI ----------
@@ -921,7 +952,7 @@ footer.foot kbd{
     session=null; currentCallNumber=''; dialed='';
     $('#btnHangup').prop('disabled',true); $who.html('&nbsp;');
     stopTimer(); clearDtmf(); hideIncoming(); renderNum();
-    if(ua&&ua.isRegistered()) setState('registered','רשום בשרת');
+    if(ua&&ua.isRegistered()) setState('registered','מחובר');
   }
 
   // ---------- call history ----------
