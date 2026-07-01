@@ -51,6 +51,15 @@ const app = express();
 
 app.set("trust proxy", 1);
 
+// ── TEMP DIAGNOSTIC: log every HTTP request before any middleware/route ───────
+// Remove once IVR connectivity is confirmed.
+app.use(function (req, res, next) {
+  console.log("[RAW]", new Date().toISOString(), req.method, req.url,
+              "| ip:", req.ip || (req.socket && req.socket.remoteAddress) || "?");
+  next();
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ── Security headers ─────────────────────────────────────────────────────────
 app.use(
   helmet({
