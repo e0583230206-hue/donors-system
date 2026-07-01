@@ -83,7 +83,17 @@ app.use(function (req, res, next) {
 });
 
 // ── Static frontend ───────────────────────────────────────────────────────────
-app.use(express.static(FRONTEND_DIR));
+// HTML files: no-cache so browsers always fetch the latest version after deploy.
+// JS/CSS/images: allow ETag-based caching (default express.static behaviour).
+app.use(express.static(FRONTEND_DIR, {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
+  }
+}));
 
 // Explicit route for /lib so client-side libraries are always reachable
 app.use("/lib", express.static(path.join(__dirname, "..", "lib")));
