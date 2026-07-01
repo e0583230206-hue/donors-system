@@ -472,15 +472,25 @@ function getCallLogsByCallId(callId) {
 // ── Click-to-Call Logs ───────────────────────────────────────────────────────
 
 function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, donorPhone, agentExtension, status, errorCode, errorNote }) {
-  // donorId is a FK to donors(id) — validate before INSERT to avoid constraint errors.
-  // The client may send an app-level donor ID that hasn't been synced to SQLite.
+  // donorId from the frontend is the app-level JSON id, not necessarily the SQLite donors.id.
+  // Strategy: try SQLite id first, then fall back to phone lookup.
   var safeDonorId = null;
   if (donorId != null) {
     var donorRow = db.prepare("SELECT id FROM donors WHERE id = ? LIMIT 1").get(Number(donorId));
     if (donorRow) {
       safeDonorId = Number(donorId);
+    } else if (donorPhone) {
+      var normalized = normalizePhoneForDb(donorPhone);
+      var byPhone = normalized
+        ? db.prepare("SELECT id FROM donors WHERE " + STRIP_PHONE_SQL + " = ? LIMIT 1").get(normalized)
+        : null;
+      if (byPhone) {
+        safeDonorId = byPhone.id;
+      } else {
+        console.log("[DB] logClick2Call: donor not found by id=" + donorId + " or phone=" + donorPhone + " (app-level id, not synced to SQLite) — FK stored as NULL");
+      }
     } else {
-      console.warn("[DB] logClick2Call: donorId " + donorId + " not in donors table — storing NULL");
+      console.log("[DB] logClick2Call: donorId " + donorId + " not in donors table and no phone provided — FK stored as NULL");
     }
   }
 
