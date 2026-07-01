@@ -248,18 +248,22 @@ function handleIvrQuery(query) {
         return { response: ivrErrorResponse() };
       }
 
+      var confirmationNumber = asText(q.CONFIRM_payment) || null;
+
       var saveResult = saveIvrPaymentOnce({
-        callId:  callId,
-        phone:   phone,
-        donorId: donor ? donor.id : null,
-        amount:  amount,
+        callId:             callId,
+        phone:              phone,
+        donorId:            donor ? donor.id : null,
+        amount:             amount,
+        confirmationNumber: confirmationNumber,
       });
 
       safeInsertCallLog(callId, phone, "payment_success", {
-        donorId:   donor ? donor.id   : null,
-        donorName: donor ? donor.fullName : null,
-        amount:    amount,
-        duplicate: saveResult.duplicate,
+        donorId:            donor ? donor.id   : null,
+        donorName:          donor ? donor.fullName : null,
+        amount:             amount,
+        confirmationNumber: confirmationNumber,
+        duplicate:          saveResult.duplicate,
       });
       logCallEnd(callId, phone, "payment_success", amount);
 

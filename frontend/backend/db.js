@@ -119,6 +119,7 @@ function initDatabase() {
   try { db.exec("ALTER TABLE workers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
   try { db.exec("ALTER TABLE ivr_donations ADD COLUMN donorId INTEGER REFERENCES donors(id)"); } catch (_) {}
   try { db.exec("ALTER TABLE ivr_call_logs ADD COLUMN timestamp TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE payments ADD COLUMN confirmationNumber TEXT"); } catch (_) {}
 
   try {
     const missing = db.prepare("SELECT COUNT(*) AS count FROM ivr_call_logs WHERE timestamp IS NULL").get();
@@ -344,8 +345,8 @@ function recordPayment(payment) {
   const stamp = nowIso();
   return db.prepare(`
     INSERT OR IGNORE INTO payments
-      (callId, phone, donorId, amount, status, source, createdAt, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (callId, phone, donorId, amount, status, source, confirmationNumber, createdAt, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     payment.callId ? String(payment.callId).trim() : null,
     payment.phone  ? String(payment.phone).trim()  : null,
@@ -353,12 +354,13 @@ function recordPayment(payment) {
     payment.amount,
     payment.status  || "success",
     payment.source  || "ivr",
+    payment.confirmationNumber || null,
     stamp,
     stamp
   );
 }
 
-function savePaymentInTransaction(callId, phone, amount, donorId) {
+function savePaymentInTransaction(callId, phone, amount, donorId, confirmationNumber) {
   const cid = String(callId).trim();
   const ph  = String(phone).trim();
 
@@ -381,8 +383,8 @@ function savePaymentInTransaction(callId, phone, amount, donorId) {
     if (!existingPayment) {
       const stamp = nowIso();
       db.prepare(
-        "INSERT OR IGNORE INTO payments (callId, phone, donorId, amount, status, source, createdAt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run(cid, ph, donorId || null, amount, "success", "ivr", stamp, stamp);
+        "INSERT OR IGNORE INTO payments (callId, phone, donorId, amount, status, source, confirmationNumber, createdAt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(cid, ph, donorId || null, amount, "success", "ivr", confirmationNumber || null, stamp, stamp);
     }
 
     db.exec("COMMIT");

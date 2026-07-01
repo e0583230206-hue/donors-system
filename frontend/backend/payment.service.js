@@ -17,7 +17,8 @@ function saveIvrPaymentOnce(details) {
     details.callId,
     details.phone,
     details.amount,
-    details.donorId || null
+    details.donorId || null,
+    details.confirmationNumber || null
   );
 }
 
