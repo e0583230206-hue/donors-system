@@ -915,19 +915,48 @@ footer.foot kbd{
       setState('connecting','מצלצל…');
       if(dir==='out') $who.text('מצלצל אצל '+(currentCallNumber||peerNum));
     });
-    s.on('accepted', function(){
-      hideIncoming(); setState('in-call','בשיחה'); log('שיחה התחברה','ok');
+    s.on('accepted', function(e){
+      acceptedAt=Date.now();
+      const code   = (e&&e.response&&e.response.status_code)||'';
+      const reason = (e&&e.response&&e.response.reason_phrase)||'';
+      const orig   = (e&&e.originator)||'';
+      const sdp    = (e&&e.response&&e.response.body)||'';
+      console.log('[SIP] accepted (200 OK) | originator:', orig, '| code:', code,
+                  '| reason:', reason, '| SDP length:', sdp.length);
+      if (sdp) console.log('[SIP] 200 OK SDP:\n'+sdp);
+      log('200 OK — שיחה התחברה ['+code+(reason?' '+reason:'')+'] ('+orig+')', 'ok');
+      hideIncoming(); setState('in-call','בשיחה');
       $who.text('בשיחה עם '+(currentCallNumber||peerNum));
       currentCallNumber=currentCallNumber||peerNum; renderNum();
-      acceptedAt=Date.now(); startTimer();
+      startTimer();
     });
-    s.on('confirmed', function(){});
+    s.on('confirmed', function(e){
+      const orig = (e&&e.originator)||'';
+      const ms   = acceptedAt ? Date.now()-acceptedAt : 0;
+      console.log('[SIP] confirmed (ACK) | originator:', orig, '| ms since 200 OK:', ms);
+      log('ACK נשלח/התקבל — שיחה מאושרת ('+orig+') ['+ms+'ms]', 'ok');
+    });
     s.on('ended', function(e){
-      const cause = e.cause||'';
-      const orig  = e.originator||'';
-      console.log('[SIP] ended | cause:', cause, '| originator:', orig);
-      log('שיחה הסתיימה: '+cause+(orig?' ('+orig+')':''),'info');
-      const dur=acceptedAt?Math.round((Date.now()-acceptedAt)/1000):0;
+      const cause  = e.cause||'';
+      const orig   = e.originator||'';
+      const ms     = acceptedAt ? Date.now()-acceptedAt : 0;
+      // When BYE comes from remote, JsSIP passes it as e.message
+      const bye    = e.message||e.request||null;
+      const byeHdrs= bye ? (function(){
+        var out={};
+        ['Reason','X-Asterisk-HangupCause','X-Asterisk-HangupCauseCode','Warning'].forEach(function(h){
+          var v = bye.getHeader&&bye.getHeader(h);
+          if(v) out[h]=v;
+        });
+        return out;
+      }()) : {};
+      console.log('[SIP] ended | cause:', cause, '| originator:', orig,
+                  '| ms since accepted:', ms, '| BYE headers:', byeHdrs,
+                  '| raw message:', bye);
+      log('שיחה הסתיימה: '+cause+' ('+orig+')'
+          +(ms?' אחרי '+(ms/1000).toFixed(1)+'s':'')
+          +(byeHdrs.Reason?' | Reason: '+byeHdrs.Reason:''), 'info');
+      const dur=acceptedAt?Math.round(ms/1000):0;
       historyAdd({ts:Date.now(),dir,number:peerNum,duration:dur,cause:cause||'ended'});
       cleanupCall();
     });
