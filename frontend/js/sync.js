@@ -316,8 +316,8 @@ window.rejectPending = async function (id, btn) {
 };
 
 loadPending();
-
 loadSyncLog();
+loadCityMap();
 
 // ── Alfon API import ──────────────────────────────────────────────────────────
 
@@ -340,46 +340,17 @@ async function fetchFromAlfonApi() {
 
     var c = data.counts || {};
 
-    // ── City report ──────────────────────────────────────────────────────
-    var cityReport   = data.cityReport   || {};
-    var unknownCities = data.unknownCityIds || [];
-    var cityHtml = "";
-
-    var cityIds = Object.keys(cityReport).sort(function (a, b) {
-      return cityReport[b].count - cityReport[a].count;
+    // Merge city IDs from this fetch into the city map editor
+    var cityReport = data.cityReport || {};
+    Object.keys(cityReport).forEach(function (id) {
+      _cityIdsWithCounts[id] = (_cityIdsWithCounts[id] || 0) + cityReport[id].count;
     });
+    renderCityMapTable();
 
-    if (cityIds.length) {
-      var rows = cityIds.map(function (id) {
-        var info   = cityReport[id];
-        var mapped = info.mapped
-          ? "<span style='color:#155724;font-weight:600'>" + escSafe(info.mapped) + "</span>"
-          : "<span style='color:#721c24;font-weight:600'>⚠ לא ידוע</span>";
-        return "<tr><td style='padding:3px 8px'>" + escSafe(id) + "</td>" +
-               "<td style='padding:3px 8px'>" + mapped + "</td>" +
-               "<td style='padding:3px 8px;color:#888'>" + info.count + " רשומות</td></tr>";
-      }).join("");
-
-      cityHtml =
-        "<details style='margin-top:10px'><summary style='cursor:pointer;font-size:.9em;color:#555'>" +
-        "🏙 מיפוי ערים (" + cityIds.length + " ערים" +
-        (unknownCities.length ? " — <span style='color:#856404'>" + unknownCities.length + " לא ידועות</span>" : "") +
-        ")</summary>" +
-        "<table style='font-size:.85em;margin-top:8px;border-collapse:collapse'>" +
-        "<thead><tr><th style='text-align:right;padding:3px 8px;border-bottom:1px solid #ddd'>ID</th>" +
-        "<th style='text-align:right;padding:3px 8px;border-bottom:1px solid #ddd'>שם עיר</th>" +
-        "<th style='text-align:right;padding:3px 8px;border-bottom:1px solid #ddd'>כמות</th></tr></thead>" +
-        "<tbody>" + rows + "</tbody></table>";
-
-      if (unknownCities.length) {
-        cityHtml +=
-          "<div style='margin-top:8px;font-size:.85em;color:#856404'>" +
-          "הוסף למיפוי ב-<code>backend/city_map.js</code>: " +
-          unknownCities.map(function (id) { return '"' + id + '": "שם עיר"'; }).join(", ") +
-          "</div>";
-      }
-      cityHtml += "</details>";
-    }
+    var unknownCount = (data.unknownCityIds || []).length;
+    var cityNote = unknownCount
+      ? "<br><small style='color:#856404'>⚠ " + unknownCount + " מזהי ערים לא ממופים — עדכן בטבלת הערים למטה</small>"
+      : "";
 
     status.innerHTML =
       "<div class='api-fetch-ok'>" +
@@ -388,8 +359,9 @@ async function fetchFromAlfonApi() {
         "עדכון: <strong>" + c.update + "</strong> | " +
         "ללא שינוי: <strong>" + c.unchanged + "</strong> | " +
         "דלג: <strong>" + c.skip + "</strong>" +
+        cityNote +
         "<br><small style='color:#333'>הסנכרון ממתין לאישורך בפאנל למטה ↓</small>" +
-      "</div>" + cityHtml;
+      "</div>";
 
     await loadPending();
     var sec = document.getElementById("pendingSection");
@@ -399,5 +371,95 @@ async function fetchFromAlfonApi() {
   } finally {
     btn.disabled  = false;
     btn.innerHTML = "📥 ייבוא עכשיו מהאלפון";
+  }
+}
+
+// ── City map editor ───────────────────────────────────────────────────────────
+
+var _cityMap            = {};  // {id: name} — loaded from DB
+var _cityIdsWithCounts  = {};  // {id: count} — populated from API fetch
+
+async function loadCityMap() {
+  try {
+    var r = await apiFetch("/api/sync/city-map");
+    if (!r.ok) return;
+    _cityMap = await r.json();
+  } catch (_) {}
+  renderCityMapTable();
+}
+
+function renderCityMapTable() {
+  var wrap = document.getElementById("cityMapTableWrap");
+  if (!wrap) return;
+
+  var allIds = new Set(
+    Object.keys(_cityMap).concat(Object.keys(_cityIdsWithCounts))
+  );
+
+  if (!allIds.size) {
+    wrap.innerHTML = "<p style='color:#aaa;font-size:.9em;'>לא נמצאו מזהי ערים עדיין. בצע ייבוא מהאלפון כדי לאתר אותם.</p>";
+    return;
+  }
+
+  var sortedIds = Array.from(allIds).sort(function (a, b) { return Number(a) - Number(b); });
+
+  var rows = sortedIds.map(function (id) {
+    var name    = _cityMap[id] || "";
+    var count   = _cityIdsWithCounts[id] ? (_cityIdsWithCounts[id] + " רשומות") : "";
+    var cls     = name ? "city-name-inp city-mapped" : "city-name-inp city-unknown";
+    return "<tr>" +
+      "<td><code style='font-size:.9em;color:#555'>" + escSafe(id) + "</code></td>" +
+      "<td><input class='" + cls + "' data-id='" + escSafe(id) + "'" +
+          " value='" + escSafe(name) + "' placeholder='שם עיר בעברית'></td>" +
+      "<td style='font-size:.82em;color:#999;padding-right:6px'>" + count + "</td>" +
+      "</tr>";
+  }).join("");
+
+  wrap.innerHTML =
+    "<table class='city-map-table'>" +
+    "<thead><tr><th>מזהה</th><th>שם עיר</th><th>כמות</th></tr></thead>" +
+    "<tbody>" + rows + "</tbody></table>";
+}
+
+function addCityRow() {
+  var id = prompt("הכנס מזהה עיר (מספר):");
+  if (!id) return;
+  id = id.trim();
+  if (!/^\d+$/.test(id)) { alert("המזהה חייב להיות מספר"); return; }
+  _cityIdsWithCounts[id] = _cityIdsWithCounts[id] || 0;
+  renderCityMapTable();
+  setTimeout(function () {
+    var inp = document.querySelector('.city-name-inp[data-id="' + id + '"]');
+    if (inp) inp.focus();
+  }, 50);
+}
+
+async function saveCityMap() {
+  var newMap = {};
+  document.querySelectorAll(".city-name-inp").forEach(function (inp) {
+    var id   = inp.dataset.id;
+    var name = inp.value.trim();
+    if (id && name) newMap[id] = name;
+  });
+
+  var statusEl = document.getElementById("cityMapStatus");
+  statusEl.textContent = "שומר…";
+
+  try {
+    var r = await apiFetch("/api/sync/city-map", {
+      method: "PUT",
+      body:   JSON.stringify(newMap),
+    });
+    var resp = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      statusEl.textContent = "שגיאה: " + (resp.error || r.status);
+      return;
+    }
+    _cityMap = newMap;
+    renderCityMapTable();
+    statusEl.innerHTML = "✅ נשמר " + resp.entries + " ערים! הייבוא הבא ישתמש במיפוי החדש.";
+    setTimeout(function () { statusEl.textContent = ""; }, 4000);
+  } catch (e) {
+    statusEl.textContent = "שגיאת רשת: " + e.message;
   }
 }

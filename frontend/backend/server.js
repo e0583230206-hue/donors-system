@@ -778,16 +778,20 @@ app.get("/api/sync/logs", requireRole([ROLES.ADMIN]), function (req, res) {
 var ALFON_API_URL = (process.env.ALFON_API_URL || "").trim() ||
   "https://utilitiesphone.com/persons/dashboard/data.php?type_data=get_persons&filter=approval=1";
 
+// Returns city map merged from DB (admin-editable) + city_map.js file (fallback)
+function getCombinedCityMap() {
+  var dbMap = getAppState("alfon_city_map");
+  if (!dbMap || typeof dbMap !== "object" || Array.isArray(dbMap)) dbMap = {};
+  return Object.assign({}, CITY_MAP, dbMap); // DB overrides file
+}
+
 // Returns raw city ID string (digits only) or "" for non-numeric / missing
 function getCityRawId(p) {
-  // city might be an object {id, name}, a number, or a string
   var raw = "";
   if (p.city !== null && p.city !== undefined) {
-    if (typeof p.city === "object") {
-      raw = String(p.city.id || p.city.city_id || "");
-    } else {
-      raw = String(p.city);
-    }
+    raw = typeof p.city === "object"
+      ? String(p.city.id || p.city.city_id || "")
+      : String(p.city);
   } else if (p.city_id !== null && p.city_id !== undefined) {
     raw = String(p.city_id);
   }
@@ -796,14 +800,14 @@ function getCityRawId(p) {
 }
 
 // Returns resolved Hebrew city name, or "" if unknown (preserves existing DB value)
-function resolveCity(p) {
+function resolveCity(p, cityMap) {
   // 1. Explicit text fields (some APIs provide both id and name)
   var textCandidates = ["city_name", "city_title", "city_label", "city_text"];
   for (var i = 0; i < textCandidates.length; i++) {
     var v = String(p[textCandidates[i]] || "").trim();
     if (v && !/^\d+$/.test(v)) return v;
   }
-  // 2. city field as an object with name
+  // 2. city field as an object with embedded name
   if (p.city && typeof p.city === "object") {
     var nameFields = ["name", "title", "label", "city_name"];
     for (var j = 0; j < nameFields.length; j++) {
@@ -811,9 +815,9 @@ function resolveCity(p) {
       if (nv && !/^\d+$/.test(nv)) return nv;
     }
   }
-  // 3. Numeric ID → look up in map
+  // 3. Numeric ID → look up in combined map
   var rawId = getCityRawId(p);
-  if (rawId) return CITY_MAP[rawId] || ""; // "" = unknown → won't overwrite existing city
+  if (rawId) return (cityMap || {})[rawId] || ""; // "" = unknown → won't overwrite existing city
   // 4. city field is already a non-numeric name
   if (p.city && typeof p.city === "string" && !/^\d+$/.test(p.city.trim())) {
     return p.city.trim();
@@ -843,7 +847,7 @@ function collectPersonPhones(person) {
   return phones; // normalized, deduped, in priority order
 }
 
-function personsJsonToCsv(persons) {
+function personsJsonToCsv(persons, cityMap) {
   var headers = [
     "מספר סידורי","שם פרטי","שם משפחה","ישוב",
     "רחוב","מספר בית","דירה","כניסה","שכונה",
@@ -856,16 +860,16 @@ function personsJsonToCsv(persons) {
       p.person_id    || "",
       p.first_name   || "",
       p.last_name    || "",
-      resolveCity(p),      // "" when ID unknown → won't overwrite existing city
+      resolveCity(p, cityMap), // mapped name, or "" if unknown (won't overwrite existing)
       p.street       || "",
       p.house_number || "",
       p.apartment    || "",
       p.entrance     || "",
       p.neighborhood || "",
-      phones[0]      || "", // פלאפון א
-      phones[1]      || "", // פלאפון ב
-      phones[2]      || "", // טלפון ביתי
-      phones[3]      || "", // פלאפון נוסף
+      phones[0]      || "",
+      phones[1]      || "",
+      phones[2]      || "",
+      phones[3]      || "",
     ];
     lines.push(row.map(function (v) {
       return '"' + String(v).replace(/"/g, '""') + '"';
@@ -874,6 +878,31 @@ function personsJsonToCsv(persons) {
   return "﻿" + lines.join("\r\n");
 }
 
+// Get/save city map (DB-backed, editable from UI)
+app.get("/api/sync/city-map", requireRole([ROLES.ADMIN]), function (req, res) {
+  res.json(getCombinedCityMap());
+});
+
+app.put("/api/sync/city-map", requireRole([ROLES.ADMIN]), function (req, res) {
+  var incoming = req.body;
+  if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+    return res.status(400).json({ error: "גוף הבקשה חייב להיות אובייקט {id: שם}" });
+  }
+  // Sanitize: keys must be digit strings, values non-empty strings
+  var clean = {};
+  Object.keys(incoming).forEach(function (k) {
+    var v = String(incoming[k] || "").trim();
+    if (/^\d+$/.test(k) && v) clean[k] = v;
+  });
+  setAppState("alfon_city_map", clean);
+  insertAuditLog({
+    action: "CITY_MAP_SAVED", entityType: "settings",
+    details: "entries=" + Object.keys(clean).length,
+    workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+  });
+  res.json({ ok: true, entries: Object.keys(clean).length });
+});
+
 app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function (req, res) {
   try {
     var apiRes = await fetch(ALFON_API_URL, { headers: { Accept: "application/json" } });
@@ -881,17 +910,18 @@ app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function
 
     var persons = await apiRes.json();
     if (!Array.isArray(persons)) {
-      // Some APIs wrap in a key
       persons = persons.data || persons.persons || persons.results || Object.values(persons);
     }
     if (!Array.isArray(persons)) return res.status(502).json({ error: "API לא החזיר מערך" });
+
+    var cityMap = getCombinedCityMap();
 
     // Build city report: rawId → { mapped: name|null, count }
     var cityReport = {};
     persons.forEach(function (p) {
       var rawId = getCityRawId(p);
       if (!rawId) return;
-      if (!cityReport[rawId]) cityReport[rawId] = { mapped: CITY_MAP[rawId] || null, count: 0 };
+      if (!cityReport[rawId]) cityReport[rawId] = { mapped: cityMap[rawId] || null, count: 0 };
       cityReport[rawId].count++;
     });
     var unknownCityIds = Object.keys(cityReport).filter(function (id) { return !cityReport[id].mapped; });
@@ -899,7 +929,7 @@ app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function
       console.warn("[alfon-api] city IDs without mapping:", unknownCityIds.join(", "));
     }
 
-    var csvContent = personsJsonToCsv(persons);
+    var csvContent = personsJsonToCsv(persons, cityMap);
     var filename   = "alfon_api_" + new Date().toISOString().slice(0, 10) + ".csv";
 
     var parsed         = parseCsv(csvContent);

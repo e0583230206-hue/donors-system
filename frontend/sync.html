@@ -111,6 +111,17 @@
     #apiFetchBtn:disabled{ opacity: .5; cursor: default; }
     .api-fetch-ok  { color: #155724; background: #d4edda; padding: 10px 14px; border-radius: 8px; }
     .api-fetch-err { color: #721c24; background: #f8d7da; padding: 10px 14px; border-radius: 8px; }
+
+    #addCityRowBtn { background:#fff;border:1px solid #aaa;border-radius:7px;padding:8px 18px;cursor:pointer;font-size:.9em; }
+    #saveCityMapBtn{ background:#1565c0;color:#fff;border:none;border-radius:7px;padding:8px 22px;cursor:pointer;font-size:.9em;font-weight:600; }
+    #saveCityMapBtn:hover { background:#0d47a1; }
+    .city-map-table { border-collapse:collapse; width:100%; max-width:480px; }
+    .city-map-table th { text-align:right; padding:6px 10px; border-bottom:2px solid #e0e7ef; font-size:.85em; color:#555; }
+    .city-map-table td { padding:5px 8px; border-bottom:1px solid #f0f0f0; }
+    .city-name-inp { padding:5px 9px; border-radius:5px; border:1px solid #ccc; font-size:.9em; width:170px; }
+    .city-name-inp:focus { border-color:#1565c0; outline:none; }
+    .city-mapped   { border-color:#a5d4a0 !important; }
+    .city-unknown  { border-color:#e0b060 !important; background:#fffdf0; }
   </style>
 </head>
 <body>
@@ -165,6 +176,23 @@
         📥 ייבוא עכשיו מהאלפון
       </button>
       <div id="apiFetchStatus" style="margin-top:12px;font-size:.93em;"></div>
+    </section>
+
+    <!-- City map editor -->
+    <section class="panel" id="cityMapSection" style="border:1px solid #b8d4e8;background:#f8fbff;">
+      <h2>🏙 מיפוי ערים <small style="font-size:.65em;font-weight:normal;color:#666">מזהה מספרי → שם עיר</small></h2>
+      <p style="font-size:.9em;color:#666;margin-bottom:14px">
+        לאחר ייבוא ראשון מהאלפון, יופיעו כאן מזהי הערים. הזן שם עיר לכל מזהה ולחץ שמור.
+        הסנכרון הבא ישתמש במיפוי ויעדכן גם כרטיסים קיימים עם עיר ריקה.
+      </p>
+      <div id="cityMapTableWrap">
+        <p style="color:#aaa;font-size:.9em;">טוען...</p>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button id="addCityRowBtn" onclick="addCityRow()">+ הוסף שורה</button>
+        <button id="saveCityMapBtn" onclick="saveCityMap()">💾 שמור מיפוי</button>
+        <span id="cityMapStatus" style="font-size:.9em;"></span>
+      </div>
     </section>
 
     <section class="panel">
