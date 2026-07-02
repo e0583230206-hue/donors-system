@@ -26,19 +26,28 @@ function normalizeRole(role) {
   return "";
 }
 
+function _loginRedirectTarget(extra) {
+  var here = window.location.pathname + window.location.search;
+  var isLoginPage = here.indexOf("login.html") !== -1 || here === "/" || here === "";
+  var base = "login.html" + (extra ? "?" + extra : "");
+  if (isLoginPage) return base;
+  var redirectPart = "redirect=" + encodeURIComponent(here);
+  return "login.html?" + (extra ? extra + "&" : "") + redirectPart;
+}
+
 function requireLogin() {
   const token       = getAuthToken();
   const currentUser = getCurrentUser();
 
   if (!token || !currentUser) {
-    window.location.href = "login.html";
+    window.location.replace(_loginRedirectTarget(""));
     return;
   }
 
   if (Date.now() - currentUser.loginTime > SESSION_TIMEOUT_MS) {
     sessionStorage.removeItem("authToken");
     sessionStorage.removeItem("currentUser");
-    window.location.href = "login.html?expired=1";
+    window.location.replace(_loginRedirectTarget("expired=1"));
     return;
   }
 
@@ -84,7 +93,7 @@ function apiFetch(url, options) {
     if (res.status === 401) {
       sessionStorage.removeItem("authToken");
       sessionStorage.removeItem("currentUser");
-      window.location.href = "login.html?expired=1";
+      window.location.replace(_loginRedirectTarget("expired=1"));
       return Promise.reject(new Error("Session expired"));
     }
     return res;

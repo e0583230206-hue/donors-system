@@ -1,3 +1,25 @@
+// Returns the redirect target only if it is a safe internal path.
+// Blocks protocol-relative (//evil.com) and absolute URLs (http://...).
+function getSafeRedirect() {
+  var raw = new URLSearchParams(window.location.search).get("redirect") || "";
+  if (!raw) return "";
+  if (/^\/\//.test(raw)) return "";                          // protocol-relative
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(raw)) return "";   // absolute URL
+  if (raw.startsWith("/")) return raw;                       // root-relative path
+  if (/^[a-zA-Z0-9_-]+\.html(\?.*)?$/.test(raw)) return raw; // bare filename
+  return "";
+}
+
+// If already authenticated, skip login and go straight to the requested page.
+(function () {
+  var token = sessionStorage.getItem("authToken");
+  var user  = null;
+  try { user = JSON.parse(sessionStorage.getItem("currentUser")); } catch (_) {}
+  if (token && user) {
+    window.location.replace(getSafeRedirect() || "index.html");
+  }
+}());
+
 const userSelect    = document.getElementById("userSelect");
 const passwordInput = document.getElementById("passwordInput");
 const loginButton   = document.getElementById("loginButton");
@@ -99,7 +121,7 @@ async function login() {
       window.location.href = "settings.html?forcePassword=1";
     } else {
       sessionStorage.removeItem("mustChangePassword");
-      window.location.href = "index.html";
+      window.location.href = getSafeRedirect() || "index.html";
     }
   } catch (_) {
     showMessage("שגיאה בהתחברות לשרת");
