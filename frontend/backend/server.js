@@ -32,6 +32,8 @@ const {
   getPayments,
   getPaymentById,
   getPaymentStats,
+  insertAuditLog,
+  getAuditLogs,
 } = require("./db");
 
 const {
@@ -193,9 +195,11 @@ app.post("/api/login", loginLimiter, async function (req, res, next) {
     const result = await loginWorker(Number(workerId), String(password));
 
     if (!result) {
+      try { insertAuditLog({ action: "login_failed", entityType: "worker", entityId: String(workerId), details: "כניסה נכשלה", ip: req.ip }); } catch (_) {}
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
+    try { insertAuditLog({ action: "login", entityType: "worker", entityId: String(result.id), entityName: result.name, details: "כניסה למערכת", workerId: result.id, workerName: result.name, ip: req.ip }); } catch (_) {}
     res.json(result);
   } catch (err) {
     next(err);
@@ -246,6 +250,7 @@ app.post("/api/workers", requireRole([ROLES.ADMIN]), async function (req, res, n
       passwordHash
     );
 
+    try { insertAuditLog({ action: "worker_create", entityType: "worker", entityId: String(id), entityName: workerName, details: "תפקיד: " + role, workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip }); } catch (_) {}
     res.status(201).json({ id, name: workerName, role, status: status || "פעיל" });
   } catch (err) {
     next(err);
@@ -269,6 +274,7 @@ app.delete("/api/workers/:id", requireRole([ROLES.ADMIN]), function (req, res, n
     }
 
     deleteWorkerById(id);
+    try { insertAuditLog({ action: "worker_delete", entityType: "worker", entityId: String(id), entityName: worker.name, details: "תפקיד: " + worker.role, workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip }); } catch (_) {}
     res.json({ deleted: true, id });
   } catch (err) {
     next(err);
@@ -301,6 +307,7 @@ app.put("/api/workers/me/password", passwordLimiter, requireAuth, async function
     updateWorkerPasswordHash(worker.id, hash);
     clearMustChangePassword(worker.id);
 
+    try { insertAuditLog({ action: "password_change", entityType: "worker", entityId: String(worker.id), entityName: worker.name, details: "שינוי סיסמה עצמי", workerId: worker.id, workerName: worker.name, ip: req.ip }); } catch (_) {}
     res.json({ updated: true });
   } catch (err) {
     next(err);
@@ -325,6 +332,7 @@ app.put("/api/workers/:id/password", passwordLimiter, requireRole([ROLES.ADMIN])
     updateWorkerPasswordHash(id, hash);
     clearMustChangePassword(id);
 
+    try { insertAuditLog({ action: "password_reset", entityType: "worker", entityId: String(id), entityName: worker.name, details: "איפוס סיסמה על ידי מנהל", workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip }); } catch (_) {}
     res.json({ updated: true });
   } catch (err) {
     next(err);
@@ -581,6 +589,19 @@ app.get(
     } catch (err) {
       next(err);
     }
+  }
+);
+
+// ── Server audit log (admin only) ────────────────────────────────────────────
+app.get(
+  "/api/admin/audit-log",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      var limit = Math.min(Number(req.query.limit) || 200, 1000);
+      res.json(getAuditLogs(limit));
+    } catch (err) { next(err); }
   }
 );
 

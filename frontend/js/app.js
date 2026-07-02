@@ -248,7 +248,105 @@ Database.whenReady(function () {
   tasks  = Database.get("tasks");
   updateDashboard();
   renderChart();
+  loadIvrChart();
 });
+
+// ── IVR Payments chart ────────────────────────────────────────────────────────
+
+var _ivrChartMode = "day";
+var _ivrPaymentsCache = null;
+
+function switchIvrChart(mode) {
+  _ivrChartMode = mode;
+  var dayBtn   = document.getElementById("ivrChartDayBtn");
+  var monthBtn = document.getElementById("ivrChartMonthBtn");
+  if (dayBtn)   dayBtn.classList.toggle("active",   mode === "day");
+  if (monthBtn) monthBtn.classList.toggle("active", mode === "month");
+  renderIvrChart(_ivrPaymentsCache || []);
+}
+
+async function loadIvrChart() {
+  if (typeof apiFetch !== "function") return;
+  try {
+    var res = await apiFetch("/api/payments?limit=2000");
+    if (!res || !res.ok) return;
+    var payments = await res.json();
+    _ivrPaymentsCache = payments;
+    var panel = document.getElementById("ivrChartPanel");
+    if (panel) panel.style.display = "";
+    renderIvrChart(payments);
+  } catch (_) {}
+}
+
+function renderIvrChart(payments) {
+  var el = document.getElementById("ivrChartBars");
+  if (!el) return;
+
+  var sym    = typeof currencySymbol === "function" ? currencySymbol() : "₪";
+  var MAX_H  = 160;
+
+  function shortNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+    if (n >= 1000)    return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+    return String(Math.round(n));
+  }
+
+  function makeBar(label, val, maxVal) {
+    var h      = val > 0 ? Math.max(4, Math.round((val / maxVal) * MAX_H)) : 4;
+    var valTxt = val > 0 ? sym + shortNum(val) : "";
+    return (
+      '<div class="chart-bar-group">' +
+        '<span class="chart-bar-value">' + valTxt + '</span>' +
+        '<div class="chart-bar-outer" style="height:' + h + 'px" title="' + label + ': ' + sym + shortNum(val) + '">' +
+          '<div style="height:' + h + 'px;background:linear-gradient(to bottom,#60a5fa,#1d4ed8);border-radius:5px 5px 0 0"></div>' +
+        '</div>' +
+        '<div class="chart-bar-label">' + label + '</div>' +
+      '</div>'
+    );
+  }
+
+  if (_ivrChartMode === "day") {
+    var days = {};
+    var now  = new Date();
+    var fmtCA = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem" });
+    for (var i = 13; i >= 0; i--) {
+      var d = new Date(now);
+      d.setDate(d.getDate() - i);
+      days[fmtCA.format(d)] = 0;
+    }
+    payments.forEach(function (p) {
+      if (p.status !== "success") return;
+      var k = (p.timestamp || p.createdAt || "").slice(0, 10);
+      if (k in days) days[k] += Number(p.amount || 0);
+    });
+    var keys    = Object.keys(days);
+    var maxVal2 = Math.max.apply(null, keys.map(function (k) { return days[k]; })) || 1;
+    el.innerHTML = keys.map(function (k) {
+      return makeBar(k.slice(8) + "/" + k.slice(5, 7), days[k], maxVal2);
+    }).join("");
+
+  } else {
+    var months = {};
+    var now2   = new Date();
+    for (var j = 11; j >= 0; j--) {
+      var d2 = new Date(now2.getFullYear(), now2.getMonth() - j, 1);
+      var mk = d2.getFullYear() + "-" + String(d2.getMonth() + 1).padStart(2, "0");
+      months[mk] = 0;
+    }
+    payments.forEach(function (p) {
+      if (p.status !== "success") return;
+      var mk2 = (p.timestamp || p.createdAt || "").slice(0, 7);
+      if (mk2 in months) months[mk2] += Number(p.amount || 0);
+    });
+    var keys2    = Object.keys(months);
+    var maxVal3  = Math.max.apply(null, keys2.map(function (k) { return months[k]; })) || 1;
+    el.innerHTML = keys2.map(function (k) {
+      return makeBar(k.slice(5) + "/" + k.slice(2, 4), months[k], maxVal3);
+    }).join("");
+  }
+}
+
+// ── CRM donations bar chart ───────────────────────────────────────────────────
 
 function renderChart() {
   var chartBars = document.getElementById("chartBars");

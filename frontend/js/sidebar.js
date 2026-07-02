@@ -166,11 +166,34 @@ function setupSidebarToggle() {
     }
   });
 
-  // 6. Sidebar toggle button
+  // 6. Sidebar toggle button + mobile overlay
   var btn = document.createElement("button");
   btn.id = "sidebarToggle";
 
+  var overlay = document.createElement("div");
+  overlay.className = "sidebar-overlay";
+  document.body.appendChild(overlay);
+
+  var isMobile = function() { return window.innerWidth <= 768; };
+
+  function closeMobileSidebar() {
+    document.body.classList.remove("mobile-sidebar-open");
+    btn.textContent = "☰";
+    btn.title = "פתח תפריט";
+  }
+
   function applyState(collapsed) {
+    if (isMobile()) {
+      // On mobile: toggle overlay mode, ignore collapsed preference
+      if (collapsed) {
+        closeMobileSidebar();
+      } else {
+        document.body.classList.add("mobile-sidebar-open");
+        btn.textContent = "✕";
+        btn.title = "סגור תפריט";
+      }
+      return;
+    }
     if (collapsed) {
       document.body.classList.add("sidebar-collapsed");
       btn.textContent = "☰";
@@ -182,13 +205,36 @@ function setupSidebarToggle() {
     }
   }
 
-  var saved = localStorage.getItem("sidebarCollapsed") === "true";
-  applyState(saved);
+  if (!isMobile()) {
+    var saved = localStorage.getItem("sidebarCollapsed") === "true";
+    applyState(saved);
+  } else {
+    btn.textContent = "☰";
+    btn.title = "פתח תפריט";
+  }
 
   btn.addEventListener("click", function() {
+    if (isMobile()) {
+      var open = document.body.classList.contains("mobile-sidebar-open");
+      applyState(open); // toggle: if open → collapse (close), if closed → expand (open)
+      return;
+    }
     var collapsed = document.body.classList.contains("sidebar-collapsed");
     localStorage.setItem("sidebarCollapsed", String(!collapsed));
     applyState(!collapsed);
+  });
+
+  overlay.addEventListener("click", closeMobileSidebar);
+
+  window.addEventListener("resize", function() {
+    if (!isMobile()) {
+      document.body.classList.remove("mobile-sidebar-open");
+      var saved2 = localStorage.getItem("sidebarCollapsed") === "true";
+      applyState(saved2);
+    } else {
+      document.body.classList.remove("sidebar-collapsed");
+      closeMobileSidebar();
+    }
   });
 
   document.body.appendChild(btn);

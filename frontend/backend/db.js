@@ -114,6 +114,22 @@ function initDatabase() {
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS server_audit_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      createdAt  TEXT    NOT NULL,
+      action     TEXT    NOT NULL,
+      entityType TEXT,
+      entityId   TEXT,
+      entityName TEXT,
+      details    TEXT,
+      workerId   INTEGER,
+      workerName TEXT,
+      ip         TEXT
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_audit_log_createdAt ON server_audit_log(createdAt)");
+
   // ── Migrations ──────────────────────────────────────────────────
   try { db.exec("ALTER TABLE workers ADD COLUMN passwordHash TEXT"); } catch (_) {}
   try { db.exec("ALTER TABLE workers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
@@ -788,6 +804,34 @@ function getIvrAlerts(limit) {
   return all.slice(0, n);
 }
 
+// ── Server Audit Log ─────────────────────────────────────────────────────────
+
+function insertAuditLog({ action, entityType, entityId, entityName, details, workerId, workerName, ip }) {
+  return db.prepare(`
+    INSERT INTO server_audit_log (createdAt, action, entityType, entityId, entityName, details, workerId, workerName, ip)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    nowIso(),
+    String(action || "").trim(),
+    entityType  || null,
+    entityId    != null ? String(entityId) : null,
+    entityName  || null,
+    details     || null,
+    workerId    || null,
+    workerName  || null,
+    ip          || null
+  );
+}
+
+function getAuditLogs(limit) {
+  return db.prepare(`
+    SELECT id, createdAt, action, entityType, entityId, entityName, details, workerId, workerName, ip
+    FROM server_audit_log
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(Math.min(Number(limit) || 200, 1000));
+}
+
 // ── Health check ─────────────────────────────────────────────────────────────
 
 function dbHealthCheck() {
@@ -849,4 +893,7 @@ module.exports = {
   getIvrAlerts,
   // Health
   dbHealthCheck,
+  // Audit log
+  insertAuditLog,
+  getAuditLogs,
 };

@@ -128,6 +128,24 @@
           </div>
         </div>
       </section>
+
+      <section class="panel" id="ivrChartPanel" style="display:none; margin-top:22px;">
+        <div class="panel-chart-header">
+          <h2>💳 תשלומי IVR</h2>
+          <div class="chart-toggle-row">
+            <button class="chart-toggle-btn active" id="ivrChartDayBtn" onclick="switchIvrChart('day')">14 ימים</button>
+            <button class="chart-toggle-btn" id="ivrChartMonthBtn" onclick="switchIvrChart('month')">12 חודשים</button>
+          </div>
+        </div>
+        <div class="bar-chart-wrap">
+          <div class="bar-chart" id="ivrChartBars"></div>
+          <div class="chart-legend">
+            <div class="chart-legend-item">
+              <div class="chart-legend-dot" style="background:linear-gradient(to bottom,#60a5fa,#1d4ed8)"></div>תשלומי IVR (₪)
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
     <script src="js/auth.js"></script>
     <script src="js/database.js"></script>
