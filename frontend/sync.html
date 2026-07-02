@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>סנכרון אלפון</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <style>
+    .sync-drop-zone {
+      border: 3px dashed #b0c4de;
+      border-radius: 14px;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      background: #f8faff;
+      transition: all .2s;
+      margin-bottom: 20px;
+    }
+    .sync-drop-zone.drag-over { border-color: #2d5a27; background: #eaf5ea; }
+    .sync-drop-zone .drop-icon { font-size: 3em; margin-bottom: 10px; }
+    .sync-drop-zone p { color: #666; margin: 6px 0; font-size: .95em; }
+    .sync-drop-zone strong { color: #2d5a27; }
+    #fileInput { display: none; }
+
+    .sync-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .sync-stat {
+      background: #fff;
+      border: 1px solid #e0e7ef;
+      border-radius: 10px;
+      padding: 14px 16px;
+      text-align: center;
+    }
+    .sync-stat .num { font-size: 2em; font-weight: 700; }
+    .sync-stat .lbl { font-size: .82em; color: #666; margin-top: 2px; }
+    .sync-stat.create  .num { color: #1a6e1a; }
+    .sync-stat.update  .num { color: #856404; }
+    .sync-stat.unchanged .num { color: #6c757d; }
+    .sync-stat.skip    .num { color: #721c24; }
+
+    .preview-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; border-radius: 8px; }
+    .preview-table { width: 100%; border-collapse: collapse; font-size: .88em; }
+    .preview-table th {
+      background: #2d5a27; color: #fff;
+      padding: 9px 10px; text-align: right; position: sticky; top: 0; z-index: 1;
+    }
+    .preview-table td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+    .preview-table tr:hover td { background: #f8fdf8; }
+    .act-create   { background: #d4edda; color: #155724; border-radius: 6px; padding: 2px 8px; font-size:.82em; font-weight:600; white-space:nowrap; }
+    .act-update   { background: #fff3cd; color: #856404; border-radius: 6px; padding: 2px 8px; font-size:.82em; font-weight:600; white-space:nowrap; }
+    .act-unchanged{ background: #e2e3e5; color: #383d41; border-radius: 6px; padding: 2px 8px; font-size:.82em; font-weight:600; white-space:nowrap; }
+    .act-skip     { background: #f8d7da; color: #721c24; border-radius: 6px; padding: 2px 8px; font-size:.82em; font-weight:600; white-space:nowrap; }
+
+    .sync-actions { display: flex; gap: 12px; align-items: center; margin-top: 20px; flex-wrap: wrap; }
+    #applyBtn {
+      background: #2d5a27; color: #fff; border: none; border-radius: 8px;
+      padding: 12px 28px; font-size: 1.05em; cursor: pointer; font-weight: 600;
+    }
+    #applyBtn:hover { background: #1e3d1a; }
+    #applyBtn:disabled { opacity: .5; cursor: default; }
+    #cancelBtn {
+      background: #fff; color: #555; border: 1px solid #ccc; border-radius: 8px;
+      padding: 12px 24px; cursor: pointer;
+    }
+
+    .result-banner {
+      padding: 16px 20px; border-radius: 10px; font-size: 1.05em; font-weight: 600;
+      margin-top: 20px; display: none;
+    }
+    .result-banner.success { background: #d4edda; color: #155724; }
+    .result-banner.error   { background: #f8d7da; color: #721c24; }
+
+    .sync-log-table { width: 100%; border-collapse: collapse; font-size: .88em; }
+    .sync-log-table th { background: #f0f4f8; padding: 8px 10px; text-align: right; color: #444; }
+    .sync-log-table td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
+
+    .spinner {
+      display: inline-block; width: 18px; height: 18px;
+      border: 3px solid rgba(255,255,255,.4); border-top-color: #fff;
+      border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-left: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="logo">
+      <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+      <span>א בלאט גמרא</span>
+      <small>ניהול תורמים</small>
+    </div>
+    <nav>
+      <a href="index.html">🏠 דף הבית</a>
+      <a href="donors.html">👤 תורמים</a>
+      <a href="debts.html">⚠️ חובות</a>
+      <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+      <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+      <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+      <a href="reports.html">📊 דוחות</a>
+      <a href="calendar.html">📅 לוח שנה</a>
+      <a href="logs.html">🕒 יומן מערכת</a>
+      <a href="ivr-monitor.html">📺 מוניטור IVR</a>
+      <a href="payments.html">💳 תשלומי IVR</a>
+      <a href="approvals.html">✅ אישור חיובים</a>
+      <a class="active" href="sync.html">📋 סנכרון אלפון</a>
+      <a href="settings.html">⚙️ הגדרות</a>
+      <a href="README.html">📖 מדריך משתמש</a>
+    </nav>
+    <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1>📋 סנכרון אלפון</h1>
+        <p>יבוא פרטי קשר מאקסס — שם, עיר, כתובת, טלפונים</p>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>העלאת קובץ</h2>
+      <p style="color:#666;margin-bottom:14px;font-size:.93em;">
+        ייצא מהאלפון קובץ CSV (פורמט UTF-8 עם BOM) ובחר אותו כאן.
+        לפני הביצוע תוצג תצוגה מקדימה עם כל השינויים.
+      </p>
+
+      <div class="sync-drop-zone" id="dropZone">
+        <div class="drop-icon">📁</div>
+        <strong>גרור קובץ CSV כאן</strong>
+        <p>או לחץ לבחירת קובץ</p>
+        <p id="selectedFileName" style="color:#2d5a27;font-weight:600;margin-top:8px;"></p>
+      </div>
+      <input type="file" id="fileInput" accept=".csv,.txt" />
+
+      <div id="previewArea" style="display:none">
+        <div class="sync-summary" id="summaryGrid"></div>
+
+        <h3 style="margin-bottom:8px;">תצוגה מקדימה (200 שורות ראשונות)</h3>
+        <div class="preview-table-wrap">
+          <table class="preview-table" id="previewTable">
+            <thead>
+              <tr>
+                <th>שורה</th>
+                <th>פעולה</th>
+                <th>שם</th>
+                <th>עיר</th>
+                <th>כתובת</th>
+                <th>טלפון א'</th>
+                <th>פרטים</th>
+              </tr>
+            </thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+
+        <div class="sync-actions">
+          <button id="applyBtn">✅ בצע סנכרון</button>
+          <button id="cancelBtn">ביטול</button>
+          <span id="applyNote" style="color:#666;font-size:.9em;"></span>
+        </div>
+
+        <div class="result-banner" id="resultBanner"></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:22px;">
+      <h2>היסטוריית סנכרונים</h2>
+      <div id="syncLogArea">
+        <p style="color:#999;">טוען...</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/database.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script src="js/sync.js"></script>
+</body>
+</html>

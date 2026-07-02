@@ -130,6 +130,19 @@ function initDatabase() {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_audit_log_createdAt ON server_audit_log(createdAt)");
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      createdAt  TEXT    NOT NULL,
+      filename   TEXT,
+      added      INTEGER NOT NULL DEFAULT 0,
+      updated    INTEGER NOT NULL DEFAULT 0,
+      skipped    INTEGER NOT NULL DEFAULT 0,
+      failed     INTEGER NOT NULL DEFAULT 0,
+      workerName TEXT
+    )
+  `);
+
   // ── Migrations ──────────────────────────────────────────────────
   try { db.exec("ALTER TABLE workers ADD COLUMN passwordHash TEXT"); } catch (_) {}
   try { db.exec("ALTER TABLE workers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
@@ -844,6 +857,18 @@ function dbHealthCheck() {
   }
 }
 
+// ── Sync Log ──────────────────────────────────────────────────────────────────
+
+function insertSyncLog({ filename, added, updated, skipped, failed, workerName }) {
+  return db.prepare(
+    "INSERT INTO sync_log (createdAt, filename, added, updated, skipped, failed, workerName) VALUES (?,?,?,?,?,?,?)"
+  ).run(nowIso(), filename || "", added || 0, updated || 0, skipped || 0, failed || 0, workerName || "");
+}
+
+function getSyncLogs(limit) {
+  return db.prepare("SELECT * FROM sync_log ORDER BY id DESC LIMIT ?").all(Number(limit) || 50);
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 initDatabase();
@@ -897,4 +922,9 @@ module.exports = {
   // Audit log
   insertAuditLog,
   getAuditLogs,
+  // Sync log
+  insertSyncLog,
+  getSyncLogs,
+  // Phone normalization (shared with sync service)
+  normalizePhoneForDb,
 };

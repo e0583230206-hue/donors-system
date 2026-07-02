@@ -32,6 +32,20 @@ function setupSidebarToggle() {
     }
   }
 
+  // Inject sync link (admin only)
+  var _sidebarUser = null;
+  try { _sidebarUser = JSON.parse(sessionStorage.getItem("currentUser") || "null"); } catch (_) {}
+  var _isAdmin = _sidebarUser && (_sidebarUser.role === "ADMIN" || _sidebarUser.role === "מנהל");
+  if (_isAdmin && nav && !nav.querySelector('a[href="sync.html"]')) {
+    var syncA = document.createElement("a");
+    syncA.href = "sync.html";
+    syncA.textContent = "📒 סנכרון אלפון";
+    if (window.location.pathname.endsWith("sync.html")) syncA.className = "active";
+    var settingsAnchor = nav.querySelector('a[href="settings.html"]');
+    if (settingsAnchor) nav.insertBefore(syncA, settingsAnchor);
+    else nav.appendChild(syncA);
+  }
+
   // Inject softphone link (opens in new tab so it stays open while working)
   if (nav && !nav.querySelector('a[href="softphone.html"]')) {
     var phoneA = document.createElement("a");

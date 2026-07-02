@@ -34,7 +34,12 @@ const {
   getPaymentStats,
   insertAuditLog,
   getAuditLogs,
+  insertSyncLog,
+  getSyncLogs,
+  normalizePhoneForDb,
 } = require("./db");
+
+const { parseCsv, buildPreview, applySync } = require("./sync.service");
 
 const {
   ROLES,
@@ -692,6 +697,75 @@ app.get("/ivr", ivrLimiter, requireIvrKey, function (req, res) {
       .set("Content-Type", "application/json; charset=utf-8")
       .json(ivrErrorResponse());
   }
+});
+
+// ── Address-book sync (admin only) ───────────────────────────────────────────
+
+app.post("/api/sync/preview", requireRole([ROLES.ADMIN]), function (req, res) {
+  try {
+    var content  = String(req.body.content  || "");
+    if (!content) return res.status(400).json({ error: "תוכן קובץ ריק" });
+
+    var parsed = parseCsv(content);
+    if (parsed.errors.length) return res.status(400).json({ error: parsed.errors[0] });
+
+    var existingDonors = getAppState("donors");
+    if (!Array.isArray(existingDonors)) existingDonors = [];
+
+    var preview = buildPreview(parsed.rows, existingDonors);
+
+    var counts = { create: 0, update: 0, unchanged: 0, skip: 0 };
+    preview.forEach(function (r) {
+      if (r.action === "create")    counts.create++;
+      else if (r.action === "update")    counts.update++;
+      else if (r.action === "unchanged") counts.unchanged++;
+      else counts.skip++;
+    });
+
+    res.json({ counts: counts, preview: preview.slice(0, 200) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/sync/apply", requireRole([ROLES.ADMIN]), function (req, res) {
+  try {
+    var content  = String(req.body.content  || "");
+    var filename = String(req.body.filename || "");
+    if (!content) return res.status(400).json({ error: "תוכן קובץ ריק" });
+
+    var parsed = parseCsv(content);
+    if (parsed.errors.length) return res.status(400).json({ error: parsed.errors[0] });
+
+    var existingDonors = getAppState("donors");
+    if (!Array.isArray(existingDonors)) existingDonors = [];
+
+    var preview = buildPreview(parsed.rows, existingDonors);
+    var result  = applySync(preview, existingDonors, upsertDonor);
+
+    setAppState("donors", result.donors);
+
+    insertSyncLog({
+      filename:   filename,
+      added:      result.added,
+      updated:    result.updated,
+      skipped:    result.skipped,
+      failed:     result.failed,
+      workerName: req.user.name,
+    });
+    insertAuditLog({
+      action:     "SYNC_ALPHON",
+      entityType: "donors",
+      details:    "added=" + result.added + " updated=" + result.updated + " skipped=" + result.skipped,
+      workerId:   req.user.id,
+      workerName: req.user.name,
+      ip:         req.ip,
+    });
+
+    res.json({ ok: true, added: result.added, updated: result.updated, skipped: result.skipped, failed: result.failed });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/sync/logs", requireRole([ROLES.ADMIN]), function (req, res) {
+  res.json(getSyncLogs(50));
 });
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
