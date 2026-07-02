@@ -68,7 +68,10 @@ function parseCsv(text) {
 
     rows.push({
       externalId:   (f[idx["מספר סידורי"]]  || "").trim(),
-      fullName:      fullName,
+      firstName:    firstName,
+      lastName:     lastName,
+      fullName:     fullName,
+      idNumber:     (f[idx["תעודת זהות"]]   || "").trim(),
       city:         (f[idx["ישוב"]]          || "").trim(),
       address:      addrParts.join(" "),
       neighborhood: (f[idx["שכונה"]]         || "").trim(),
@@ -138,19 +141,25 @@ function buildPreview(csvRows, existingDonors) {
 
       var newPhones    = rowPhones.filter(function (p) { return !existingPhones[p]; });
       var nameChanged  = !!(row.fullName && row.fullName !== match.fullName);
-      // Never treat a raw numeric ID as a valid city name
+      var firstNameChg = !!(row.firstName && row.firstName !== match.firstName);
+      var lastNameChg  = !!(row.lastName  && row.lastName  !== match.lastName);
+      var idNumChanged = !!(row.idNumber  && row.idNumber  !== match.idNumber);
       var effectiveCity = (row.city && !/^\d+$/.test(row.city)) ? row.city : "";
       var cityChanged   = !!(effectiveCity && effectiveCity !== match.city);
       var addrChanged   = !!(row.address && row.address !== match.address);
-      var extIdAdded   = !!(row.externalId && !match.externalId);
+      var neighChanged  = !!(row.neighborhood && row.neighborhood !== match.neighborhood);
+      var extIdAdded    = !!(row.externalId && !match.externalId);
 
-      var hasChanges = nameChanged || cityChanged || addrChanged || newPhones.length > 0 || extIdAdded;
+      var hasChanges = nameChanged || firstNameChg || lastNameChg || idNumChanged ||
+                       cityChanged || addrChanged || neighChanged ||
+                       newPhones.length > 0 || extIdAdded;
 
       results.push(Object.assign({}, row, {
         action:       hasChanges ? "update" : "unchanged",
         existingId:   match.id,
         existingName: match.fullName,
-        changes:      { nameChanged, cityChanged, addrChanged, newPhones, extIdAdded },
+        changes:      { nameChanged, firstNameChg, lastNameChg, idNumChanged,
+                        cityChanged, addrChanged, neighChanged, newPhones, extIdAdded },
       }));
     } else {
       if (rowPhones.length === 0) {
@@ -187,6 +196,10 @@ function applySync(preview, existingDonors, upsertDonorFn) {
 
         var newDonor = {
           id:          nextId++,
+          externalId:  row.externalId  || "",
+          idNumber:    row.idNumber    || "",
+          firstName:   row.firstName   || "",
+          lastName:    row.lastName    || "",
           fullName:    row.fullName,
           phone:       primaryPhone,
           phone2:      rowPhones[1] || "",
@@ -195,7 +208,6 @@ function applySync(preview, existingDonors, upsertDonorFn) {
           city:        row.city        || "",
           address:     row.address     || "",
           neighborhood:row.neighborhood|| "",
-          externalId:  row.externalId  || "",
           status:      "פעיל",
           notes:       "",
           donations:   [],
@@ -219,8 +231,10 @@ function applySync(preview, existingDonors, upsertDonorFn) {
         if (!donor) { failed++; return; }
 
         // Update contact fields (never touch donations/debts/notes/logs)
-        if (row.fullName) donor.fullName = row.fullName;
-        // Never overwrite with a raw numeric city ID
+        if (row.idNumber)   donor.idNumber   = row.idNumber;
+        if (row.firstName)  donor.firstName  = row.firstName;
+        if (row.lastName)   donor.lastName   = row.lastName;
+        if (row.fullName)   donor.fullName   = row.fullName;
         if (row.city && !/^\d+$/.test(row.city)) donor.city = row.city;
         if (row.address)      donor.address      = row.address;
         if (row.neighborhood) donor.neighborhood = row.neighborhood;

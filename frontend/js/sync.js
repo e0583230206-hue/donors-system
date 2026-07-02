@@ -75,11 +75,16 @@ function renderPreview(data) {
     var details = "";
     if (row.action === "update" && row.changes) {
       var parts = [];
-      if (row.changes.nameChanged)  parts.push("שם");
-      if (row.changes.cityChanged)  parts.push("עיר");
-      if (row.changes.addrChanged)  parts.push("כתובת");
+      if (row.changes.firstNameChg)  parts.push("שם פרטי");
+      if (row.changes.lastNameChg)   parts.push("שם משפחה");
+      if (row.changes.nameChanged)   parts.push("שם מלא");
+      if (row.changes.idNumChanged)  parts.push("ת.ז.");
+      if (row.changes.cityChanged)   parts.push("עיר");
+      if (row.changes.neighChanged)  parts.push("שכונה");
+      if (row.changes.addrChanged)   parts.push("כתובת");
       if (row.changes.newPhones && row.changes.newPhones.length)
         parts.push("+" + row.changes.newPhones.length + " טל'");
+      if (row.changes.extIdAdded)    parts.push("מ.ס. אלפון");
       details = parts.join(", ") || "—";
     } else if (row.action === "skip") {
       details = reasonLabel(row.reason);

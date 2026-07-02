@@ -849,7 +849,7 @@ function collectPersonPhones(person) {
 
 function personsJsonToCsv(persons, cityMap) {
   var headers = [
-    "מספר סידורי","שם פרטי","שם משפחה","ישוב",
+    "מספר סידורי","שם פרטי","שם משפחה","תעודת זהות","ישוב",
     "רחוב","מספר בית","דירה","כניסה","שכונה",
     "פלאפון א","פלאפון ב","טלפון ביתי","פלאפון נוסף",
   ];
@@ -860,6 +860,7 @@ function personsJsonToCsv(persons, cityMap) {
       p.person_id    || "",
       p.first_name   || "",
       p.last_name    || "",
+      p.id_number    || "",                                              // תעודת זהות
       resolveCity(p, cityMap),                                           // Hebrew name from city_description
       p.street       || "",
       p.house_number || "",
