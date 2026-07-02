@@ -194,6 +194,26 @@ const Database = {
     });
   },
 
+  // Pull a single key fresh from the server and update local storage.
+  // Returns a Promise that resolves when done (or on error — never rejects).
+  refreshFromServer: function (key) {
+    var tok = this._getToken();
+    if (!tok) return Promise.resolve();
+    return fetch("/api/data/" + key, {
+      headers: { "Authorization": "Bearer " + tok },
+    })
+      .then(function (res) { return res.ok ? res.json() : undefined; })
+      .then(function (data) {
+        if (data === undefined) return;
+        if (key === "donors" && _CrmIDB.isUsingIDB()) {
+          _CrmIDB.saveDonors(Array.isArray(data) ? data : []);
+        } else {
+          localStorage.setItem(key, JSON.stringify(data));
+        }
+      })
+      .catch(function () {});
+  },
+
   // ── Server sync ────────────────────────────────────────────────────────────
 
   _getToken: function () {
@@ -281,6 +301,29 @@ const Database = {
     return Promise.all([dataPromise, workersPromise]);
   },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto-refresh donors from server when the tab regains focus.
+// This ensures IVR payments (which update SQLite directly) are visible in the
+// CRM even if the user had the page open before the payment completed.
+(function () {
+  var _lastRefresh = 0;
+  var COOLDOWN_MS  = 20000; // don't re-fetch more often than every 20 s
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    var now = Date.now();
+    if (now - _lastRefresh < COOLDOWN_MS) return;
+    _lastRefresh = now;
+
+    var tok = Database._getToken();
+    if (!tok) return;
+
+    Database.refreshFromServer("donors").then(function () {
+      window.dispatchEvent(new CustomEvent("crm-donors-refreshed"));
+    });
+  });
+}());
 
 // ─────────────────────────────────────────────────────────────────────────────
 

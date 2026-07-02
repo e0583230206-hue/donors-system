@@ -1123,3 +1123,12 @@ Database.whenReady(function () {
     }
   });
 });
+
+// Re-render when donors are refreshed in the background (e.g. after IVR payment)
+window.addEventListener("crm-donors-refreshed", function () {
+  donors = Database.get("donors");
+  var updated = donors.find(function (item) { return item.id === donorId; });
+  if (!updated) return;
+  donor = updated;
+  renderAll();
+});
