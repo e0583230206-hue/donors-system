@@ -444,13 +444,10 @@ footer.foot kbd{
 <script src="lib/jquery.min.js"></script>
 <script>if(typeof jQuery==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"><\/scr'+'ipt>')</script>
 <script>
-// Minimal SIP-config fetcher — no login required for softphone.
-// Uses stored token if available, silently skips if not.
+// Fetch SIP config from server — public endpoint, no login required.
 async function fetchSipConfig() {
-  var token = localStorage.getItem('_sp_token') || sessionStorage.getItem('authToken') || '';
-  if (!token) return null;
   try {
-    var r = await fetch('/api/sip-config', { headers: { 'Authorization': 'Bearer ' + token } });
+    var r = await fetch('/api/sip-config');
     return r.ok ? await r.json() : null;
   } catch (_) { return null; }
 }
@@ -1080,20 +1077,18 @@ async function fetchSipConfig() {
     log('אזהרה: דף זה לא רץ על HTTPS — הדפדפן עלול לחסום מיקרופון ללא HTTPS.','warn');
   }
 
-  // Load settings: localStorage first; fill missing fields from authenticated server config
+  // Load SIP config: server is authoritative; localStorage is fallback only.
   (async function initSipConfig() {
-    loadSettings();
-    var s = readSettings();
-    if (!s.server || !s.pass) {
-      try {
-        var cfg = await fetchSipConfig();
-        if (cfg) {
-          if (cfg.server && !$('#s_server').val()) $('#s_server').val(cfg.server);
-          if (cfg.ext    && !$('#s_ext').val())    $('#s_ext').val(cfg.ext);
-          if (cfg.user   && !$('#s_user').val())   $('#s_user').val(cfg.user);
-          if (cfg.pass   && !$('#s_pass').val())   $('#s_pass').val(cfg.pass);
-        }
-      } catch(e) {}
+    var cfg = await fetchSipConfig();
+    if (cfg && cfg.server && cfg.pass) {
+      // Server has credentials — use them on every machine, every session.
+      if (cfg.server) $('#s_server').val(cfg.server);
+      if (cfg.ext)    $('#s_ext').val(cfg.ext);
+      if (cfg.user)   $('#s_user').val(cfg.user);
+      if (cfg.pass)   $('#s_pass').val(cfg.pass);
+    } else {
+      // Server unreachable — fall back to last saved localStorage values.
+      loadSettings();
     }
     var cur = readSettings();
     if(cur.server&&(cur.ext||cur.user)&&cur.pass){

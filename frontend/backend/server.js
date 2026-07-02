@@ -613,8 +613,8 @@ app.get(
   }
 );
 
-// ── Softphone: SIP config (served to authenticated workers) ──────────────────
-app.get("/api/sip-config", requireAuth, function (req, res) {
+// ── Softphone: SIP config (public — softphone opens without login) ───────────
+app.get("/api/sip-config", function (req, res) {
   res.json({
     server: process.env.SIP_SERVER || "",
     ext:    process.env.SIP_EXT    || "",
