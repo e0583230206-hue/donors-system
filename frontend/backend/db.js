@@ -666,6 +666,7 @@ function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, do
 
 const ALLOWED_APP_STATE_KEYS = new Set([
   "donors", "tasks", "logs", "settings", "approvals", "reminders", "callbacks",
+  "sip_config",
 ]);
 
 function getAppState(key) {

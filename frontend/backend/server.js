@@ -615,12 +615,33 @@ app.get(
 
 // ── Softphone: SIP config (requires valid session) ────────────────────────────
 app.get("/api/sip-config", requireAuth, function (req, res) {
+  var dbCfg = getAppState("sip_config");
+  var fromDb = dbCfg && typeof dbCfg === "object" && !Array.isArray(dbCfg);
   res.json({
-    server: process.env.SIP_SERVER || "",
-    ext:    process.env.SIP_EXT    || "",
-    user:   process.env.SIP_USER   || "",
-    pass:   process.env.SIP_PASS   || "",
+    server: (fromDb && dbCfg.server) || process.env.SIP_SERVER || "",
+    ext:    (fromDb && dbCfg.ext)    || process.env.SIP_EXT    || "",
+    user:   (fromDb && dbCfg.user)   || process.env.SIP_USER   || "",
+    pass:   (fromDb && dbCfg.pass)   || process.env.SIP_PASS   || "",
   });
+});
+
+app.put("/api/sip-config", requireRole([ROLES.ADMIN]), function (req, res) {
+  var server = String(req.body.server || "").trim();
+  var ext    = String(req.body.ext    || "").trim();
+  var user   = String(req.body.user   || "").trim();
+  var pass   = String(req.body.pass   || "").trim();
+  if (!server || !pass) {
+    return res.status(400).json({ error: "שדות חובה: server ו-pass" });
+  }
+  setAppState("sip_config", { server, ext, user, pass });
+  insertAuditLog({
+    action: "SIP_CONFIG_SAVED",
+    details: "server=" + server + " ext=" + ext + " user=" + user,
+    workerId:   req.user.id,
+    workerName: req.user.name,
+    ip: req.ip,
+  });
+  res.json({ ok: true });
 });
 
 // ── Softphone: caller context (donor lookup by phone number) ──────────────────

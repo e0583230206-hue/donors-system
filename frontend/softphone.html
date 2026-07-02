@@ -408,6 +408,7 @@ footer.foot kbd{
         <div class="formfoot">
           <button class="tinybtn" id="btnUnregister">↩ נתק</button>
           <button class="tinybtn go" id="btnRegister">🔗 התחבר לשרת</button>
+          <button class="tinybtn" id="btnSaveSipServer" style="display:none" title="שמור הגדרות SIP בשרת — יחולו על כל המחשבים">💾 שמור בשרת</button>
         </div>
       </div>
     </section>
@@ -1144,6 +1145,46 @@ async function fetchSipConfig() {
       $('#connForm').show(); $('#connToggle').text('▲ הסתר');
     }
   }());
+
+  // Show "save to server" button for admins only
+  (function () {
+    try {
+      var cu = JSON.parse(sessionStorage.getItem('currentUser') || 'null');
+      if (cu && (cu.role === 'ADMIN' || cu.role === 'מנהל')) {
+        $('#btnSaveSipServer').show();
+      }
+    } catch (_) {}
+  }());
+
+  $('#btnSaveSipServer').on('click', async function () {
+    var s = readSettings();
+    if (!s.server || !s.pass) {
+      alert('מלא שרת וסיסמה לפני שמירה בשרת');
+      return;
+    }
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('שומר…');
+    try {
+      var token = sessionStorage.getItem('authToken') || '';
+      var r = await fetch('/api/sip-config', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body:    JSON.stringify(s),
+      });
+      if (r.ok) {
+        $btn.text('✔ נשמר!');
+        log('הגדרות SIP נשמרו בשרת — ייטענו אוטומטית בכל מחשב', 'info');
+        setTimeout(function () { $btn.prop('disabled', false).text('💾 שמור בשרת'); }, 2500);
+      } else {
+        var err = await r.json().catch(function () { return {}; });
+        alert('שגיאה: ' + (err.error || r.status));
+        $btn.prop('disabled', false).text('💾 שמור בשרת');
+      }
+    } catch (e) {
+      alert('שגיאת רשת: ' + e.message);
+      $btn.prop('disabled', false).text('💾 שמור בשרת');
+    }
+  });
 
   $(window).on('beforeunload', function(e){
     if(session||(ua&&ua.isRegistered&&ua.isRegistered())){
