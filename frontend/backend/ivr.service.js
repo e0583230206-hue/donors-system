@@ -49,33 +49,49 @@ function sanitizeQuery(q) {
 // ── Step detection ────────────────────────────────────────────────────────────
 
 function detectIvrStep(q) {
-  if (asText(q.PBXcallStatus) === "HANGUP") return "hangup";
-
-  // Terminal state params take precedence over accumulated menu params
-  if (q.voiceMessage !== undefined) return "voice_message";
-  if (q.payment !== undefined)      return "payment";
+  // IMPORTANT: payment and voiceMessage MUST be checked before PBXcallStatus=HANGUP.
+  // Technoline accumulates all params across requests, so the final HANGUP notification
+  // often arrives with payment=OK still present in the accumulated query. Checking
+  // HANGUP first would swallow the payment result entirely.
+  if (q.voiceMessage !== undefined) {
+    console.log("[IVR] detectIvrStep => voice_message");
+    return "voice_message";
+  }
+  if (q.payment !== undefined) {
+    console.log("[IVR] detectIvrStep => payment | raw payment:", JSON.stringify(q.payment),
+                "| PBXcallStatus:", q.PBXcallStatus || "absent");
+    return "payment";
+  }
+  if (asText(q.PBXcallStatus) === "HANGUP") {
+    console.log("[IVR] detectIvrStep => hangup | payment NOT in query");
+    return "hangup";
+  }
 
   var main = lastParam(q, "mainChoice");
   var pay  = lastParam(q, "payChoice");
   var debt = lastParam(q, "debtChoice");
   var amt  = lastParam(q, "amount");
 
+  var step;
   if (main === "1") {
-    if (pay === "1")                       return "pay_full";
-    if (pay === "2" && amt !== undefined)  return "pay_custom";
-    if (pay === "2")                       return "enter_amount";
-    if (amt !== undefined)                 return "pay_custom";
-    return "payment_menu";
+    if (pay === "1")                           step = "pay_full";
+    else if (pay === "2" && amt !== undefined) step = "pay_custom";
+    else if (pay === "2")                      step = "enter_amount";
+    else if (amt !== undefined)                step = "pay_custom";
+    else                                       step = "payment_menu";
+  } else if (main === "2") {
+    if (debt === "1")                          step = "pay_all_debts";
+    else if (debt === "2" && amt !== undefined) step = "pay_debt_custom";
+    else if (debt === "2")                     step = "enter_debt_amount";
+    else if (debt === "9")                     step = "end";
+    else                                       step = "debt_list";
+  } else if (main === "3") {
+    step = "record_message";
+  } else {
+    step = "menu";
   }
-  if (main === "2") {
-    if (debt === "1")                      return "pay_all_debts";
-    if (debt === "2" && amt !== undefined) return "pay_debt_custom";
-    if (debt === "2")                      return "enter_debt_amount";
-    if (debt === "9")                      return "end";
-    return "debt_list";
-  }
-  if (main === "3") return "record_message";
-  return "menu";
+  console.log("[IVR] detectIvrStep => " + step + " | main:", main, "pay:", pay, "debt:", debt, "amt:", amt);
+  return step;
 }
 
 // ── Amount resolution ─────────────────────────────────────────────────────────
@@ -182,11 +198,16 @@ function handleIvrQuery(query) {
   var phone  = normalizePhone(q.PBXphone);
   var step   = detectIvrStep(q);
 
-  console.log("[IVR] step:", step, "| callId:", callId, "| phone:", phone,
-              "| params:", Object.keys(q).join(","));
+  console.log("[IVR] step:", step,
+              "| callId:", callId,
+              "| phone:", phone,
+              "| params:", Object.keys(q).join(","),
+              "| payment raw:", q.payment !== undefined ? JSON.stringify(q.payment) : "absent",
+              "| PBXcallStatus:", q.PBXcallStatus || "absent");
 
   // ── HANGUP ────────────────────────────────────────────────────────────────
   if (step === "hangup") {
+    console.log("[IVR] hangup handler | note: payment absent from query, nothing to save");
     logCallEnd(callId, phone, "hangup");
     return { hangup: true };
   }
@@ -217,7 +238,8 @@ function handleIvrQuery(query) {
   }
 
   console.log("[IVR] donor:", donor ? donor.fullName : "unknown",
-              "| debt:", donor && donor.currentDebt ? donor.currentDebt.amount : "none");
+              "| currentDebt:", donor && donor.currentDebt ? donor.currentDebt.amount : "none",
+              "| previousDebts count:", donor ? (donor.previousDebts || []).length : "N/A");
 
   // ── Per-step audit log ────────────────────────────────────────────────────
   logStepDetails(callId, phone, step, q, donor);
@@ -232,15 +254,35 @@ function handleIvrQuery(query) {
 
   // ── Payment result ────────────────────────────────────────────────────────
   if (step === "payment") {
-    var paymentStatus = asText(q.payment);
-    var amount        = resolvePaymentAmount(q, donor);
+    // Technoline accumulates same-named params as arrays across requests.
+    // If q.payment is e.g. ["OK","ERROR"], a prior success must not be ignored.
+    // We treat the payment as successful if "OK" appears anywhere in the array.
+    var paymentArr   = Array.isArray(q.payment) ? q.payment : [q.payment];
+    var paymentStatus = paymentArr.some(function (v) { return v === "OK"; }) ? "OK"
+                       : asText(lastParam(q, "payment"));
+
+    var amount = resolvePaymentAmount(q, donor);
+
+    console.log("[IVR] >>> payment handler entered",
+                "| raw q.payment:", JSON.stringify(q.payment),
+                "| paymentArr:", JSON.stringify(paymentArr),
+                "| resolved paymentStatus:", paymentStatus,
+                "| resolved amount:", amount,
+                "| callId:", callId, "| phone:", phone);
+    console.log("[IVR] payment context | payChoice:", lastParam(q, "payChoice"),
+                "| debtChoice:", lastParam(q, "debtChoice"),
+                "| amount param:", lastParam(q, "amount"),
+                "| CONFIRM_payment:", lastParam(q, "CONFIRM_payment"),
+                "| PBXcallStatus:", q.PBXcallStatus || "absent");
 
     if (paymentStatus === "OK") {
       if (amount === null) {
         // Technoline reported success but we cannot determine the amount.
-        // This should not happen in normal flow; log and surface an error.
         console.error("[IVR] payment=OK but amount could not be resolved.",
-                      "sanitized query:", JSON.stringify(sanitizeQuery(q)));
+                      "| donor:", donor ? donor.fullName : "unknown",
+                      "| currentDebt:", donor && donor.currentDebt ? JSON.stringify(donor.currentDebt) : "none",
+                      "| previousDebts:", donor ? JSON.stringify(donor.previousDebts || []) : "N/A",
+                      "| sanitized query:", JSON.stringify(sanitizeQuery(q)));
         safeInsertCallLog(callId, phone, "error", {
           reason: "payment_ok_but_no_amount",
           params: sanitizeQuery(q),
@@ -249,11 +291,18 @@ function handleIvrQuery(query) {
         return { response: ivrErrorResponse() };
       }
 
-      var confirmationNumber = asText(q.CONFIRM_payment) || null;
+      // Use lastParam for confirmation number in case it was also accumulated
+      var confirmationNumber = asText(lastParam(q, "CONFIRM_payment")) || null;
+
+      console.log("[IVR] payment=OK | amount:", amount, "| confirmation:", confirmationNumber,
+                  "| donor:", donor ? donor.fullName : "unknown",
+                  "| donorId:", donor ? donor.id : null);
 
       // ── Save payment record ──────────────────────────────────────────────────
       var saveResult = { duplicate: false };
       try {
+        console.log("[IVR] calling saveIvrPaymentOnce | callId:", callId,
+                    "phone:", phone, "amount:", amount, "confirmation:", confirmationNumber);
         saveResult = saveIvrPaymentOnce({
           callId:             callId,
           phone:              phone,
@@ -262,13 +311,13 @@ function handleIvrQuery(query) {
           confirmationNumber: confirmationNumber,
         });
         console.log("[IVR] Payment saved to DB. callId:", callId,
-                    "amount:", amount, "confirmation:", confirmationNumber,
-                    "duplicate:", saveResult.duplicate);
+                    "| amount:", amount, "| confirmation:", confirmationNumber,
+                    "| duplicate:", saveResult.duplicate);
       } catch (saveErr) {
         console.error("[IVR] CRITICAL: failed to save payment record.",
-                      "callId:", callId, "amount:", amount,
-                      "phone:", phone, "confirmation:", confirmationNumber,
-                      "error:", saveErr.message || saveErr);
+                      "| callId:", callId, "| amount:", amount,
+                      "| phone:", phone, "| confirmation:", confirmationNumber,
+                      "| error:", saveErr.message || saveErr);
         safeInsertCallLog(callId, phone, "error", {
           reason:             "payment_db_save_failed",
           error:              saveErr.message || String(saveErr),
@@ -278,14 +327,17 @@ function handleIvrQuery(query) {
       }
 
       // ── Update donor's open debt in app_state ────────────────────────────────
+      console.log("[IVR] calling updateDonorDebtAfterPayment | phone:", phone, "amount:", amount);
       var debtResult = updateDonorDebtAfterPayment(phone, amount);
+      console.log("[IVR] updateDonorDebtAfterPayment returned:", JSON.stringify(debtResult));
+
       if (debtResult.updated) {
         console.log("[IVR] Donor debt updated. phone:", phone,
-                    "paid:", amount, "affectedDebts:", debtResult.affectedDebts);
+                    "| paid:", amount, "| affectedDebts:", debtResult.affectedDebts);
       } else {
         console.warn("[IVR] Donor debt NOT updated after payment.",
-                     "phone:", phone, "amount:", amount,
-                     "reason:", debtResult.reason);
+                     "| phone:", phone, "| amount:", amount,
+                     "| reason:", debtResult.reason);
         if (!debtResult.donorFound || debtResult.reason === "no_open_debts") {
           safeInsertCallLog(callId, phone, "error", {
             reason:        "debt_update_failed",
@@ -306,8 +358,13 @@ function handleIvrQuery(query) {
       logCallEnd(callId, phone, "payment_success", amount);
 
     } else {
+      console.log("[IVR] paymentStatus is not OK:", paymentStatus,
+                  "— entering failure branch",
+                  "| raw q.payment:", JSON.stringify(q.payment),
+                  "| callId:", callId);
       safeInsertCallLog(callId, phone, "payment_failed", {
         result:    paymentStatus,
+        rawPayment: JSON.stringify(q.payment),
         donorId:   donor ? donor.id : null,
       });
       logCallEnd(callId, phone, "payment_failed");
