@@ -8,6 +8,7 @@ const {
   logCallEnd,
 } = require("./log.service");
 const { parsePositiveAmount, saveIvrPaymentOnce } = require("./payment.service");
+const { updateDonorDebtAfterPayment } = require("./db");
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -250,13 +251,49 @@ function handleIvrQuery(query) {
 
       var confirmationNumber = asText(q.CONFIRM_payment) || null;
 
-      var saveResult = saveIvrPaymentOnce({
-        callId:             callId,
-        phone:              phone,
-        donorId:            donor ? donor.id : null,
-        amount:             amount,
-        confirmationNumber: confirmationNumber,
-      });
+      // ── Save payment record ──────────────────────────────────────────────────
+      var saveResult = { duplicate: false };
+      try {
+        saveResult = saveIvrPaymentOnce({
+          callId:             callId,
+          phone:              phone,
+          donorId:            donor ? donor.id : null,
+          amount:             amount,
+          confirmationNumber: confirmationNumber,
+        });
+        console.log("[IVR] Payment saved to DB. callId:", callId,
+                    "amount:", amount, "confirmation:", confirmationNumber,
+                    "duplicate:", saveResult.duplicate);
+      } catch (saveErr) {
+        console.error("[IVR] CRITICAL: failed to save payment record.",
+                      "callId:", callId, "amount:", amount,
+                      "phone:", phone, "confirmation:", confirmationNumber,
+                      "error:", saveErr.message || saveErr);
+        safeInsertCallLog(callId, phone, "error", {
+          reason:             "payment_db_save_failed",
+          error:              saveErr.message || String(saveErr),
+          amount:             amount,
+          confirmationNumber: confirmationNumber,
+        });
+      }
+
+      // ── Update donor's open debt in app_state ────────────────────────────────
+      var debtResult = updateDonorDebtAfterPayment(phone, amount);
+      if (debtResult.updated) {
+        console.log("[IVR] Donor debt updated. phone:", phone,
+                    "paid:", amount, "affectedDebts:", debtResult.affectedDebts);
+      } else {
+        console.warn("[IVR] Donor debt NOT updated after payment.",
+                     "phone:", phone, "amount:", amount,
+                     "reason:", debtResult.reason);
+        if (!debtResult.donorFound || debtResult.reason === "no_open_debts") {
+          safeInsertCallLog(callId, phone, "error", {
+            reason:        "debt_update_failed",
+            debtResult:    debtResult,
+            amount:        amount,
+          });
+        }
+      }
 
       safeInsertCallLog(callId, phone, "payment_success", {
         donorId:            donor ? donor.id   : null,
@@ -264,6 +301,7 @@ function handleIvrQuery(query) {
         amount:             amount,
         confirmationNumber: confirmationNumber,
         duplicate:          saveResult.duplicate,
+        debtUpdated:        debtResult.updated,
       });
       logCallEnd(callId, phone, "payment_success", amount);
 

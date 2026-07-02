@@ -364,8 +364,9 @@ function savePaymentInTransaction(callId, phone, amount, donorId, confirmationNu
   const cid = String(callId).trim();
   const ph  = String(phone).trim();
 
-  db.exec("BEGIN");
   try {
+    db.exec("BEGIN");
+
     const existingDonation = db.prepare(
       "SELECT id FROM ivr_donations WHERE callId = ? LIMIT 1"
     ).get(cid);
@@ -393,6 +394,83 @@ function savePaymentInTransaction(callId, phone, amount, donorId, confirmationNu
     try { db.exec("ROLLBACK"); } catch (_) {}
     throw err;
   }
+}
+
+// ── Debt update after IVR payment ────────────────────────────────────────────
+//
+// After Technoline confirms a successful charge, reduce the donor's open debts
+// in app_state (newest first — same order the IVR presents to the caller).
+// Returns { donorFound, updated, affectedDebts?, reason? } for logging.
+
+function updateDonorDebtAfterPayment(phone, paidAmount) {
+  var normalizedPhone = normalizePhoneForDb(phone);
+  if (!normalizedPhone || !(paidAmount > 0)) {
+    return { donorFound: false, updated: false, reason: "invalid_args" };
+  }
+
+  var donors = getAppState("donors");
+  if (!Array.isArray(donors) || donors.length === 0) {
+    return { donorFound: false, updated: false, reason: "no_donors_in_state" };
+  }
+
+  var donorIdx = -1;
+  for (var di = 0; di < donors.length; di++) {
+    if (normalizePhoneForDb(donors[di].phone) === normalizedPhone) {
+      donorIdx = di;
+      break;
+    }
+  }
+  if (donorIdx === -1) {
+    return { donorFound: false, updated: false, reason: "donor_not_in_state" };
+  }
+
+  var donor = donors[donorIdx];
+  if (!Array.isArray(donor.donations) || donor.donations.length === 0) {
+    return { donorFound: true, updated: false, reason: "no_donations" };
+  }
+
+  // Open debts sorted newest first — matches IVR presentation order
+  var openDebts = donor.donations
+    .filter(function(d) { return !d.paid && Number(d.remainingDebt || 0) > 0; })
+    .sort(function(a, b) {
+      return new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0);
+    });
+
+  if (openDebts.length === 0) {
+    return { donorFound: true, updated: false, reason: "no_open_debts" };
+  }
+
+  var remaining = paidAmount;
+  var affectedDebts = 0;
+  var now = nowIso();
+
+  for (var i = 0; i < openDebts.length && remaining > 0.005; i++) {
+    var debt = openDebts[i];
+    var debtAmt = Math.round(Number(debt.remainingDebt || 0) * 100) / 100;
+    if (debtAmt <= 0) continue;
+
+    if (remaining >= debtAmt - 0.005) {
+      // Full payment of this debt
+      remaining = Math.round((remaining - debtAmt) * 100) / 100;
+      debt.remainingDebt = 0;
+      debt.paid = true;
+      debt.paidAt = now;
+      debt.paidVia = "ivr";
+      affectedDebts++;
+    } else {
+      // Partial payment — reduce remaining debt
+      debt.remainingDebt = Math.round((debtAmt - remaining) * 100) / 100;
+      remaining = 0;
+      affectedDebts++;
+    }
+  }
+
+  if (affectedDebts === 0) {
+    return { donorFound: true, updated: false, reason: "no_change" };
+  }
+
+  setAppState("donors", donors);
+  return { donorFound: true, updated: true, affectedDebts: affectedDebts };
 }
 
 // ── Call Logs ────────────────────────────────────────────────────────────────
@@ -690,6 +768,7 @@ module.exports = {
   recordPayment,
   findPaymentByCallId,
   savePaymentInTransaction,
+  updateDonorDebtAfterPayment,
   // Logs
   insertCallLog,
   // Call Sessions
