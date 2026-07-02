@@ -1,3 +1,4 @@
+/* auth.js v2 — redirect-aware */
 const SESSION_TIMEOUT_HOURS = 8;
 const SESSION_TIMEOUT_MS    = SESSION_TIMEOUT_HOURS * 60 * 60 * 1000;
 const ROLE_ADMIN      = "ADMIN";

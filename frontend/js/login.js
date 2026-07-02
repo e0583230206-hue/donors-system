@@ -1,3 +1,4 @@
+/* login.js v2 — redirect-aware */
 // Returns the redirect target only if it is a safe internal path.
 // Blocks protocol-relative (//evil.com) and absolute URLs (http://...).
 function getSafeRedirect() {

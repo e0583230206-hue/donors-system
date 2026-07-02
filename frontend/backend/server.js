@@ -88,14 +88,22 @@ app.use(function (req, res, next) {
 });
 
 // ── Static frontend ───────────────────────────────────────────────────────────
-// HTML files: no-cache so browsers always fetch the latest version after deploy.
-// JS/CSS/images: allow ETag-based caching (default express.static behaviour).
+// Our own JS/CSS: no-cache — changes on every deploy, must always be fresh.
+// Vendor libs (/lib): ETag caching — large, never change between deploys.
+// HTML: no-cache — already handled below.
+const _noCacheHeaders = function (res) {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+};
+
+app.use("/js",  express.static(path.join(FRONTEND_DIR, "js"),  { setHeaders: _noCacheHeaders }));
+app.use("/css", express.static(path.join(FRONTEND_DIR, "css"), { setHeaders: _noCacheHeaders }));
+
 app.use(express.static(FRONTEND_DIR, {
   setHeaders(res, filePath) {
     if (filePath.endsWith(".html")) {
-      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      res.setHeader("Pragma", "no-cache");
-      res.setHeader("Expires", "0");
+      _noCacheHeaders(res);
     }
   }
 }));
