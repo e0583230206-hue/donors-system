@@ -36,6 +36,10 @@ const {
   getAuditLogs,
   insertSyncLog,
   getSyncLogs,
+  insertAlfonPending,
+  getAlfonPending,
+  getAlfonPendingById,
+  updateAlfonPendingStatus,
   normalizePhoneForDb,
 } = require("./db");
 
@@ -766,6 +770,135 @@ app.post("/api/sync/apply", requireRole([ROLES.ADMIN]), function (req, res) {
 
 app.get("/api/sync/logs", requireRole([ROLES.ADMIN]), function (req, res) {
   res.json(getSyncLogs(50));
+});
+
+// ── Alfon auto-sync (local agent → server) ───────────────────────────────────
+
+var alfonLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: { error: "Rate limit exceeded" },
+});
+
+function requireAlfonKey(req, res, next) {
+  var key = (process.env.ALFON_SYNC_KEY || "").trim();
+  if (!key) return res.status(503).json({ error: "ALFON_SYNC_KEY not configured on server" });
+  if (req.headers["x-alfon-key"] !== key) return res.status(401).json({ error: "Invalid API key" });
+  next();
+}
+
+// Agent uploads CSV → stored as pending (no auto-apply)
+app.post("/api/sync/alfon-auto", alfonLimiter, requireAlfonKey, function (req, res) {
+  try {
+    var content  = String(req.body.content  || "");
+    var filename = String(req.body.filename || "alfon_auto.csv");
+    if (!content) return res.status(400).json({ error: "content required" });
+
+    var parsed = parseCsv(content);
+    if (parsed.errors.length) return res.status(400).json({ error: parsed.errors[0] });
+
+    var existingDonors = getAppState("donors");
+    if (!Array.isArray(existingDonors)) existingDonors = [];
+    var preview = buildPreview(parsed.rows, existingDonors);
+
+    var counts = { create: 0, update: 0, unchanged: 0, skip: 0 };
+    preview.forEach(function (r) { counts[r.action] = (counts[r.action] || 0) + 1; });
+
+    var pendingId = insertAlfonPending({
+      filename:       filename,
+      csvContent:     content,
+      previewAdded:   counts.create,
+      previewUpdated: counts.update,
+      previewSkipped: counts.skip + counts.unchanged,
+    });
+
+    console.log("[Alfon] Agent upload accepted. pendingId=" + pendingId +
+      " new=" + counts.create + " update=" + counts.update);
+
+    res.json({ ok: true, pendingId: pendingId, counts: counts });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: list pending uploads
+app.get("/api/sync/alfon-pending", requireRole([ROLES.ADMIN]), function (req, res) {
+  res.json(getAlfonPending());
+});
+
+// Admin: live preview of a specific pending upload
+app.get("/api/sync/alfon-pending/:id/preview", requireRole([ROLES.ADMIN]), function (req, res) {
+  try {
+    var record = getAlfonPendingById(req.params.id);
+    if (!record) return res.status(404).json({ error: "לא נמצא" });
+    if (record.status !== "pending") return res.status(400).json({ error: "כבר טופל (" + record.status + ")" });
+
+    var parsed = parseCsv(record.csvContent);
+    var existingDonors = getAppState("donors");
+    if (!Array.isArray(existingDonors)) existingDonors = [];
+    var preview = buildPreview(parsed.rows, existingDonors);
+
+    var counts = { create: 0, update: 0, unchanged: 0, skip: 0 };
+    preview.forEach(function (r) { counts[r.action] = (counts[r.action] || 0) + 1; });
+
+    res.json({
+      id: record.id, createdAt: record.createdAt, filename: record.filename,
+      counts: counts, preview: preview.slice(0, 200),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: approve → apply sync
+app.post("/api/sync/alfon-pending/:id/approve", requireRole([ROLES.ADMIN]), function (req, res) {
+  try {
+    var record = getAlfonPendingById(req.params.id);
+    if (!record) return res.status(404).json({ error: "לא נמצא" });
+    if (record.status !== "pending") return res.status(400).json({ error: "כבר טופל (" + record.status + ")" });
+
+    var parsed = parseCsv(record.csvContent);
+    var existingDonors = getAppState("donors");
+    if (!Array.isArray(existingDonors)) existingDonors = [];
+    var preview = buildPreview(parsed.rows, existingDonors);
+    var result  = applySync(preview, existingDonors, upsertDonor);
+
+    setAppState("donors", result.donors);
+    updateAlfonPendingStatus(record.id, "approved", req.user.name);
+
+    insertSyncLog({
+      filename:   record.filename,
+      added:      result.added,
+      updated:    result.updated,
+      skipped:    result.skipped,
+      failed:     result.failed,
+      workerName: req.user.name,
+    });
+    insertAuditLog({
+      action:     "ALFON_SYNC_APPROVED",
+      entityType: "donors",
+      details:    "pendingId=" + record.id + " added=" + result.added + " updated=" + result.updated,
+      workerId:   req.user.id,
+      workerName: req.user.name,
+      ip: req.ip,
+    });
+
+    res.json({ ok: true, added: result.added, updated: result.updated,
+               skipped: result.skipped, failed: result.failed });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: reject → discard without applying
+app.post("/api/sync/alfon-pending/:id/reject", requireRole([ROLES.ADMIN]), function (req, res) {
+  try {
+    var record = getAlfonPendingById(req.params.id);
+    if (!record) return res.status(404).json({ error: "לא נמצא" });
+    if (record.status !== "pending") return res.status(400).json({ error: "כבר טופל" });
+
+    updateAlfonPendingStatus(record.id, "rejected", req.user.name);
+    insertAuditLog({
+      action: "ALFON_SYNC_REJECTED", entityType: "donors",
+      details: "pendingId=" + record.id + " file=" + record.filename,
+      workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+    });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── 404 ───────────────────────────────────────────────────────────────────────

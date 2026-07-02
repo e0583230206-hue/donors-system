@@ -84,6 +84,24 @@
       border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-left: 6px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    .pending-card {
+      border: 1px solid #e0c97f; border-radius: 10px; padding: 14px 16px;
+      margin-bottom: 12px; background: #fff;
+    }
+    .pending-card h4 { margin: 0 0 6px; font-size: 1em; color: #444; }
+    .pending-card .pending-meta { font-size: .85em; color: #888; margin-bottom: 10px; }
+    .pending-card .pending-counts { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    .pending-counts .pc { padding: 4px 10px; border-radius: 6px; font-size: .85em; font-weight: 600; }
+    .pc-c { background: #d4edda; color: #155724; }
+    .pc-u { background: #fff3cd; color: #856404; }
+    .pc-s { background: #e2e3e5; color: #383d41; }
+    .pending-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-preview  { padding: 7px 16px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; font-size: .9em; }
+    .btn-approve  { padding: 7px 16px; border: none; border-radius: 6px; background: #2d5a27; color: #fff; cursor: pointer; font-size: .9em; font-weight: 600; }
+    .btn-approve:disabled { opacity: .5; cursor: default; }
+    .btn-reject   { padding: 7px 16px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #721c24; cursor: pointer; font-size: .9em; }
+    .pending-preview-wrap { margin-top: 14px; display: none; }
   </style>
 </head>
 <body>
@@ -120,6 +138,12 @@
         <p>יבוא פרטי קשר מאקסס — שם, עיר, כתובת, טלפונים</p>
       </div>
     </header>
+
+    <!-- Pending agent uploads (shown when data exists) -->
+    <section class="panel" id="pendingSection" style="display:none; border:2px solid #f0c040; background:#fffdf0;">
+      <h2 style="color:#856404;">⏳ ממתין לאישורך — סנכרון מהאלפון האוטומטי</h2>
+      <div id="pendingList"></div>
+    </section>
 
     <section class="panel">
       <h2>העלאת קובץ</h2>

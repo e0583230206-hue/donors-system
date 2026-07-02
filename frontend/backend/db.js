@@ -857,6 +857,48 @@ function dbHealthCheck() {
   }
 }
 
+// ── Alfon Pending (agent upload queue) ───────────────────────────────────────
+
+function initAlfonPending() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS alfon_pending (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      createdAt      TEXT NOT NULL,
+      filename       TEXT,
+      csvContent     TEXT NOT NULL,
+      status         TEXT NOT NULL DEFAULT 'pending',
+      previewAdded   INTEGER DEFAULT 0,
+      previewUpdated INTEGER DEFAULT 0,
+      previewSkipped INTEGER DEFAULT 0,
+      reviewedBy     TEXT,
+      reviewedAt     TEXT
+    )
+  `);
+}
+initAlfonPending();
+
+function insertAlfonPending({ filename, csvContent, previewAdded, previewUpdated, previewSkipped }) {
+  var result = db.prepare(
+    "INSERT INTO alfon_pending (createdAt, filename, csvContent, previewAdded, previewUpdated, previewSkipped) VALUES (?,?,?,?,?,?)"
+  ).run(nowIso(), filename || "", csvContent || "", previewAdded || 0, previewUpdated || 0, previewSkipped || 0);
+  return result.lastInsertRowid;
+}
+
+function getAlfonPending() {
+  return db.prepare(
+    "SELECT id, createdAt, filename, status, previewAdded, previewUpdated, previewSkipped, reviewedBy, reviewedAt FROM alfon_pending ORDER BY id DESC LIMIT 30"
+  ).all();
+}
+
+function getAlfonPendingById(id) {
+  return db.prepare("SELECT * FROM alfon_pending WHERE id = ?").get(Number(id));
+}
+
+function updateAlfonPendingStatus(id, status, reviewedBy) {
+  db.prepare("UPDATE alfon_pending SET status=?, reviewedBy=?, reviewedAt=? WHERE id=?")
+    .run(status, reviewedBy || "", nowIso(), Number(id));
+}
+
 // ── Sync Log ──────────────────────────────────────────────────────────────────
 
 function insertSyncLog({ filename, added, updated, skipped, failed, workerName }) {
@@ -925,6 +967,11 @@ module.exports = {
   // Sync log
   insertSyncLog,
   getSyncLogs,
+  // Alfon pending (agent uploads)
+  insertAlfonPending,
+  getAlfonPending,
+  getAlfonPendingById,
+  updateAlfonPendingStatus,
   // Phone normalization (shared with sync service)
   normalizePhoneForDb,
 };
