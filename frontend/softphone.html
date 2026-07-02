@@ -448,26 +448,53 @@ footer.foot kbd{
 // sidebar.js already saved the JWT to localStorage._sp_token for this case.
 // Copy it to sessionStorage so auth.js / apiFetch work normally.
 (function () {
-  if (!sessionStorage.getItem('authToken')) {
-    var t = localStorage.getItem('_sp_token');
-    if (t) {
-      sessionStorage.setItem('authToken', t);
-      // Also restore currentUser so requireLogin() session-timeout check passes.
-      var u = localStorage.getItem('_sp_user');
-      if (u) sessionStorage.setItem('currentUser', u);
+  var hasToken = !!sessionStorage.getItem('authToken');
+  var spToken  = localStorage.getItem('_sp_token');
+  console.log('[SP:1] sessionStorage.authToken לפני bridge:', hasToken ? 'יש' : 'אין');
+  console.log('[SP:1] localStorage._sp_token:', spToken ? 'יש (' + spToken.slice(0,20) + '...)' : 'אין');
+
+  if (!hasToken) {
+    if (spToken) {
+      sessionStorage.setItem('authToken', spToken);
+      var spUser = localStorage.getItem('_sp_user');
+      if (spUser) sessionStorage.setItem('currentUser', spUser);
+      console.log('[SP:1] הועתק מ-localStorage ל-sessionStorage. authToken אחרי bridge:', sessionStorage.getItem('authToken') ? 'יש' : 'חסר!');
+    } else {
+      console.log('[SP:1] אין טוקן לא ב-sessionStorage ולא ב-localStorage — requireLogin() יפנה ל-login.');
     }
+  } else {
+    console.log('[SP:1] טוקן כבר ב-sessionStorage, אין צורך ב-bridge.');
   }
 }());
 </script>
 <script src="js/auth.js"></script>
 <script>
-// Fetch SIP config using the active session token (via apiFetch from auth.js).
-// Server is authoritative; localStorage used only as offline fallback.
+// Fetch SIP config directly — does NOT use apiFetch so a 401 returns null
+// instead of triggering a redirect-to-login loop.
 async function fetchSipConfig() {
+  var token = sessionStorage.getItem('authToken') || '';
+  console.log('[SP:2] fetchSipConfig: apiFetch מוגדר =', typeof apiFetch === 'function');
+  console.log('[SP:2] fetchSipConfig: טוקן ב-sessionStorage =', token ? 'יש (' + token.slice(0,20) + '...)' : 'חסר!');
+  if (!token) {
+    console.warn('[SP:2] אין טוקן — לא שולח בקשה ל-/api/sip-config');
+    return null;
+  }
   try {
-    var r = await apiFetch('/api/sip-config');
-    return r.ok ? await r.json() : null;
-  } catch (_) { return null; }
+    var r = await fetch('/api/sip-config', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    console.log('[SP:2] תגובת שרת /api/sip-config:', r.status, r.statusText);
+    if (!r.ok) {
+      if (r.status === 401) console.error('[SP:2] שגיאת 401 — הטוקן לא תקין. JWT_SECRET ששינה? JWT פג תוקף?');
+      return null;
+    }
+    var data = await r.json();
+    console.log('[SP:2] קיבל config מהשרת. server:', data.server ? data.server.slice(0,20) : 'חסר', 'pass:', data.pass ? 'יש' : 'חסר');
+    return data;
+  } catch (e) {
+    console.error('[SP:2] שגיאת network:', e.message);
+    return null;
+  }
 }
 </script>
 <script>
