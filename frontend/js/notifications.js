@@ -35,6 +35,18 @@
 
   localStorage.setItem(todayKey, "1");
 
+  // Prune briefing keys older than 30 days
+  var cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  var briefingToRemove = [];
+  for (var bki = 0; bki < localStorage.length; bki++) {
+    var bkKey = localStorage.key(bki);
+    if (bkKey && bkKey.startsWith("briefing_")) {
+      var d = new Date(bkKey.replace("briefing_", ""));
+      if (!isNaN(d.getTime()) && d.getTime() < cutoffMs) briefingToRemove.push(bkKey);
+    }
+  }
+  briefingToRemove.forEach(function(bkKey) { localStorage.removeItem(bkKey); });
+
   var total = todayTasks.length + overdueTasks.length + todayReminders.length;
   if (total === 0) return;
 

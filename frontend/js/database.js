@@ -151,6 +151,19 @@ const Database = {
             if (v) snap[k] = v;
           });
           localStorage.setItem(backupKey, JSON.stringify(snap));
+
+          // Keep at most 15 auto-backups; delete oldest beyond that
+          var allBackupKeys = [];
+          for (var ki = 0; ki < localStorage.length; ki++) {
+            var bk = localStorage.key(ki);
+            if (bk && bk.startsWith("crm_auto_backup_")) allBackupKeys.push(bk);
+          }
+          if (allBackupKeys.length > 15) {
+            allBackupKeys.sort();
+            allBackupKeys.slice(0, allBackupKeys.length - 15).forEach(function(bk) {
+              localStorage.removeItem(bk);
+            });
+          }
         }
       }
 

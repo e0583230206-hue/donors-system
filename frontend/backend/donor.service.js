@@ -17,6 +17,10 @@ function normalizePhone(phone) {
     return "0" + digits.slice(3);
   }
 
+  if (digits.length === 9 && !digits.startsWith("0")) {
+    return "0" + digits;
+  }
+
   return digits;
 }
 

@@ -68,13 +68,14 @@ function fillWorkerSelect() {
 }
 
 function ensureCallbackArrays() {
+  var changed = false;
   donors.forEach(function (donor) {
     if (!donor.callbacks) {
       donor.callbacks = [];
+      changed = true;
     }
   });
-
-  saveDonors();
+  if (changed) saveDonors();
 }
 
 function getAllCallbacks() {

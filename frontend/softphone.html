@@ -384,19 +384,19 @@ footer.foot kbd{
       <div class="form" id="connForm" style="display:none">
         <div class="field">
           <label for="s_server">כתובת שרת</label>
-          <input id="s_server" type="text" value="wss://sip.ipsales.co.il:8089/ws" placeholder="wss://..." autocomplete="off">
+          <input id="s_server" type="text" value="" placeholder="wss://..." autocomplete="off">
         </div>
         <div class="field">
           <label for="s_ext">מספר שלוחה</label>
-          <input id="s_ext" type="text" value="200" placeholder="200" autocomplete="off">
+          <input id="s_ext" type="text" value="" placeholder="200" autocomplete="off">
         </div>
         <div class="field">
           <label for="s_user">שם משתמש</label>
-          <input id="s_user" type="text" value="MESER534485" placeholder="MESER..." autocomplete="off">
+          <input id="s_user" type="text" value="" placeholder="MESER..." autocomplete="off">
         </div>
         <div class="field">
           <label for="s_pass">סיסמה</label>
-          <input id="s_pass" type="password" value="b90929f75a7911" placeholder="••••••••" autocomplete="off">
+          <input id="s_pass" type="password" value="" placeholder="••••••••" autocomplete="off">
         </div>
         <div class="field">
           <label for="s_speaker">רמקול (פלט שמע)</label>
@@ -443,6 +443,7 @@ footer.foot kbd{
 <script>if(typeof JsSIP==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jssip/dist/jssip.min.js"><\/scr'+'ipt>')</script>
 <script src="lib/jquery.min.js"></script>
 <script>if(typeof jQuery==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"><\/scr'+'ipt>')</script>
+<script src="js/auth.js"></script>
 <script>
 (function(){
   'use strict';
@@ -1057,10 +1058,9 @@ footer.foot kbd{
   renderHistory();
 
   // ---------- init ----------
-  loadSettings();
   loadSpeakers();
   renderNum();
-  log('סופטפון נטען — מתחבר אוטומטית…','info');
+  log('סופטפון נטען — טוען הגדרות חיבור…','info');
 
   if(navigator.mediaDevices&&navigator.mediaDevices.addEventListener)
     navigator.mediaDevices.addEventListener('devicechange', loadSpeakers);
@@ -1069,15 +1069,31 @@ footer.foot kbd{
     log('אזהרה: דף זה לא רץ על HTTPS — הדפדפן עלול לחסום מיקרופון ללא HTTPS.','warn');
   }
 
-  // Auto-connect on load
-  const cur = readSettings();
-  if(cur.server&&(cur.ext||cur.user)&&cur.pass){
-    log('מתחבר אוטומטית…','info');
-    register();
-  } else {
-    setExtInfo('הכנס פרטי חיבור להתחבר');
-    $('#connForm').show(); $('#connToggle').text('▲ הסתר');
-  }
+  // Load settings: localStorage first; fill missing fields from authenticated server config
+  (async function initSipConfig() {
+    loadSettings();
+    var s = readSettings();
+    if (!s.server || !s.pass) {
+      try {
+        var r = await apiFetch('/api/sip-config');
+        if (r.ok) {
+          var cfg = await r.json();
+          if (cfg.server && !$('#s_server').val()) $('#s_server').val(cfg.server);
+          if (cfg.ext    && !$('#s_ext').val())    $('#s_ext').val(cfg.ext);
+          if (cfg.user   && !$('#s_user').val())   $('#s_user').val(cfg.user);
+          if (cfg.pass   && !$('#s_pass').val())   $('#s_pass').val(cfg.pass);
+        }
+      } catch(e) {}
+    }
+    var cur = readSettings();
+    if(cur.server&&(cur.ext||cur.user)&&cur.pass){
+      log('מתחבר אוטומטית…','info');
+      register();
+    } else {
+      setExtInfo('הכנס פרטי חיבור להתחבר');
+      $('#connForm').show(); $('#connToggle').text('▲ הסתר');
+    }
+  }());
 
   $(window).on('beforeunload', function(e){
     if(session||(ua&&ua.isRegistered&&ua.isRegistered())){

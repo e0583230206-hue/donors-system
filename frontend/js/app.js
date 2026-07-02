@@ -138,7 +138,7 @@ async function updateServerDashboard() {
       donorsTotal.innerText = stats.totalDonors;
     }
 
-    if (stats && typeof stats.totalPaymentAmount === "number") {
+    if (stats && typeof stats.totalPaymentAmount === "number" && donors.length === 0) {
       paidTotal.innerText = formatMoney(stats.totalPaymentAmount);
     }
   } catch (error) {

@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 const jwt      = require("jsonwebtoken");
 const bcrypt   = require("bcryptjs");
 const { findWorkerById } = require("./db");

@@ -1,5 +1,14 @@
 let donors = Database.get("donors");
 
+function normalizePhoneLocal(p) {
+  var digits = String(p === undefined || p === null ? "" : p).trim().replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("972") && digits.length >= 11) return "0" + digits.slice(3);
+  if (digits.length === 9 && !digits.startsWith("0")) return "0" + digits;
+  return digits;
+}
+
 const params = new URLSearchParams(window.location.search);
 const donorId = Number(params.get("id"));
 
@@ -394,22 +403,20 @@ function getOpenDebts() {
 
 function getCurrentDebt() {
   const openDebts = getOpenDebts();
-
-  if (openDebts.length === 0) {
-    return null;
-  }
-
-  return openDebts[openDebts.length - 1];
+  if (openDebts.length === 0) return null;
+  const sorted = openDebts.slice().sort(function(a, b) {
+    return new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0);
+  });
+  return sorted[0];
 }
 
 function getPreviousDebts() {
   const openDebts = getOpenDebts();
-
-  if (openDebts.length <= 1) {
-    return [];
-  }
-
-  return openDebts.slice(0, openDebts.length - 1);
+  if (openDebts.length <= 1) return [];
+  const sorted = openDebts.slice().sort(function(a, b) {
+    return new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0);
+  });
+  return sorted.slice(1);
 }
 
 const printLetterButton = document.getElementById("printLetterButton");
@@ -497,7 +504,7 @@ function saveDonorEdit() {
   }
 
   const phoneExists = donors.some(function (item) {
-    return item.id !== donor.id && item.phone === phone;
+    return item.id !== donor.id && normalizePhoneLocal(item.phone) === normalizePhoneLocal(phone);
   });
 
   if (phoneExists) {
