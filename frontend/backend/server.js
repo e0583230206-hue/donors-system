@@ -30,6 +30,8 @@ const {
   backupDatabase,
   dbHealthCheck,
   getPayments,
+  getPaymentById,
+  getPaymentStats,
 } = require("./db");
 
 const {
@@ -368,17 +370,38 @@ app.post("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function
   }
 });
 
-// ── Payments list (CRM payments screen) ──────────────────────────────────────
+// ── Payments (CRM payments screen) ───────────────────────────────────────────
+app.get(
+  "/api/payments/stats",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try { res.json(getPaymentStats()); } catch (err) { next(err); }
+  }
+);
+
+app.get(
+  "/api/payments/:id",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var id = parseInt(req.params.id, 10);
+      if (!id) return res.status(400).json({ error: "Invalid id" });
+      var row = getPaymentById(id);
+      if (!row) return res.status(404).json({ error: "Not found" });
+      res.json(row);
+    } catch (err) { next(err); }
+  }
+);
+
 app.get(
   "/api/payments",
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   function (req, res, next) {
     try {
-      var limit = Math.min(Number(req.query.limit) || 500, 2000);
-      res.json(getPayments(limit));
-    } catch (err) {
-      next(err);
-    }
+      var limit   = Math.min(Number(req.query.limit) || 500, 2000);
+      var donorId = req.query.donorId ? Number(req.query.donorId) : null;
+      res.json(getPayments({ limit: limit, donorId: donorId }));
+    } catch (err) { next(err); }
   }
 );
 

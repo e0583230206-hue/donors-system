@@ -396,19 +396,59 @@ function savePaymentInTransaction(callId, phone, amount, donorId, confirmationNu
   }
 }
 
-// ── Payments list (for CRM payments screen) ──────────────────────────────────
+// ── Payments list / single / stats (for CRM payments screen) ─────────────────
 
-function getPayments(limit) {
-  var lim = Math.min(Number(limit) || 500, 2000);
+function getPayments(opts) {
+  var options = (typeof opts === "object" && opts !== null) ? opts : { limit: opts };
+  var limit   = Math.min(Number(options.limit) || 500, 2000);
+  var donorId = options.donorId ? Number(options.donorId) : null;
+
+  var base = `
+    SELECT p.id, p.callId, p.phone, p.donorId, p.amount, p.status, p.source,
+           p.confirmationNumber, p.createdAt, p.timestamp,
+           d.fullName AS donorName
+    FROM   payments p
+    LEFT JOIN donors d ON d.id = p.donorId
+  `;
+  if (donorId) {
+    return db.prepare(base + " WHERE p.donorId = ? ORDER BY p.id DESC LIMIT ?").all(donorId, limit);
+  }
+  return db.prepare(base + " ORDER BY p.id DESC LIMIT ?").all(limit);
+}
+
+function getPaymentById(id) {
   return db.prepare(`
     SELECT p.id, p.callId, p.phone, p.donorId, p.amount, p.status, p.source,
            p.confirmationNumber, p.createdAt, p.timestamp,
            d.fullName AS donorName
     FROM   payments p
     LEFT JOIN donors d ON d.id = p.donorId
-    ORDER  BY p.id DESC
-    LIMIT  ?
-  `).all(lim);
+    WHERE  p.id = ?
+  `).get(Number(id));
+}
+
+function getPaymentStats() {
+  var fmt   = { timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit", day: "2-digit" };
+  var now   = new Date();
+  var today = new Intl.DateTimeFormat("en-CA", fmt).format(now);
+
+  var dow         = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Jerusalem" })).getDay();
+  var daysFromMon = dow === 0 ? 6 : dow - 1;
+  var mon         = new Date(now);
+  mon.setDate(mon.getDate() - daysFromMon);
+  var weekStart   = new Intl.DateTimeFormat("en-CA", fmt).format(mon);
+  var monthStart  = today.slice(0, 7) + "-01";
+
+  var base = "SELECT COUNT(*) AS count, COALESCE(SUM(amount),0) AS total FROM payments WHERE status='success' AND substr(COALESCE(timestamp,createdAt),1,10)";
+  var tRow = db.prepare(base + "=?").get(today);
+  var wRow = db.prepare(base + ">=?").get(weekStart);
+  var mRow = db.prepare(base + ">=?").get(monthStart);
+
+  return {
+    today: { count: tRow.count, total: tRow.total },
+    week:  { count: wRow.count, total: wRow.total },
+    month: { count: mRow.count, total: mRow.total },
+  };
 }
 
 // ── Debt update after IVR payment ────────────────────────────────────────────
@@ -785,6 +825,8 @@ module.exports = {
   savePaymentInTransaction,
   updateDonorDebtAfterPayment,
   getPayments,
+  getPaymentById,
+  getPaymentStats,
   // Logs
   insertCallLog,
   // Call Sessions

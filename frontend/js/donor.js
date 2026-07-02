@@ -1036,6 +1036,7 @@ Database.whenReady(function () {
 
   ensureDonorDefaults();
   renderAll();
+  loadDonorPayments();
   if (parshaInput && !parshaInput.value.trim()) {
     parshaInput.value = getCurrentParsha();
   }
@@ -1123,6 +1124,42 @@ Database.whenReady(function () {
     }
   });
 });
+
+// ── IVR payment history for this donor ───────────────────────────────────────
+async function loadDonorPayments() {
+  if (!donorId || typeof apiFetch !== "function") return;
+  var panel   = document.getElementById("ivrPaymentsPanel");
+  var loading = document.getElementById("ivrPaymentsLoading");
+  var tbody   = document.getElementById("ivrPaymentsTable");
+  if (!panel || !tbody) return;
+
+  loading.style.display = "block";
+  try {
+    var res = await apiFetch("/api/payments?donorId=" + encodeURIComponent(donorId) + "&limit=100");
+    if (!res.ok) return;
+    var payments = await res.json();
+    if (!payments || payments.length === 0) return;
+
+    panel.style.display = "";
+    tbody.innerHTML = payments.map(function (p) {
+      var d = p.timestamp || p.createdAt || "";
+      var dateStr = d ? new Date(d).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem", hour12: false }) : "—";
+      var statusHtml = p.status === "success"
+        ? '<span style="color:#1a7a1a;font-weight:600">🟢 הצליח</span>'
+        : '<span style="color:#b00;font-weight:600">🔴 נכשל</span>';
+      var shortCid = p.callId ? p.callId.slice(0, 10) + (p.callId.length > 10 ? "…" : "") : "—";
+      return "<tr>" +
+        "<td style='white-space:nowrap'>" + escapeHTML(dateStr) + "</td>" +
+        "<td style='font-weight:600'>₪" + Number(p.amount || 0).toFixed(2) + "</td>" +
+        "<td>" + escapeHTML(p.confirmationNumber || "—") + "</td>" +
+        "<td>" + escapeHTML(p.source || "ivr") + "</td>" +
+        "<td title='" + escapeHTML(p.callId || "") + "' style='font-size:.8em;color:#666'>" + escapeHTML(shortCid) + "</td>" +
+        "<td>" + statusHtml + "</td>" +
+        "</tr>";
+    }).join("");
+  } catch (_) {}
+  finally { loading.style.display = "none"; }
+}
 
 // Re-render when donors are refreshed in the background (e.g. after IVR payment)
 window.addEventListener("crm-donors-refreshed", function () {

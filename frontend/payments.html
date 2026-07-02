@@ -5,6 +5,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>תשלומי IVR</title>
     <link rel="stylesheet" href="css/style.css" />
+    <style>
+      .filter-pills { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+      .filter-pills button { padding:6px 14px; border:1px solid #ccc; border-radius:20px; background:#fff;
+        cursor:pointer; font-size:.88em; transition:all .15s; }
+      .filter-pills button.active { background:#2d5a27; color:#fff; border-color:#2d5a27; }
+      .filter-pills button:hover:not(.active) { background:#f0f0f0; }
+      .actions-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }
+      .actions-bar select { padding:6px 10px; border:1px solid #ccc; border-radius:6px; font-size:.9em; }
+      .sort-th { cursor:pointer; user-select:none; white-space:nowrap; }
+      .sort-th:hover { background:#e8e8e8; }
+      .sort-icon { font-size:.75em; margin-right:4px; color:#888; }
+      .callid-cell { white-space:nowrap; }
+      .callid-short { font-size:.8em; color:#555; direction:ltr; }
+      .copy-btn { background:none; border:1px solid #ccc; border-radius:4px; padding:1px 5px;
+        font-size:.75em; cursor:pointer; margin-right:4px; color:#555; }
+      .copy-btn:hover { background:#eee; }
+      .badge { display:inline-block; padding:2px 9px; border-radius:12px; font-size:.82em; font-weight:600; }
+      .badge-ok  { background:#d4edda; color:#155724; }
+      .badge-err { background:#f8d7da; color:#721c24; }
+      .badge-dup { background:#fff3cd; color:#856404; }
+      .badge-def { background:#e2e3e5; color:#383d41; }
+      .pagination-controls { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:10px; }
+      .pagination-controls button { padding:4px 10px; border:1px solid #ccc; border-radius:4px;
+        background:#fff; cursor:pointer; font-size:.88em; }
+      .pagination-controls button.active { background:#2d5a27; color:#fff; border-color:#2d5a27; }
+      .pagination-controls button:disabled { opacity:.4; cursor:default; }
+
+      /* Receipt modal */
+      .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.5);
+        z-index:2000; justify-content:center; align-items:center; }
+      .modal-overlay.open { display:flex; }
+      .modal-box { background:#fff; border-radius:10px; width:90%; max-width:520px;
+        max-height:90vh; overflow-y:auto; box-shadow:0 4px 24px rgba(0,0,0,.3); }
+      .modal-header { padding:18px 20px; border-bottom:1px solid #eee; display:flex;
+        justify-content:space-between; align-items:center; }
+      .modal-header h3 { margin:0; font-size:1.1em; }
+      .modal-close { background:none; border:none; font-size:1.5em; cursor:pointer; color:#666; }
+      .modal-body { padding:20px; }
+      .receipt-row { display:flex; justify-content:space-between; padding:8px 0;
+        border-bottom:1px solid #f0f0f0; font-size:.95em; }
+      .receipt-label { font-weight:600; color:#555; }
+      .receipt-amount { font-size:1.4em; font-weight:700; color:#1a6e1a;
+        text-align:center; margin:16px 0; }
+      .modal-footer { padding:14px 20px; border-top:1px solid #eee;
+        display:flex; gap:10px; justify-content:flex-end; }
+
+      /* IVR flow modal */
+      .flow-step { display:flex; gap:12px; margin-bottom:14px; }
+      .flow-dot { width:28px; height:28px; border-radius:50%; background:#2d5a27; color:#fff;
+        display:flex; align-items:center; justify-content:center; font-size:.8em;
+        flex-shrink:0; margin-top:2px; }
+      .flow-content { flex:1; }
+      .flow-step-name { font-weight:600; font-size:.92em; }
+      .flow-step-payload { font-size:.8em; color:#666; margin-top:3px; word-break:break-all; }
+      .flow-step-time { font-size:.75em; color:#aaa; }
+      .flow-line { width:2px; height:14px; background:#ccc; margin:0 13px; }
+
+      @media print {
+        .sidebar, .topbar, .filter-pills, .actions-bar, .pagination-controls,
+        .panel:first-of-type, header { display:none !important; }
+      }
+    </style>
   </head>
   <body>
     <aside class="sidebar">
@@ -13,7 +75,6 @@
         <span>א בלאט גמרא</span>
         <small>ניהול תורמים</small>
       </div>
-
       <nav>
         <a href="index.html">🏠 דף הבית</a>
         <a href="donors.html">👤 תורמים</a>
@@ -36,46 +97,47 @@
     <main class="main">
       <header class="topbar">
         <div>
-          <h1>תשלומי IVR</h1>
+          <h1>💳 תשלומי IVR</h1>
           <p>כל התשלומים שבוצעו דרך מערכת ה-IVR</p>
         </div>
         <button class="primary-btn" onclick="loadPayments()">🔄 רענן</button>
       </header>
 
       <section class="stats-grid">
-        <div class="stat-card">
-          <h3>💳 סך תשלומים</h3>
-          <strong id="statTotal">0</strong>
-          <p>מספר עסקאות</p>
-        </div>
-        <div class="stat-card success">
-          <h3>💰 סכום כולל</h3>
-          <strong id="statAmount">₪0</strong>
-          <p>סה"כ שנגבה</p>
-        </div>
-        <div class="stat-card">
-          <h3>📅 תשלומים היום</h3>
-          <strong id="statTodayCount">0</strong>
-          <p>עסקאות היום</p>
-        </div>
-        <div class="stat-card success">
-          <h3>💵 סכום היום</h3>
-          <strong id="statTodayAmount">₪0</strong>
-          <p>גביה היום</p>
-        </div>
+        <div class="stat-card"><h3>💳 סך תשלומים</h3><strong id="statTotal">0</strong><p>מספר עסקאות</p></div>
+        <div class="stat-card success"><h3>💰 סכום כולל</h3><strong id="statAmount">₪0</strong><p>סה"כ שנגבה</p></div>
+        <div class="stat-card"><h3>📅 תשלומים היום</h3><strong id="statTodayCount">0</strong><p>עסקאות היום</p></div>
+        <div class="stat-card success"><h3>💵 סכום היום</h3><strong id="statTodayAmount">₪0</strong><p>גביה היום</p></div>
       </section>
 
       <section class="panel">
         <h2>🔍 חיפוש וסינון</h2>
+
+        <div class="filter-pills" id="quickFilters">
+          <button onclick="setQuickFilter('today')">היום</button>
+          <button onclick="setQuickFilter('week')">השבוע</button>
+          <button onclick="setQuickFilter('month')">החודש</button>
+          <button onclick="setQuickFilter('year')">השנה</button>
+          <button onclick="setQuickFilter('all')" class="active">הכל</button>
+        </div>
+
         <div class="form-grid">
-          <input
-            id="searchInput"
-            type="text"
-            placeholder="חפש לפי שם, טלפון או מספר אישור"
-          />
+          <input id="searchInput" type="text"
+            placeholder="חיפוש חי: שם, טלפון, Call ID, מספר אישור, סכום..." />
           <input id="dateFrom" type="date" title="מתאריך" />
           <input id="dateTo"   type="date" title="עד תאריך" />
-          <button class="secondary-btn" onclick="clearFilters()">נקה סינון</button>
+          <button class="secondary-btn" onclick="clearFilters()">✕ נקה</button>
+        </div>
+
+        <div class="actions-bar">
+          <button class="secondary-btn" onclick="exportCSV()">📥 ייצוא CSV</button>
+          <button class="secondary-btn" onclick="window.print()">🖨️ הדפס</button>
+          <select id="pageSizeSelect" onchange="changePageSize(this.value)">
+            <option value="100">100 שורות</option>
+            <option value="200">200 שורות</option>
+            <option value="500">500 שורות</option>
+          </select>
+          <span id="rowCountInfo" style="font-size:.88em;color:#666;"></span>
         </div>
       </section>
 
@@ -83,26 +145,68 @@
         <h2>📋 רשימת תשלומים</h2>
         <div id="loadingMsg" style="padding:1rem;color:#888;display:none;">טוען...</div>
         <div id="errorMsg"   style="padding:1rem;color:#c00;display:none;"></div>
+
         <div class="table-wrap">
-          <table>
+          <table id="paymentsTableEl">
             <thead>
               <tr>
-                <th>תאריך ושעה</th>
-                <th>שם תורם</th>
+                <th class="sort-th" onclick="sortBy('timestamp')">
+                  תאריך ושעה <span class="sort-icon" id="si-timestamp"></span>
+                </th>
+                <th class="sort-th" onclick="sortBy('donorName')">
+                  שם תורם <span class="sort-icon" id="si-donorName"></span>
+                </th>
                 <th>טלפון</th>
-                <th>סכום</th>
-                <th>מספר אישור</th>
+                <th class="sort-th" onclick="sortBy('amount')">
+                  סכום <span class="sort-icon" id="si-amount"></span>
+                </th>
+                <th class="sort-th" onclick="sortBy('confirmationNumber')">
+                  מספר אישור <span class="sort-icon" id="si-confirmationNumber"></span>
+                </th>
                 <th>מקור</th>
-                <th>callId</th>
+                <th>Call ID</th>
                 <th>סטטוס</th>
+                <th>פעולות</th>
               </tr>
             </thead>
-            <tbody id="paymentsTable"></tbody>
+            <tbody id="paymentsTableBody"></tbody>
           </table>
         </div>
-        <div id="paymentsCount" style="padding:.5rem 0;color:#666;font-size:.9em;"></div>
+
+        <div class="pagination-controls" id="paginationBar"></div>
       </section>
     </main>
+
+    <!-- Receipt modal -->
+    <div class="modal-overlay" id="receiptModal">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3>🧾 קבלה על תשלום</h3>
+          <button class="modal-close" onclick="closeModal('receiptModal')">×</button>
+        </div>
+        <div class="modal-body" id="receiptBody"></div>
+        <div class="modal-footer">
+          <button class="secondary-btn" onclick="closeModal('receiptModal')">סגור</button>
+          <button class="primary-btn" onclick="printReceipt()">🖨️ הדפס קבלה</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- IVR flow modal -->
+    <div class="modal-overlay" id="flowModal">
+      <div class="modal-box" style="max-width:600px;">
+        <div class="modal-header">
+          <h3>📡 רצף שיחת IVR</h3>
+          <button class="modal-close" onclick="closeModal('flowModal')">×</button>
+        </div>
+        <div class="modal-body" id="flowBody" style="max-height:60vh;overflow-y:auto;">
+          <p style="color:#888;">טוען...</p>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-btn" onclick="closeModal('flowModal')">סגור</button>
+        </div>
+      </div>
+    </div>
 
     <script src="js/auth.js"></script>
     <script src="js/database.js"></script>

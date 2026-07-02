@@ -144,6 +144,23 @@ async function updateServerDashboard() {
   } catch (error) {
     // Local dashboard stays available when the production API is offline.
   }
+
+  try {
+    const pRes = await apiFetch("/api/payments/stats");
+    if (!pRes.ok) return;
+    const ps = await pRes.json();
+    const fmt = function (n) {
+      return "₪" + Number(n || 0).toLocaleString("he-IL",
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+    const row = document.getElementById("ivrStatsRow");
+    if (row) row.style.display = "";
+    const el = function (id) { return document.getElementById(id); };
+    if (el("ivrTodayCount"))  el("ivrTodayCount").innerText  = (ps.today && ps.today.count)  || 0;
+    if (el("ivrTodayTotal"))  el("ivrTodayTotal").innerText  = fmt(ps.today && ps.today.total);
+    if (el("ivrWeekTotal"))   el("ivrWeekTotal").innerText   = fmt(ps.week  && ps.week.total);
+    if (el("ivrMonthTotal"))  el("ivrMonthTotal").innerText  = fmt(ps.month && ps.month.total);
+  } catch (_) {}
 }
 
 function renderActivity(data) {
