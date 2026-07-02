@@ -799,29 +799,29 @@ function getCityRawId(p) {
   return /^\d+$/.test(raw) && raw !== "0" ? raw : "";
 }
 
-// Returns resolved Hebrew city name, or "" if unknown (preserves existing DB value)
+// Returns resolved Hebrew city name.
+// This API provides city_description (e.g. "בית שמש") alongside numeric city field.
 function resolveCity(p, cityMap) {
-  // 1. Explicit text fields (some APIs provide both id and name)
+  // 1. city_description is the authoritative Hebrew name from this API
+  var desc = String(p.city_description || "").trim();
+  if (desc && !/^\d+$/.test(desc)) return desc;
+
+  // 2. Other explicit text name fields (generic fallback for future APIs)
   var textCandidates = ["city_name", "city_title", "city_label", "city_text"];
   for (var i = 0; i < textCandidates.length; i++) {
     var v = String(p[textCandidates[i]] || "").trim();
     if (v && !/^\d+$/.test(v)) return v;
   }
-  // 2. city field as an object with embedded name
-  if (p.city && typeof p.city === "object") {
-    var nameFields = ["name", "title", "label", "city_name"];
-    for (var j = 0; j < nameFields.length; j++) {
-      var nv = String(p.city[nameFields[j]] || "").trim();
-      if (nv && !/^\d+$/.test(nv)) return nv;
-    }
-  }
-  // 3. Numeric ID → look up in combined map
-  var rawId = getCityRawId(p);
-  if (rawId) return (cityMap || {})[rawId] || ""; // "" = unknown → won't overwrite existing city
-  // 4. city field is already a non-numeric name
+
+  // 3. city field is already a non-numeric name (some APIs)
   if (p.city && typeof p.city === "string" && !/^\d+$/.test(p.city.trim())) {
     return p.city.trim();
   }
+
+  // 4. Last resort: numeric ID → look up in admin-configured city map
+  var rawId = getCityRawId(p);
+  if (rawId) return (cityMap || {})[rawId] || "";
+
   return "";
 }
 
@@ -860,12 +860,14 @@ function personsJsonToCsv(persons, cityMap) {
       p.person_id    || "",
       p.first_name   || "",
       p.last_name    || "",
-      resolveCity(p, cityMap), // mapped name, or "" if unknown (won't overwrite existing)
+      resolveCity(p, cityMap),                                           // Hebrew name from city_description
       p.street       || "",
       p.house_number || "",
-      p.apartment    || "",
-      p.entrance     || "",
-      p.neighborhood || "",
+      p.house_in_building || p.apartment || "",
+      p.enter        || p.entrance     || "",
+      (p.neighborhood_description && !/^\d+$/.test(p.neighborhood_description))
+        ? p.neighborhood_description
+        : "",                                                            // Hebrew neighborhood name
       phones[0]      || "",
       phones[1]      || "",
       phones[2]      || "",
@@ -916,12 +918,13 @@ app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function
 
     var cityMap = getCombinedCityMap();
 
-    // Build city report: rawId → { mapped: name|null, count }
+    // Build city report: rawId → { mapped: resolved_name|null, count }
     var cityReport = {};
     persons.forEach(function (p) {
-      var rawId = getCityRawId(p);
+      var rawId   = getCityRawId(p);
       if (!rawId) return;
-      if (!cityReport[rawId]) cityReport[rawId] = { mapped: cityMap[rawId] || null, count: 0 };
+      var resolved = resolveCity(p, cityMap) || null;
+      if (!cityReport[rawId]) cityReport[rawId] = { mapped: resolved, count: 0 };
       cityReport[rawId].count++;
     });
     var unknownCityIds = Object.keys(cityReport).filter(function (id) { return !cityReport[id].mapped; });
