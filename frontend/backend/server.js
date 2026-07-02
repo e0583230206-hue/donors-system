@@ -772,6 +772,85 @@ app.get("/api/sync/logs", requireRole([ROLES.ADMIN]), function (req, res) {
   res.json(getSyncLogs(50));
 });
 
+// ── Alfon API fetch (server pulls from external alfon API) ───────────────────
+
+var ALFON_API_URL = (process.env.ALFON_API_URL || "").trim() ||
+  "https://utilitiesphone.com/persons/dashboard/data.php?type_data=get_persons&filter=approval=1";
+
+function personsJsonToCsv(persons) {
+  var headers = [
+    "מספר סידורי","שם פרטי","שם משפחה","ישוב",
+    "רחוב","מספר בית","דירה","כניסה","שכונה",
+    "פלאפון א","פלאפון ב","טלפון ביתי","פלאפון נוסף",
+  ];
+  var lines = [headers.map(function (h) { return '"' + h + '"'; }).join(",")];
+  (Array.isArray(persons) ? persons : []).forEach(function (p) {
+    var row = [
+      p.person_id   || "",
+      p.first_name  || "",
+      p.last_name   || "",
+      p.city        || "",
+      p.street      || "",
+      p.house_number|| "",
+      p.apartment   || "",
+      p.entrance    || "",
+      p.neighborhood|| "",
+      p.telephone   || "",
+      p.phone2      || "",
+      p.phone3      || "",
+      p.phone4      || "",
+    ];
+    lines.push(row.map(function (v) {
+      return '"' + String(v).replace(/"/g, '""') + '"';
+    }).join(","));
+  });
+  return "﻿" + lines.join("\r\n");
+}
+
+app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function (req, res) {
+  try {
+    var apiRes = await fetch(ALFON_API_URL, { headers: { Accept: "application/json" } });
+    if (!apiRes.ok) return res.status(502).json({ error: "API returned " + apiRes.status });
+
+    var persons = await apiRes.json();
+    if (!Array.isArray(persons)) {
+      // Some APIs wrap in a key
+      persons = persons.data || persons.persons || persons.results || Object.values(persons);
+    }
+    if (!Array.isArray(persons)) return res.status(502).json({ error: "API לא החזיר מערך" });
+
+    var csvContent = personsJsonToCsv(persons);
+    var filename   = "alfon_api_" + new Date().toISOString().slice(0, 10) + ".csv";
+
+    var parsed         = parseCsv(csvContent);
+    var existingDonors = getAppState("donors") || [];
+    var preview        = buildPreview(parsed.rows, existingDonors);
+
+    var counts = {
+      create:    preview.filter(function (r) { return r.action === "create";    }).length,
+      update:    preview.filter(function (r) { return r.action === "update";    }).length,
+      unchanged: preview.filter(function (r) { return r.action === "unchanged"; }).length,
+      skip:      preview.filter(function (r) { return r.action === "skip";      }).length,
+    };
+
+    var pendingId = insertAlfonPending({
+      filename,
+      csvContent,
+      previewAdded:   counts.create,
+      previewUpdated: counts.update,
+      previewSkipped: counts.skip,
+    });
+
+    insertAuditLog({
+      action: "ALFON_API_FETCH", entityType: "donors",
+      details: "pendingId=" + pendingId + " persons=" + persons.length,
+      workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+    });
+
+    res.json({ pendingId, counts, total: persons.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Alfon auto-sync (local agent → server) ───────────────────────────────────
 
 var alfonLimiter = rateLimit({

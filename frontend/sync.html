@@ -102,6 +102,15 @@
     .btn-approve:disabled { opacity: .5; cursor: default; }
     .btn-reject   { padding: 7px 16px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #721c24; cursor: pointer; font-size: .9em; }
     .pending-preview-wrap { margin-top: 14px; display: none; }
+
+    #apiFetchBtn {
+      background: #1565c0; color: #fff; border: none; border-radius: 8px;
+      padding: 12px 28px; font-size: 1.05em; cursor: pointer; font-weight: 600;
+    }
+    #apiFetchBtn:hover   { background: #0d47a1; }
+    #apiFetchBtn:disabled{ opacity: .5; cursor: default; }
+    .api-fetch-ok  { color: #155724; background: #d4edda; padding: 10px 14px; border-radius: 8px; }
+    .api-fetch-err { color: #721c24; background: #f8d7da; padding: 10px 14px; border-radius: 8px; }
   </style>
 </head>
 <body>
@@ -145,8 +154,21 @@
       <div id="pendingList"></div>
     </section>
 
+    <!-- API import section -->
+    <section class="panel" id="apiImportSection" style="border:2px solid #b0d4f0; background:#f0f8ff;">
+      <h2>📡 ייבוא ישיר מהאלפון (API)</h2>
+      <p style="color:#555;font-size:.93em;margin-bottom:16px;">
+        השרת יושך את רשימת האנשים ישירות מהאלפון, יכין Preview, ויחכה לאישורך.
+        שום דבר לא יתעדכן לפני שתאשר.
+      </p>
+      <button id="apiFetchBtn" onclick="fetchFromAlfonApi()">
+        📥 ייבוא עכשיו מהאלפון
+      </button>
+      <div id="apiFetchStatus" style="margin-top:12px;font-size:.93em;"></div>
+    </section>
+
     <section class="panel">
-      <h2>העלאת קובץ</h2>
+      <h2>העלאת קובץ CSV ידנית</h2>
       <p style="color:#666;margin-bottom:14px;font-size:.93em;">
         ייצא מהאלפון קובץ CSV (פורמט UTF-8 עם BOM) ובחר אותו כאן.
         לפני הביצוע תוצג תצוגה מקדימה עם כל השינויים.

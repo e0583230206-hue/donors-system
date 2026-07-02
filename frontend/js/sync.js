@@ -318,3 +318,45 @@ window.rejectPending = async function (id, btn) {
 loadPending();
 
 loadSyncLog();
+
+// ── Alfon API import ──────────────────────────────────────────────────────────
+
+async function fetchFromAlfonApi() {
+  var btn    = document.getElementById("apiFetchBtn");
+  var status = document.getElementById("apiFetchStatus");
+
+  btn.disabled  = true;
+  btn.innerHTML = "מושך נתונים מהאלפון… <span class='spinner'></span>";
+  status.innerHTML = "";
+
+  try {
+    var r = await apiFetch("/api/sync/alfon-api-fetch", { method: "POST", body: "{}" });
+    var data = await r.json().catch(function () { return {}; });
+
+    if (!r.ok) {
+      status.innerHTML = "<div class='api-fetch-err'>שגיאה: " + escSafe(data.error || r.status) + "</div>";
+      return;
+    }
+
+    var c = data.counts || {};
+    status.innerHTML =
+      "<div class='api-fetch-ok'>" +
+        "✅ נמשכו <strong>" + data.total + "</strong> אנשים מהאלפון — " +
+        "חדש: <strong>" + c.create + "</strong> | " +
+        "עדכון: <strong>" + c.update + "</strong> | " +
+        "ללא שינוי: <strong>" + c.unchanged + "</strong> | " +
+        "דלג: <strong>" + c.skip + "</strong>" +
+        "<br><span style='font-size:.9em;color:#333'>הסנכרון ממתין לאישורך בפאנל למטה ↓</span>" +
+      "</div>";
+
+    // refresh pending section so the new card appears immediately
+    await loadPending();
+    var sec = document.getElementById("pendingSection");
+    if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    status.innerHTML = "<div class='api-fetch-err'>שגיאת רשת: " + escSafe(e.message) + "</div>";
+  } finally {
+    btn.disabled  = false;
+    btn.innerHTML = "📥 ייבוא עכשיו מהאלפון";
+  }
+}
