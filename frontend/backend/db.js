@@ -396,6 +396,21 @@ function savePaymentInTransaction(callId, phone, amount, donorId, confirmationNu
   }
 }
 
+// ── Payments list (for CRM payments screen) ──────────────────────────────────
+
+function getPayments(limit) {
+  var lim = Math.min(Number(limit) || 500, 2000);
+  return db.prepare(`
+    SELECT p.id, p.callId, p.phone, p.donorId, p.amount, p.status, p.source,
+           p.confirmationNumber, p.createdAt, p.timestamp,
+           d.fullName AS donorName
+    FROM   payments p
+    LEFT JOIN donors d ON d.id = p.donorId
+    ORDER  BY p.id DESC
+    LIMIT  ?
+  `).all(lim);
+}
+
 // ── Debt update after IVR payment ────────────────────────────────────────────
 //
 // After Technoline confirms a successful charge, reduce the donor's open debts
@@ -769,6 +784,7 @@ module.exports = {
   findPaymentByCallId,
   savePaymentInTransaction,
   updateDonorDebtAfterPayment,
+  getPayments,
   // Logs
   insertCallLog,
   // Call Sessions

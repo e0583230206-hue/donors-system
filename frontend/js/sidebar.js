@@ -18,6 +18,20 @@ Database.whenReady(function () { updateSidebarCounts(); });
 function setupSidebarToggle() {
   var nav = document.querySelector(".sidebar nav");
 
+  // Inject payments link after ivr-monitor
+  if (nav && !nav.querySelector('a[href="payments.html"]')) {
+    var paymentsA = document.createElement("a");
+    paymentsA.href = "payments.html";
+    paymentsA.textContent = "💳 תשלומי IVR";
+    if (window.location.pathname.endsWith("payments.html")) paymentsA.className = "active";
+    var ivrAnchor = nav.querySelector('a[href="ivr-monitor.html"]');
+    if (ivrAnchor && ivrAnchor.nextSibling) {
+      nav.insertBefore(paymentsA, ivrAnchor.nextSibling);
+    } else {
+      nav.appendChild(paymentsA);
+    }
+  }
+
   // Inject softphone link (opens in new tab so it stays open while working)
   if (nav && !nav.querySelector('a[href="softphone.html"]')) {
     var phoneA = document.createElement("a");

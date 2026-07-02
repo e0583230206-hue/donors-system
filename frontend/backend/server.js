@@ -29,6 +29,7 @@ const {
   setAppState,
   backupDatabase,
   dbHealthCheck,
+  getPayments,
 } = require("./db");
 
 const {
@@ -366,6 +367,20 @@ app.post("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function
     next(err);
   }
 });
+
+// ── Payments list (CRM payments screen) ──────────────────────────────────────
+app.get(
+  "/api/payments",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var limit = Math.min(Number(req.query.limit) || 500, 2000);
+      res.json(getPayments(limit));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // ── IVR donations list ────────────────────────────────────────────────────────
 app.get(

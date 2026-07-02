@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>תשלומי IVR</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="images/סמל א בלאט גמרא.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
+        <span>א בלאט גמרא</span>
+        <small>ניהול תורמים</small>
+      </div>
+
+      <nav>
+        <a href="index.html">🏠 דף הבית</a>
+        <a href="donors.html">👤 תורמים</a>
+        <a href="debts.html">⚠️ חובות</a>
+        <a href="phone.html">↩️ הודעות לחזרה <span data-count="callbacks">0</span></a>
+        <a href="tasks.html">📋 משימות <span data-count="tasks">0</span></a>
+        <a href="reminders.html">🔔 תזכורות <span data-count="reminders">0</span></a>
+        <a href="reports.html">📊 דוחות</a>
+        <a href="calendar.html">📅 לוח שנה</a>
+        <a href="logs.html">🕒 יומן מערכת</a>
+        <a href="ivr-monitor.html">📺 מוניטור IVR</a>
+        <a class="active" href="payments.html">💳 תשלומי IVR</a>
+        <a href="approvals.html">✅ אישור חיובים</a>
+        <a href="settings.html">⚙️ הגדרות</a>
+        <a href="README.html">📖 מדריך משתמש</a>
+      </nav>
+      <button onclick="logout()" class="logout-btn">🚪 יציאה</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1>תשלומי IVR</h1>
+          <p>כל התשלומים שבוצעו דרך מערכת ה-IVR</p>
+        </div>
+        <button class="primary-btn" onclick="loadPayments()">🔄 רענן</button>
+      </header>
+
+      <section class="stats-grid">
+        <div class="stat-card">
+          <h3>💳 סך תשלומים</h3>
+          <strong id="statTotal">0</strong>
+          <p>מספר עסקאות</p>
+        </div>
+        <div class="stat-card success">
+          <h3>💰 סכום כולל</h3>
+          <strong id="statAmount">₪0</strong>
+          <p>סה"כ שנגבה</p>
+        </div>
+        <div class="stat-card">
+          <h3>📅 תשלומים היום</h3>
+          <strong id="statTodayCount">0</strong>
+          <p>עסקאות היום</p>
+        </div>
+        <div class="stat-card success">
+          <h3>💵 סכום היום</h3>
+          <strong id="statTodayAmount">₪0</strong>
+          <p>גביה היום</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>🔍 חיפוש וסינון</h2>
+        <div class="form-grid">
+          <input
+            id="searchInput"
+            type="text"
+            placeholder="חפש לפי שם, טלפון או מספר אישור"
+          />
+          <input id="dateFrom" type="date" title="מתאריך" />
+          <input id="dateTo"   type="date" title="עד תאריך" />
+          <button class="secondary-btn" onclick="clearFilters()">נקה סינון</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>📋 רשימת תשלומים</h2>
+        <div id="loadingMsg" style="padding:1rem;color:#888;display:none;">טוען...</div>
+        <div id="errorMsg"   style="padding:1rem;color:#c00;display:none;"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>תאריך ושעה</th>
+                <th>שם תורם</th>
+                <th>טלפון</th>
+                <th>סכום</th>
+                <th>מספר אישור</th>
+                <th>מקור</th>
+                <th>callId</th>
+                <th>סטטוס</th>
+              </tr>
+            </thead>
+            <tbody id="paymentsTable"></tbody>
+          </table>
+        </div>
+        <div id="paymentsCount" style="padding:.5rem 0;color:#666;font-size:.9em;"></div>
+      </section>
+    </main>
+
+    <script src="js/auth.js"></script>
+    <script src="js/database.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/payments.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/notifications.js"></script>
+  </body>
+</html>
