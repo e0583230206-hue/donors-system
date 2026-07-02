@@ -452,27 +452,37 @@ function renderDetails() {
   donorNameTitle.innerText = donor.fullName;
   donorSubTitle.innerText = "כרטיס תורם #" + donor.id;
 
-  // Extra phones (phone2/phone3/phone4)
+  // Build display name with honorifics
+  var displayName = [donor.titleBefore, donor.fullName, donor.titleAfter]
+    .filter(Boolean).join(" ");
+
+  // Extra phones
   var extraPhones = [donor.phone2, donor.phone3, donor.phone4]
     .filter(function(p) { return p && p.trim(); });
   var extraPhonesHtml = extraPhones.map(function(p, i) {
     return `<p><strong>טלפון ${i + 2}:</strong> <span dir="ltr">${escapeHTML(p)}</span></p>`;
   }).join("");
 
-  // Alfon section (show only if any alfon field exists)
-  var hasAlfonData = donor.externalId || donor.idNumber || donor.firstName || donor.lastName;
+  // Alfon data section
+  var hasAlfonData = donor.externalId || donor.idNumber || donor.alfonCategory || donor.fatherName;
   var alfonHtml = hasAlfonData ? `
-    <div style="margin-top:12px;padding:10px 12px;background:#f0f8ff;border-radius:8px;border:1px solid #b8d4e8">
-      <p style="font-weight:700;margin:0 0 6px;font-size:.9em;color:#1565c0">🔗 פרטי אלפון</p>
-      ${donor.firstName || donor.lastName
-        ? `<p style="font-size:.9em"><strong>שם פרטי:</strong> ${escapeHTML(donor.firstName || "")} &nbsp;<strong>שם משפחה:</strong> ${escapeHTML(donor.lastName || "")}</p>`
-        : ""}
-      ${donor.idNumber  ? `<p style="font-size:.9em"><strong>ת.ז.:</strong> ${escapeHTML(donor.idNumber)}</p>` : ""}
-      ${donor.externalId ? `<p style="font-size:.9em;color:#888"><strong>מ.ס. אלפון:</strong> ${escapeHTML(donor.externalId)}</p>` : ""}
+    <div style="margin-top:14px;padding:10px 14px;background:#f0f8ff;border-radius:8px;border:1px solid #b8d4e8">
+      <p style="font-weight:700;margin:0 0 8px;font-size:.9em;color:#1565c0">🔗 נתוני אלפון</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:.88em">
+        ${donor.firstName ? `<p style="margin:2px 0"><strong>שם פרטי:</strong> ${escapeHTML(donor.firstName)}</p>` : ""}
+        ${donor.lastName  ? `<p style="margin:2px 0"><strong>שם משפחה:</strong> ${escapeHTML(donor.lastName)}</p>` : ""}
+        ${donor.titleBefore ? `<p style="margin:2px 0"><strong>תואר:</strong> ${escapeHTML(donor.titleBefore)}</p>` : ""}
+        ${donor.titleAfter  ? `<p style="margin:2px 0"><strong>סיומת:</strong> ${escapeHTML(donor.titleAfter)}</p>` : ""}
+        ${donor.idNumber    ? `<p style="margin:2px 0"><strong>ת.ז.:</strong> ${escapeHTML(donor.idNumber)}</p>` : ""}
+        ${donor.fatherName  ? `<p style="margin:2px 0"><strong>שם אב:</strong> ${escapeHTML(donor.fatherName)}</p>` : ""}
+        ${donor.alfonCategory ? `<p style="margin:2px 0"><strong>קטגוריה:</strong> ${escapeHTML(donor.alfonCategory)}</p>` : ""}
+        ${donor.alfonSerial ? `<p style="margin:2px 0;color:#888"><strong>מ.ס.:</strong> ${escapeHTML(donor.alfonSerial)}</p>` : ""}
+        ${donor.externalId  ? `<p style="margin:2px 0;color:#888"><strong>ID אלפון:</strong> ${escapeHTML(donor.externalId)}</p>` : ""}
+      </div>
     </div>` : "";
 
   donorDetails.innerHTML = `
-    <p><strong>שם:</strong> ${escapeHTML(donor.fullName)}</p>
+    <p><strong>שם:</strong> ${escapeHTML(displayName || donor.fullName)}</p>
     <p><strong>טלפון ראשי (IVR):</strong> <span dir="ltr">${escapeHTML(donor.phone)}</span></p>
     ${extraPhonesHtml}
     <p><strong>עיר:</strong> ${escapeHTML(donor.city || "לא הוזן")}</p>

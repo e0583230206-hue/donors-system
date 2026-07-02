@@ -68,10 +68,15 @@ function parseCsv(text) {
 
     rows.push({
       externalId:   (f[idx["מספר סידורי"]]  || "").trim(),
+      alfonSerial:  (f[idx["מ.ס."]]          || "").trim(),
       firstName:    firstName,
       lastName:     lastName,
       fullName:     fullName,
       idNumber:     (f[idx["תעודת זהות"]]   || "").trim(),
+      titleBefore:  (f[idx["תואר לפני"]]    || "").trim(),
+      titleAfter:   (f[idx["תואר לאחר"]]    || "").trim(),
+      fatherName:   (f[idx["שם אב"]]         || "").trim(),
+      alfonCategory:(f[idx["קטגוריה"]]       || "").trim(),
       city:         (f[idx["ישוב"]]          || "").trim(),
       address:      addrParts.join(" "),
       neighborhood: (f[idx["שכונה"]]         || "").trim(),
@@ -140,17 +145,23 @@ function buildPreview(csvRows, existingDonors) {
         .forEach(function (p) { existingPhones[p] = true; });
 
       var newPhones    = rowPhones.filter(function (p) { return !existingPhones[p]; });
-      var nameChanged  = !!(row.fullName && row.fullName !== match.fullName);
-      var firstNameChg = !!(row.firstName && row.firstName !== match.firstName);
-      var lastNameChg  = !!(row.lastName  && row.lastName  !== match.lastName);
-      var idNumChanged = !!(row.idNumber  && row.idNumber  !== match.idNumber);
+      var primaryPhoneChg = !!(rowPhones[0] && rowPhones[0] !== normPhone(match.phone));
+      var nameChanged  = !!(row.fullName    && row.fullName    !== match.fullName);
+      var firstNameChg = !!(row.firstName   && row.firstName   !== match.firstName);
+      var lastNameChg  = !!(row.lastName    && row.lastName    !== match.lastName);
+      var idNumChanged = !!(row.idNumber    && row.idNumber    !== match.idNumber);
+      var titleBefChg  = !!(row.titleBefore && row.titleBefore !== match.titleBefore);
+      var titleAftChg  = !!(row.titleAfter  && row.titleAfter  !== match.titleAfter);
+      var fatherChg    = !!(row.fatherName  && row.fatherName  !== match.fatherName);
+      var categoryChg  = !!(row.alfonCategory && row.alfonCategory !== match.alfonCategory);
       var effectiveCity = (row.city && !/^\d+$/.test(row.city)) ? row.city : "";
       var cityChanged   = !!(effectiveCity && effectiveCity !== match.city);
-      var addrChanged   = !!(row.address && row.address !== match.address);
+      var addrChanged   = !!(row.address    && row.address    !== match.address);
       var neighChanged  = !!(row.neighborhood && row.neighborhood !== match.neighborhood);
       var extIdAdded    = !!(row.externalId && !match.externalId);
 
-      var hasChanges = nameChanged || firstNameChg || lastNameChg || idNumChanged ||
+      var hasChanges = primaryPhoneChg || nameChanged || firstNameChg || lastNameChg ||
+                       idNumChanged || titleBefChg || titleAftChg || fatherChg || categoryChg ||
                        cityChanged || addrChanged || neighChanged ||
                        newPhones.length > 0 || extIdAdded;
 
@@ -158,7 +169,9 @@ function buildPreview(csvRows, existingDonors) {
         action:       hasChanges ? "update" : "unchanged",
         existingId:   match.id,
         existingName: match.fullName,
-        changes:      { nameChanged, firstNameChg, lastNameChg, idNumChanged,
+        existingPhone:match.phone,
+        changes:      { primaryPhoneChg, nameChanged, firstNameChg, lastNameChg,
+                        idNumChanged, titleBefChg, titleAftChg, fatherChg, categoryChg,
                         cityChanged, addrChanged, neighChanged, newPhones, extIdAdded },
       }));
     } else {
@@ -195,20 +208,25 @@ function applySync(preview, existingDonors, upsertDonorFn) {
         var primaryPhone = rowPhones[0];
 
         var newDonor = {
-          id:          nextId++,
-          externalId:  row.externalId  || "",
-          idNumber:    row.idNumber    || "",
-          firstName:   row.firstName   || "",
-          lastName:    row.lastName    || "",
-          fullName:    row.fullName,
-          phone:       primaryPhone,
-          phone2:      rowPhones[1] || "",
-          phone3:      rowPhones[2] || "",
-          phone4:      rowPhones[3] || "",
-          city:        row.city        || "",
-          address:     row.address     || "",
-          neighborhood:row.neighborhood|| "",
-          status:      "פעיל",
+          id:           nextId++,
+          externalId:   row.externalId    || "",
+          alfonSerial:  row.alfonSerial   || "",
+          idNumber:     row.idNumber      || "",
+          titleBefore:  row.titleBefore   || "",
+          firstName:    row.firstName     || "",
+          lastName:     row.lastName      || "",
+          titleAfter:   row.titleAfter    || "",
+          fatherName:   row.fatherName    || "",
+          alfonCategory:row.alfonCategory || "",
+          fullName:     row.fullName,
+          phone:        primaryPhone,
+          phone2:       rowPhones[1] || "",
+          phone3:       rowPhones[2] || "",
+          phone4:       rowPhones[3] || "",
+          city:         row.city        || "",
+          address:      row.address     || "",
+          neighborhood: row.neighborhood|| "",
+          status:       "פעיל",
           notes:       "",
           donations:   [],
           debts:       [],
@@ -230,29 +248,50 @@ function applySync(preview, existingDonors, upsertDonorFn) {
         var donor = donorById[row.existingId];
         if (!donor) { failed++; return; }
 
-        // Update contact fields (never touch donations/debts/notes/logs)
-        if (row.idNumber)   donor.idNumber   = row.idNumber;
-        if (row.firstName)  donor.firstName  = row.firstName;
-        if (row.lastName)   donor.lastName   = row.lastName;
-        if (row.fullName)   donor.fullName   = row.fullName;
+        // Update all personal fields from alfon (never touch financial/notes/history)
+        if (row.externalId)    donor.externalId    = row.externalId;
+        if (row.alfonSerial)   donor.alfonSerial   = row.alfonSerial;
+        if (row.idNumber)      donor.idNumber      = row.idNumber;
+        if (row.titleBefore)   donor.titleBefore   = row.titleBefore;
+        if (row.firstName)     donor.firstName     = row.firstName;
+        if (row.lastName)      donor.lastName      = row.lastName;
+        if (row.titleAfter)    donor.titleAfter    = row.titleAfter;
+        if (row.fatherName)    donor.fatherName    = row.fatherName;
+        if (row.alfonCategory) donor.alfonCategory = row.alfonCategory;
+        if (row.fullName)      donor.fullName      = row.fullName;
         if (row.city && !/^\d+$/.test(row.city)) donor.city = row.city;
-        if (row.address)      donor.address      = row.address;
-        if (row.neighborhood) donor.neighborhood = row.neighborhood;
-        if (row.externalId)   donor.externalId   = row.externalId;
+        if (row.address)       donor.address       = row.address;
+        if (row.neighborhood)  donor.neighborhood  = row.neighborhood;
 
-        // Merge phones — never remove existing ones
+        // Phone update: alfon primary phone becomes system primary
+        var alfonPrimary = normPhone(row.phone1);
+        if (alfonPrimary) {
+          var currentPrimary = normPhone(donor.phone);
+          if (alfonPrimary !== currentPrimary) {
+            // Preserve old primary in extra slot if not already stored
+            var storedNorms = [donor.phone2, donor.phone3, donor.phone4].map(normPhone).filter(Boolean);
+            if (currentPrimary && storedNorms.indexOf(currentPrimary) === -1) {
+              if (!normPhone(donor.phone2))      donor.phone2 = donor.phone;
+              else if (!normPhone(donor.phone3)) donor.phone3 = donor.phone;
+              else if (!normPhone(donor.phone4)) donor.phone4 = donor.phone;
+            }
+            donor.phone = row.phone1; // alfon primary → system primary (IVR)
+          }
+        }
+
+        // Merge remaining alfon phones into extra slots (never remove existing)
         var existingPhoneSet = {};
         [donor.phone, donor.phone2, donor.phone3, donor.phone4]
           .map(normPhone).filter(Boolean)
           .forEach(function (p) { existingPhoneSet[p] = true; });
 
-        [row.phone1, row.phone2, row.phone3, row.phone4].forEach(function (phone) {
+        [row.phone2, row.phone3, row.phone4].forEach(function (phone) {
           var n = normPhone(phone);
           if (!n || existingPhoneSet[n]) return;
           existingPhoneSet[n] = true;
-          if (!donor.phone2) donor.phone2 = phone;
-          else if (!donor.phone3) donor.phone3 = phone;
-          else if (!donor.phone4) donor.phone4 = phone;
+          if (!normPhone(donor.phone2))      donor.phone2 = phone;
+          else if (!normPhone(donor.phone3)) donor.phone3 = phone;
+          else if (!normPhone(donor.phone4)) donor.phone4 = phone;
         });
 
         donor.updatedAt = new Date().toISOString();

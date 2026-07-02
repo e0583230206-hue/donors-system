@@ -849,8 +849,9 @@ function collectPersonPhones(person) {
 
 function personsJsonToCsv(persons, cityMap) {
   var headers = [
-    "מספר סידורי","שם פרטי","שם משפחה","תעודת זהות","ישוב",
-    "רחוב","מספר בית","דירה","כניסה","שכונה",
+    "מספר סידורי","מ.ס.","שם פרטי","שם משפחה","תעודת זהות",
+    "תואר לפני","תואר לאחר","שם אב","קטגוריה",
+    "ישוב","שכונה","רחוב","מספר בית","דירה","כניסה",
     "פלאפון א","פלאפון ב","טלפון ביתי","פלאפון נוסף",
   ];
   var lines = [headers.map(function (h) { return '"' + h + '"'; }).join(",")];
@@ -858,17 +859,21 @@ function personsJsonToCsv(persons, cityMap) {
     var phones = collectPersonPhones(p);
     var row = [
       p.person_id    || "",
+      p.serial       || "",
       p.first_name   || "",
       p.last_name    || "",
-      p.id_number    || "",                                              // תעודת זהות
-      resolveCity(p, cityMap),                                           // Hebrew name from city_description
+      p.id_number    || "",
+      p.before_name  || "",
+      p.after_name   || "",
+      p.father_name  || "",
+      p.category     || "",
+      resolveCity(p, cityMap),
+      (p.neighborhood_description && !/^\d+$/.test(p.neighborhood_description))
+        ? p.neighborhood_description : "",
       p.street       || "",
       p.house_number || "",
       p.house_in_building || p.apartment || "",
       p.enter        || p.entrance     || "",
-      (p.neighborhood_description && !/^\d+$/.test(p.neighborhood_description))
-        ? p.neighborhood_description
-        : "",                                                            // Hebrew neighborhood name
       phones[0]      || "",
       phones[1]      || "",
       phones[2]      || "",
