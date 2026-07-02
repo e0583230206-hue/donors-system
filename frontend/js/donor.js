@@ -339,7 +339,7 @@ function generateDonorLetterContent() {
       </div>
 
       <div style="margin-bottom:25px;font-size:14px;">
-        <p style="margin:6px 0;color:black;"><strong>שם התורם:</strong> ${escapeHTML(donor.fullName || '---')}</p>
+        <p style="margin:6px 0;color:black;"><strong>שם התורם:</strong> ${escapeHTML([donor.titleBefore, donor.fullName, donor.titleAfter].filter(Boolean).join(' ') || '---')}</p>
         <p style="margin:6px 0;color:black;"><strong>טלפון:</strong> ${escapeHTML(donor.phone || '---')}</p>
         <p style="margin:6px 0;color:black;"><strong>עיר:</strong> ${escapeHTML(donor.city || '---')}</p>
         <p style="margin:6px 0;color:black;"><strong>כתובת:</strong> ${escapeHTML(donor.address || '---')}</p>
