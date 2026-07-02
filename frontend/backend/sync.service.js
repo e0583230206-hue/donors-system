@@ -137,9 +137,11 @@ function buildPreview(csvRows, existingDonors) {
         .forEach(function (p) { existingPhones[p] = true; });
 
       var newPhones    = rowPhones.filter(function (p) { return !existingPhones[p]; });
-      var nameChanged  = !!(row.fullName  && row.fullName  !== match.fullName);
-      var cityChanged  = !!(row.city      && row.city      !== match.city);
-      var addrChanged  = !!(row.address   && row.address   !== match.address);
+      var nameChanged  = !!(row.fullName && row.fullName !== match.fullName);
+      // Never treat a raw numeric ID as a valid city name
+      var effectiveCity = (row.city && !/^\d+$/.test(row.city)) ? row.city : "";
+      var cityChanged   = !!(effectiveCity && effectiveCity !== match.city);
+      var addrChanged   = !!(row.address && row.address !== match.address);
       var extIdAdded   = !!(row.externalId && !match.externalId);
 
       var hasChanges = nameChanged || cityChanged || addrChanged || newPhones.length > 0 || extIdAdded;
@@ -217,8 +219,9 @@ function applySync(preview, existingDonors, upsertDonorFn) {
         if (!donor) { failed++; return; }
 
         // Update contact fields (never touch donations/debts/notes/logs)
-        if (row.fullName)     donor.fullName     = row.fullName;
-        if (row.city)         donor.city         = row.city;
+        if (row.fullName) donor.fullName = row.fullName;
+        // Never overwrite with a raw numeric city ID
+        if (row.city && !/^\d+$/.test(row.city)) donor.city = row.city;
         if (row.address)      donor.address      = row.address;
         if (row.neighborhood) donor.neighborhood = row.neighborhood;
         if (row.externalId)   donor.externalId   = row.externalId;
@@ -250,4 +253,4 @@ function applySync(preview, existingDonors, upsertDonorFn) {
   return { added: added, updated: updated, skipped: skipped, failed: failed, donors: newDonors };
 }
 
-module.exports = { parseCsv, buildPreview, applySync };
+module.exports = { parseCsv, buildPreview, applySync, normPhone };

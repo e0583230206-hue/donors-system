@@ -339,15 +339,48 @@ async function fetchFromAlfonApi() {
     }
 
     var c = data.counts || {};
+
+    // ── City report ──────────────────────────────────────────────────────
+    var cityReport   = data.cityReport   || {};
     var unknownCities = data.unknownCityIds || [];
-    var cityWarning = "";
-    if (unknownCities.length) {
-      cityWarning =
-        "<div style='margin-top:8px;padding:8px 12px;background:#fff3cd;color:#856404;border-radius:6px;font-size:.88em'>" +
-        "⚠️ מזהי ערים לא מוכרים (עיר לא תיכתב עבורם): <strong>" + escSafe(unknownCities.join(", ")) + "</strong>" +
-        "<br>הוסף אותם ל-<code>backend/city_map.js</code> כדי לפתור." +
-        "</div>";
+    var cityHtml = "";
+
+    var cityIds = Object.keys(cityReport).sort(function (a, b) {
+      return cityReport[b].count - cityReport[a].count;
+    });
+
+    if (cityIds.length) {
+      var rows = cityIds.map(function (id) {
+        var info   = cityReport[id];
+        var mapped = info.mapped
+          ? "<span style='color:#155724;font-weight:600'>" + escSafe(info.mapped) + "</span>"
+          : "<span style='color:#721c24;font-weight:600'>⚠ לא ידוע</span>";
+        return "<tr><td style='padding:3px 8px'>" + escSafe(id) + "</td>" +
+               "<td style='padding:3px 8px'>" + mapped + "</td>" +
+               "<td style='padding:3px 8px;color:#888'>" + info.count + " רשומות</td></tr>";
+      }).join("");
+
+      cityHtml =
+        "<details style='margin-top:10px'><summary style='cursor:pointer;font-size:.9em;color:#555'>" +
+        "🏙 מיפוי ערים (" + cityIds.length + " ערים" +
+        (unknownCities.length ? " — <span style='color:#856404'>" + unknownCities.length + " לא ידועות</span>" : "") +
+        ")</summary>" +
+        "<table style='font-size:.85em;margin-top:8px;border-collapse:collapse'>" +
+        "<thead><tr><th style='text-align:right;padding:3px 8px;border-bottom:1px solid #ddd'>ID</th>" +
+        "<th style='text-align:right;padding:3px 8px;border-bottom:1px solid #ddd'>שם עיר</th>" +
+        "<th style='text-align:right;padding:3px 8px;border-bottom:1px solid #ddd'>כמות</th></tr></thead>" +
+        "<tbody>" + rows + "</tbody></table>";
+
+      if (unknownCities.length) {
+        cityHtml +=
+          "<div style='margin-top:8px;font-size:.85em;color:#856404'>" +
+          "הוסף למיפוי ב-<code>backend/city_map.js</code>: " +
+          unknownCities.map(function (id) { return '"' + id + '": "שם עיר"'; }).join(", ") +
+          "</div>";
+      }
+      cityHtml += "</details>";
     }
+
     status.innerHTML =
       "<div class='api-fetch-ok'>" +
         "✅ נמשכו <strong>" + data.total + "</strong> אנשים מהאלפון — " +
@@ -355,10 +388,9 @@ async function fetchFromAlfonApi() {
         "עדכון: <strong>" + c.update + "</strong> | " +
         "ללא שינוי: <strong>" + c.unchanged + "</strong> | " +
         "דלג: <strong>" + c.skip + "</strong>" +
-        "<br><span style='font-size:.9em;color:#333'>הסנכרון ממתין לאישורך בפאנל למטה ↓</span>" +
-      "</div>" + cityWarning;
+        "<br><small style='color:#333'>הסנכרון ממתין לאישורך בפאנל למטה ↓</small>" +
+      "</div>" + cityHtml;
 
-    // refresh pending section so the new card appears immediately
     await loadPending();
     var sec = document.getElementById("pendingSection");
     if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });

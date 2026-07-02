@@ -43,7 +43,7 @@ const {
   normalizePhoneForDb,
 } = require("./db");
 
-const { parseCsv, buildPreview, applySync } = require("./sync.service");
+const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
 const CITY_MAP = require("./city_map");
 
 const {
@@ -778,20 +778,69 @@ app.get("/api/sync/logs", requireRole([ROLES.ADMIN]), function (req, res) {
 var ALFON_API_URL = (process.env.ALFON_API_URL || "").trim() ||
   "https://utilitiesphone.com/persons/dashboard/data.php?type_data=get_persons&filter=approval=1";
 
+// Returns raw city ID string (digits only) or "" for non-numeric / missing
+function getCityRawId(p) {
+  // city might be an object {id, name}, a number, or a string
+  var raw = "";
+  if (p.city !== null && p.city !== undefined) {
+    if (typeof p.city === "object") {
+      raw = String(p.city.id || p.city.city_id || "");
+    } else {
+      raw = String(p.city);
+    }
+  } else if (p.city_id !== null && p.city_id !== undefined) {
+    raw = String(p.city_id);
+  }
+  raw = raw.trim();
+  return /^\d+$/.test(raw) && raw !== "0" ? raw : "";
+}
+
+// Returns resolved Hebrew city name, or "" if unknown (preserves existing DB value)
 function resolveCity(p) {
-  // Prefer an explicit text field if the API provides one
-  var textFields = ["city_name", "city_title", "city_label", "city_text"];
-  for (var i = 0; i < textFields.length; i++) {
-    var v = String(p[textFields[i]] || "").trim();
+  // 1. Explicit text fields (some APIs provide both id and name)
+  var textCandidates = ["city_name", "city_title", "city_label", "city_text"];
+  for (var i = 0; i < textCandidates.length; i++) {
+    var v = String(p[textCandidates[i]] || "").trim();
     if (v && !/^\d+$/.test(v)) return v;
   }
-  // Fall back to the main city field
-  var cityVal = String(p.city || p.city_id || "").trim();
-  if (!cityVal) return "";
-  // It's already a Hebrew name
-  if (!/^\d+$/.test(cityVal)) return cityVal;
-  // It's a numeric ID — look up in map; return "" if unknown (preserves existing DB value)
-  return CITY_MAP[cityVal] || "";
+  // 2. city field as an object with name
+  if (p.city && typeof p.city === "object") {
+    var nameFields = ["name", "title", "label", "city_name"];
+    for (var j = 0; j < nameFields.length; j++) {
+      var nv = String(p.city[nameFields[j]] || "").trim();
+      if (nv && !/^\d+$/.test(nv)) return nv;
+    }
+  }
+  // 3. Numeric ID → look up in map
+  var rawId = getCityRawId(p);
+  if (rawId) return CITY_MAP[rawId] || ""; // "" = unknown → won't overwrite existing city
+  // 4. city field is already a non-numeric name
+  if (p.city && typeof p.city === "string" && !/^\d+$/.test(p.city.trim())) {
+    return p.city.trim();
+  }
+  return "";
+}
+
+// Collects all unique normalized phones from all phone-like fields
+var PHONE_FIELDS_PRIORITY = [
+  "telephone", "phone", "mobile",
+  "phone2", "phone3", "phone4",
+  "mobile2", "mobile3",
+  "father_phone", "mother_phone",
+];
+function collectPersonPhones(person) {
+  var candidates = PHONE_FIELDS_PRIORITY.slice();
+  // Auto-detect any additional field whose name contains phone/tel/mobile
+  Object.keys(person).forEach(function (k) {
+    if (/phone|tel|mobile/i.test(k) && !candidates.includes(k)) candidates.push(k);
+  });
+  var seen = {};
+  var phones = [];
+  candidates.forEach(function (field) {
+    var n = normPhone(String(person[field] || ""));
+    if (n && !seen[n]) { seen[n] = true; phones.push(n); }
+  });
+  return phones; // normalized, deduped, in priority order
 }
 
 function personsJsonToCsv(persons) {
@@ -802,20 +851,21 @@ function personsJsonToCsv(persons) {
   ];
   var lines = [headers.map(function (h) { return '"' + h + '"'; }).join(",")];
   (Array.isArray(persons) ? persons : []).forEach(function (p) {
+    var phones = collectPersonPhones(p);
     var row = [
       p.person_id    || "",
       p.first_name   || "",
       p.last_name    || "",
-      resolveCity(p),           // "" when ID unknown → won't overwrite existing city
+      resolveCity(p),      // "" when ID unknown → won't overwrite existing city
       p.street       || "",
       p.house_number || "",
       p.apartment    || "",
       p.entrance     || "",
       p.neighborhood || "",
-      p.telephone    || "",
-      p.phone2       || "",
-      p.phone3       || "",
-      p.phone4       || "",
+      phones[0]      || "", // פלאפון א
+      phones[1]      || "", // פלאפון ב
+      phones[2]      || "", // טלפון ביתי
+      phones[3]      || "", // פלאפון נוסף
     ];
     lines.push(row.map(function (v) {
       return '"' + String(v).replace(/"/g, '""') + '"';
@@ -836,14 +886,15 @@ app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function
     }
     if (!Array.isArray(persons)) return res.status(502).json({ error: "API לא החזיר מערך" });
 
-    // Collect city IDs that have no mapping (for admin feedback)
-    var unknownCityIds = [];
+    // Build city report: rawId → { mapped: name|null, count }
+    var cityReport = {};
     persons.forEach(function (p) {
-      var v = String(p.city || p.city_id || "").trim();
-      if (v && /^\d+$/.test(v) && !CITY_MAP[v] && !unknownCityIds.includes(v)) {
-        unknownCityIds.push(v);
-      }
+      var rawId = getCityRawId(p);
+      if (!rawId) return;
+      if (!cityReport[rawId]) cityReport[rawId] = { mapped: CITY_MAP[rawId] || null, count: 0 };
+      cityReport[rawId].count++;
     });
+    var unknownCityIds = Object.keys(cityReport).filter(function (id) { return !cityReport[id].mapped; });
     if (unknownCityIds.length) {
       console.warn("[alfon-api] city IDs without mapping:", unknownCityIds.join(", "));
     }
@@ -876,7 +927,7 @@ app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function
       workerId: req.user.id, workerName: req.user.name, ip: req.ip,
     });
 
-    res.json({ pendingId, counts, total: persons.length, unknownCityIds });
+    res.json({ pendingId, counts, total: persons.length, unknownCityIds, cityReport });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
