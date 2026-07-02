@@ -44,6 +44,7 @@ const {
 } = require("./db");
 
 const { parseCsv, buildPreview, applySync } = require("./sync.service");
+const CITY_MAP = require("./city_map");
 
 const {
   ROLES,
@@ -777,6 +778,22 @@ app.get("/api/sync/logs", requireRole([ROLES.ADMIN]), function (req, res) {
 var ALFON_API_URL = (process.env.ALFON_API_URL || "").trim() ||
   "https://utilitiesphone.com/persons/dashboard/data.php?type_data=get_persons&filter=approval=1";
 
+function resolveCity(p) {
+  // Prefer an explicit text field if the API provides one
+  var textFields = ["city_name", "city_title", "city_label", "city_text"];
+  for (var i = 0; i < textFields.length; i++) {
+    var v = String(p[textFields[i]] || "").trim();
+    if (v && !/^\d+$/.test(v)) return v;
+  }
+  // Fall back to the main city field
+  var cityVal = String(p.city || p.city_id || "").trim();
+  if (!cityVal) return "";
+  // It's already a Hebrew name
+  if (!/^\d+$/.test(cityVal)) return cityVal;
+  // It's a numeric ID — look up in map; return "" if unknown (preserves existing DB value)
+  return CITY_MAP[cityVal] || "";
+}
+
 function personsJsonToCsv(persons) {
   var headers = [
     "מספר סידורי","שם פרטי","שם משפחה","ישוב",
@@ -786,19 +803,19 @@ function personsJsonToCsv(persons) {
   var lines = [headers.map(function (h) { return '"' + h + '"'; }).join(",")];
   (Array.isArray(persons) ? persons : []).forEach(function (p) {
     var row = [
-      p.person_id   || "",
-      p.first_name  || "",
-      p.last_name   || "",
-      p.city        || "",
-      p.street      || "",
-      p.house_number|| "",
-      p.apartment   || "",
-      p.entrance    || "",
-      p.neighborhood|| "",
-      p.telephone   || "",
-      p.phone2      || "",
-      p.phone3      || "",
-      p.phone4      || "",
+      p.person_id    || "",
+      p.first_name   || "",
+      p.last_name    || "",
+      resolveCity(p),           // "" when ID unknown → won't overwrite existing city
+      p.street       || "",
+      p.house_number || "",
+      p.apartment    || "",
+      p.entrance     || "",
+      p.neighborhood || "",
+      p.telephone    || "",
+      p.phone2       || "",
+      p.phone3       || "",
+      p.phone4       || "",
     ];
     lines.push(row.map(function (v) {
       return '"' + String(v).replace(/"/g, '""') + '"';
@@ -818,6 +835,18 @@ app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function
       persons = persons.data || persons.persons || persons.results || Object.values(persons);
     }
     if (!Array.isArray(persons)) return res.status(502).json({ error: "API לא החזיר מערך" });
+
+    // Collect city IDs that have no mapping (for admin feedback)
+    var unknownCityIds = [];
+    persons.forEach(function (p) {
+      var v = String(p.city || p.city_id || "").trim();
+      if (v && /^\d+$/.test(v) && !CITY_MAP[v] && !unknownCityIds.includes(v)) {
+        unknownCityIds.push(v);
+      }
+    });
+    if (unknownCityIds.length) {
+      console.warn("[alfon-api] city IDs without mapping:", unknownCityIds.join(", "));
+    }
 
     var csvContent = personsJsonToCsv(persons);
     var filename   = "alfon_api_" + new Date().toISOString().slice(0, 10) + ".csv";
@@ -847,7 +876,7 @@ app.post("/api/sync/alfon-api-fetch", requireRole([ROLES.ADMIN]), async function
       workerId: req.user.id, workerName: req.user.name, ip: req.ip,
     });
 
-    res.json({ pendingId, counts, total: persons.length });
+    res.json({ pendingId, counts, total: persons.length, unknownCityIds });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

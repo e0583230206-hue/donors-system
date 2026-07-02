@@ -339,6 +339,15 @@ async function fetchFromAlfonApi() {
     }
 
     var c = data.counts || {};
+    var unknownCities = data.unknownCityIds || [];
+    var cityWarning = "";
+    if (unknownCities.length) {
+      cityWarning =
+        "<div style='margin-top:8px;padding:8px 12px;background:#fff3cd;color:#856404;border-radius:6px;font-size:.88em'>" +
+        "⚠️ מזהי ערים לא מוכרים (עיר לא תיכתב עבורם): <strong>" + escSafe(unknownCities.join(", ")) + "</strong>" +
+        "<br>הוסף אותם ל-<code>backend/city_map.js</code> כדי לפתור." +
+        "</div>";
+    }
     status.innerHTML =
       "<div class='api-fetch-ok'>" +
         "✅ נמשכו <strong>" + data.total + "</strong> אנשים מהאלפון — " +
@@ -347,7 +356,7 @@ async function fetchFromAlfonApi() {
         "ללא שינוי: <strong>" + c.unchanged + "</strong> | " +
         "דלג: <strong>" + c.skip + "</strong>" +
         "<br><span style='font-size:.9em;color:#333'>הסנכרון ממתין לאישורך בפאנל למטה ↓</span>" +
-      "</div>";
+      "</div>" + cityWarning;
 
     // refresh pending section so the new card appears immediately
     await loadPending();
