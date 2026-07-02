@@ -38,10 +38,13 @@ function setupSidebarToggle() {
     phoneA.href = "softphone.html";
     phoneA.target = "_blank";
     phoneA.textContent = "📞 טלפון רשת";
-    // Pass auth token via localStorage so the new tab can authenticate itself
+    // Pass auth token + user to localStorage so the new tab can authenticate itself
+    // (new tabs don't share sessionStorage, so we bridge via localStorage).
     phoneA.addEventListener("click", function () {
       var token = sessionStorage.getItem("authToken") || "";
+      var user  = sessionStorage.getItem("currentUser") || "";
       if (token) localStorage.setItem("_sp_token", token);
+      if (user)  localStorage.setItem("_sp_user",  user);
     });
     var anchor = nav.querySelector('a[href="ivr-monitor.html"]') || null;
     if (anchor && anchor.nextSibling) {
