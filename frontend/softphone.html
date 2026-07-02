@@ -443,7 +443,18 @@ footer.foot kbd{
 <script>if(typeof JsSIP==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jssip/dist/jssip.min.js"><\/scr'+'ipt>')</script>
 <script src="lib/jquery.min.js"></script>
 <script>if(typeof jQuery==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"><\/scr'+'ipt>')</script>
-<script src="js/auth.js"></script>
+<script>
+// Minimal SIP-config fetcher — no login required for softphone.
+// Uses stored token if available, silently skips if not.
+async function fetchSipConfig() {
+  var token = localStorage.getItem('_sp_token') || sessionStorage.getItem('authToken') || '';
+  if (!token) return null;
+  try {
+    var r = await fetch('/api/sip-config', { headers: { 'Authorization': 'Bearer ' + token } });
+    return r.ok ? await r.json() : null;
+  } catch (_) { return null; }
+}
+</script>
 <script>
 (function(){
   'use strict';
@@ -1075,9 +1086,8 @@ footer.foot kbd{
     var s = readSettings();
     if (!s.server || !s.pass) {
       try {
-        var r = await apiFetch('/api/sip-config');
-        if (r.ok) {
-          var cfg = await r.json();
+        var cfg = await fetchSipConfig();
+        if (cfg) {
           if (cfg.server && !$('#s_server').val()) $('#s_server').val(cfg.server);
           if (cfg.ext    && !$('#s_ext').val())    $('#s_ext').val(cfg.ext);
           if (cfg.user   && !$('#s_user').val())   $('#s_user').val(cfg.user);
