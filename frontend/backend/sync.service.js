@@ -207,6 +207,7 @@ function applySync(preview, existingDonors, upsertDonorFn) {
           .filter(function (p) { return normPhone(p); });
         var primaryPhone = rowPhones[0];
 
+        var primaryNorm = normPhone(primaryPhone);
         var newDonor = {
           id:           nextId++,
           externalId:   row.externalId    || "",
@@ -223,6 +224,7 @@ function applySync(preview, existingDonors, upsertDonorFn) {
           phone2:       rowPhones[1] || "",
           phone3:       rowPhones[2] || "",
           phone4:       rowPhones[3] || "",
+          ivrApprovedPhones: primaryNorm ? [primaryNorm] : [],
           city:         row.city        || "",
           address:      row.address     || "",
           neighborhood: row.neighborhood|| "",
@@ -275,6 +277,12 @@ function applySync(preview, existingDonors, upsertDonorFn) {
               else if (!normPhone(donor.phone3)) donor.phone3 = donor.phone;
               else if (!normPhone(donor.phone4)) donor.phone4 = donor.phone;
             }
+            // Update ivrApprovedPhones: remove old primary, add new primary
+            var approved = (donor.ivrApprovedPhones || []).slice();
+            if (currentPrimary) approved = approved.filter(function(n) { return n !== currentPrimary; });
+            if (approved.indexOf(alfonPrimary) === -1) approved = [alfonPrimary].concat(approved);
+            donor.ivrApprovedPhones = approved;
+
             donor.phone = row.phone1; // alfon primary → system primary (IVR)
           }
         }

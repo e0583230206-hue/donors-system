@@ -169,6 +169,12 @@ function ensureDonorDefaults() {
       allowCallback: true,
     };
   }
+
+  // Auto-migrate: approve primary phone for existing donors that have no ivrApprovedPhones yet
+  if (!donor.ivrApprovedPhones) {
+    var n = normalizePhoneLocal(donor.phone);
+    donor.ivrApprovedPhones = n ? [n] : [];
+  }
 }
 
 function getPaidTotal() {
@@ -448,6 +454,50 @@ if (printPdfButton) {
   });
 }
 
+function _ivrPhoneRowHtml(rawPhone, label, approvedSet) {
+  if (!rawPhone || !String(rawPhone).trim()) return "";
+  var n = normalizePhoneLocal(rawPhone);
+  if (!n) return "";
+  var isApproved = !!approvedSet[n];
+  var badge = isApproved
+    ? `<span style="background:#d4edda;color:#155724;border-radius:4px;padding:1px 8px;font-size:.78em;font-weight:600;white-space:nowrap">✅ פעיל ל-IVR</span>`
+    : `<span style="background:#e2e3e5;color:#555;border-radius:4px;padding:1px 8px;font-size:.78em;white-space:nowrap">⬜ לא מאושר</span>`;
+  var btn = isApproved
+    ? `<button onclick="unapprovePhoneForIvr('${n}')" style="font-size:.78em;padding:2px 9px;border:1px solid #ccc;border-radius:4px;background:#fff;color:#721c24;cursor:pointer">הסר אישור</button>`
+    : `<button onclick="approvePhoneForIvr('${n}')" style="font-size:.78em;padding:2px 9px;border:1px solid #1565c0;border-radius:4px;background:#e8f0fe;color:#1565c0;cursor:pointer;font-weight:600">אשר IVR</button>`;
+  return `<p style="margin:4px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <strong>${escapeHTML(label)}:</strong>
+    <span dir="ltr">${escapeHTML(rawPhone)}</span>
+    ${badge} ${btn}
+  </p>`;
+}
+
+async function approvePhoneForIvr(normalizedPhone) {
+  var current = donor.ivrApprovedPhones || [];
+  if (current.indexOf(normalizedPhone) !== -1) return;
+  await _saveIvrApprovedPhones(current.concat([normalizedPhone]));
+}
+
+async function unapprovePhoneForIvr(normalizedPhone) {
+  var updated = (donor.ivrApprovedPhones || []).filter(function(n) { return n !== normalizedPhone; });
+  await _saveIvrApprovedPhones(updated);
+}
+
+async function _saveIvrApprovedPhones(phones) {
+  try {
+    var res = await apiFetch("/api/donors/" + donor.id + "/ivr-approved-phones", {
+      method: "PUT",
+      body: JSON.stringify({ phones: phones }),
+    });
+    if (!res.ok) { showToast("שגיאה בשמירת אישורי IVR"); return; }
+    donor.ivrApprovedPhones = phones;
+    renderDetails();
+    showToast("אישורי IVR עודכנו");
+  } catch (_) {
+    showToast("שגיאת תקשורת");
+  }
+}
+
 function renderDetails() {
   donorNameTitle.innerText = donor.fullName;
   donorSubTitle.innerText = "כרטיס תורם #" + donor.id;
@@ -456,12 +506,15 @@ function renderDetails() {
   var displayName = [donor.titleBefore, donor.fullName, donor.titleAfter]
     .filter(Boolean).join(" ");
 
-  // Extra phones
-  var extraPhones = [donor.phone2, donor.phone3, donor.phone4]
-    .filter(function(p) { return p && p.trim(); });
-  var extraPhonesHtml = extraPhones.map(function(p, i) {
-    return `<p><strong>טלפון ${i + 2}:</strong> <span dir="ltr">${escapeHTML(p)}</span></p>`;
-  }).join("");
+  // Phones with IVR approval status
+  var approvedSet = {};
+  (donor.ivrApprovedPhones || []).forEach(function(n) { approvedSet[n] = true; });
+  var phonesHtml = [
+    { phone: donor.phone,  label: "טלפון ראשי" },
+    { phone: donor.phone2, label: "טלפון 2" },
+    { phone: donor.phone3, label: "טלפון 3" },
+    { phone: donor.phone4, label: "טלפון 4" },
+  ].map(function(e) { return _ivrPhoneRowHtml(e.phone, e.label, approvedSet); }).join("");
 
   // Alfon data section
   var hasAlfonData = donor.idNumber || donor.alfonCategory || donor.fatherName || donor.titleBefore || donor.titleAfter || donor.firstName || donor.lastName;
@@ -481,8 +534,7 @@ function renderDetails() {
 
   donorDetails.innerHTML = `
     <p><strong>שם:</strong> ${escapeHTML(displayName || donor.fullName)}</p>
-    <p><strong>טלפון ראשי (IVR):</strong> <span dir="ltr">${escapeHTML(donor.phone)}</span></p>
-    ${extraPhonesHtml}
+    ${phonesHtml}
     <p><strong>עיר:</strong> ${escapeHTML(donor.city || "לא הוזן")}</p>
     ${donor.neighborhood ? `<p><strong>שכונה:</strong> ${escapeHTML(donor.neighborhood)}</p>` : ""}
     <p><strong>כתובת:</strong> ${escapeHTML(donor.address || "לא הוזן")}</p>
@@ -1089,11 +1141,27 @@ Database.whenReady(function () {
   agentExtInput.value = localStorage.getItem("agentExtension") || "";
 
   callDonorButton.addEventListener("click", function () {
-    if (!donor || !donor.phone) {
-      showToast("לא נמצא מספר טלפון לתורם");
-      return;
+    var approvedPhones = donor.ivrApprovedPhones || [];
+    var phoneSelector  = document.getElementById("callPhoneSelector");
+
+    if (approvedPhones.length === 0) {
+      phoneSelector.innerHTML =
+        `<p style="color:#b00020;font-size:.9em;margin:0 0 10px">⚠️ אין מספרי טלפון מאושרים ל-IVR.<br>אשר מספר בכרטיס התורם תחילה.</p>`;
+      confirmCallButton.disabled = true;
+    } else if (approvedPhones.length === 1) {
+      phoneSelector.innerHTML =
+        `<p style="color:#333;margin:0 0 10px;font-size:.95em" dir="ltr">📞 ${escapeHTML(approvedPhones[0])}</p>`;
+      confirmCallButton.disabled = false;
+    } else {
+      var options = approvedPhones.map(function (p) {
+        return `<option value="${escapeHTML(p)}">${escapeHTML(p)}</option>`;
+      }).join("");
+      phoneSelector.innerHTML =
+        `<select id="callPhoneSelect" dir="ltr" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:15px;margin-bottom:10px">${options}</select>`;
+      confirmCallButton.disabled = false;
     }
-    callDonorInfo.textContent = "מתקשר אל: " + donor.fullName + " (" + donor.phone + ")";
+
+    callDonorInfo.textContent = "מתקשר אל: " + donor.fullName;
     callDonorStatus.textContent = "";
     callDonorStatus.className = "message";
     callDonorModal.style.display = "flex";
@@ -1120,6 +1188,17 @@ Database.whenReady(function () {
       return;
     }
 
+    // Determine target phone from approved list
+    var approvedPhones = donor.ivrApprovedPhones || [];
+    if (approvedPhones.length === 0) return;
+    var targetPhone;
+    if (approvedPhones.length === 1) {
+      targetPhone = approvedPhones[0];
+    } else {
+      var sel = document.getElementById("callPhoneSelect");
+      targetPhone = sel ? sel.value : approvedPhones[0];
+    }
+
     localStorage.setItem("agentExtension", ext);
     confirmCallButton.disabled = true;
     confirmCallButton.textContent = "מחייג...";
@@ -1130,7 +1209,7 @@ Database.whenReady(function () {
       var res = await apiFetch("/api/technoline/click2call", {
         method: "POST",
         body: JSON.stringify({
-          phone:     donor.phone,
+          phone:     targetPhone,
           donorName: donor.fullName,
           donorId:   donor.id,
           extension: ext,
@@ -1143,7 +1222,7 @@ Database.whenReady(function () {
         callDonorStatus.className = "message show error";
       } else {
         callDonorModal.style.display = "none";
-        showToast("הטלפון שלך יצלצל — כשתענה, תחובר אוטומטית אל " + donor.fullName);
+        showToast("הטלפון שלך יצלצל — כשתענה, תחובר אוטומטית אל " + donor.fullName + " (" + targetPhone + ")");
       }
     } catch (_) {
       callDonorStatus.textContent = "שגיאת תקשורת עם השרת";

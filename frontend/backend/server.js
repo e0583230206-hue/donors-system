@@ -559,6 +559,37 @@ app.post(
   }
 );
 
+// ── Donor IVR approved phones ─────────────────────────────────────────────────
+app.put(
+  "/api/donors/:id/ivr-approved-phones",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: "invalid id" });
+
+      var phones = req.body.phones;
+      if (!Array.isArray(phones)) return res.status(400).json({ error: "phones must be an array" });
+
+      var donors = getAppState("donors") || [];
+      var donor = null;
+      for (var i = 0; i < donors.length; i++) {
+        if (donors[i].id === id) { donor = donors[i]; break; }
+      }
+      if (!donor) return res.status(404).json({ error: "donor not found" });
+
+      donor.ivrApprovedPhones = phones.filter(function (p) {
+        return typeof p === "string" && p.trim();
+      });
+      setAppState("donors", donors);
+
+      return res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── Donor sync ────────────────────────────────────────────────────────────────
 app.post(
   "/api/donors/sync",
