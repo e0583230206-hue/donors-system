@@ -9,10 +9,16 @@
  * אחרי העלאה — היכנס ל-sync.html באתר לאשר את הסנכרון.
  */
 
-// ─── הגדרות ────────────────────────────────────────────────────────────────
-const SERVER_URL = "https://your-server.com";        // כתובת השרת (ללא / בסוף)
-const API_KEY    = "REPLACE_WITH_ALFON_SYNC_KEY";    // חייב להתאים ל-ALFON_SYNC_KEY ב-.env
-// ──────────────────────────────────────────────────────────────────────────
+// ─── הגדרות ─────────────────────────────────────────────────────────────────
+// קרא משתני סביבה — אל תשים מפתחות ישירות בקוד!
+// הגדר לפני הרצה:
+//   export CRM_SERVER_URL=https://your-server.com
+//   export ALFON_SYNC_KEY=your_key_here
+// או שים בקובץ .env מקומי (שאינו מועלה לגיט) ורוץ עם dotenv:
+//   node -r dotenv/config send_csv.js alfon_export.csv
+const SERVER_URL = process.env.CRM_SERVER_URL || "";
+const API_KEY    = process.env.ALFON_SYNC_KEY  || "";
+// ─────────────────────────────────────────────────────────────────────────────
 
 const fs   = require("fs");
 const path = require("path");
@@ -26,12 +32,14 @@ if (!fs.existsSync(csvPath)) {
   console.error("קובץ לא נמצא:", csvPath);
   process.exit(1);
 }
-if (API_KEY === "REPLACE_WITH_ALFON_SYNC_KEY") {
-  console.error("שגיאה: API_KEY לא הוגדר בסקריפט. ערוך את send_csv.js");
+if (!API_KEY) {
+  console.error("שגיאה: ALFON_SYNC_KEY לא מוגדר כמשתנה סביבה.");
+  console.error("  הגדר לפני הרצה: ALFON_SYNC_KEY=your_key node send_csv.js ...");
   process.exit(1);
 }
-if (SERVER_URL === "https://your-server.com") {
-  console.error("שגיאה: SERVER_URL לא הוגדר בסקריפט. ערוך את send_csv.js");
+if (!SERVER_URL) {
+  console.error("שגיאה: CRM_SERVER_URL לא מוגדר כמשתנה סביבה.");
+  console.error("  הגדר לפני הרצה: CRM_SERVER_URL=https://your-server.com node send_csv.js ...");
   process.exit(1);
 }
 

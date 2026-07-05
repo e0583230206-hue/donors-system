@@ -8,7 +8,13 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "256M",
+      // Default env is production — prevents accidental startup with dev JWT_SECRET.
+      // For local development: pm2 start ecosystem.config.js --env development
       env: {
+        NODE_ENV: "production",
+        PORT: 3000,
+      },
+      env_development: {
         NODE_ENV: "development",
         PORT: 3000,
       },
