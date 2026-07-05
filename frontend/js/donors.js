@@ -191,22 +191,32 @@ function renderDonors() {
   updateNamesList();
   populateCityFilter();
 
-  const searchText  = searchInput.value.trim().toLowerCase();
+  const searchText  = searchInput.value.trim().replace(/\s+/g, " ").toLowerCase();
   const sortSelect  = document.getElementById("sortSelect");
   const sortVal     = sortSelect ? sortSelect.value : "name-asc";
   const filterStatus = (document.getElementById("filterStatus") || {}).value || "";
   const filterCity   = (document.getElementById("filterCity")   || {}).value || "";
   const filterTag    = ((document.getElementById("filterTag") || {}).value || "").trim().toLowerCase();
 
+  function donorMatchesSearch(donor, q) {
+    if (!q) return true;
+    var s = function(v) { return (v || "").toLowerCase().includes(q); };
+    return (
+      s(donor.fullName) ||
+      s(donor.idNumber) ||
+      s(donor.phone) || s(donor.phone2) || s(donor.phone3) || s(donor.phone4) ||
+      s(donor.city) || s(donor.neighborhood) || s(donor.address) ||
+      s(donor.alfonSerial) ||
+      s(donor.notes) || s(donor.internalStaffNote) ||
+      (Array.isArray(donor.tags) && donor.tags.some(function(t){ return s(t); })) ||
+      (Array.isArray(donor.phones) && donor.phones.some(function(p){ return s(p); }))
+    );
+  }
+
   let filteredDonors = donors.filter(function (donor) {
     if (pendingDonorDeletions[donor.id]) return false;
 
-    const matchSearch = (
-      (donor.fullName || "").toLowerCase().includes(searchText) ||
-      (donor.phone    || "").includes(searchText) ||
-      (donor.city     || "").toLowerCase().includes(searchText) ||
-      (donor.tags || []).some(function(t){ return t.toLowerCase().includes(searchText); })
-    );
+    const matchSearch = donorMatchesSearch(donor, searchText);
     const matchStatus = !filterStatus || (donor.status || "פעיל") === filterStatus;
     const matchCity   = !filterCity   || (donor.city   || "") === filterCity;
     const matchTag    = !filterTag    || (donor.tags || []).some(function(t){ return t.toLowerCase().includes(filterTag); });
