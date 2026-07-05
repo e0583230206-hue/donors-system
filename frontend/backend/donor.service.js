@@ -24,28 +24,60 @@ function normalizePhone(phone) {
   return digits;
 }
 
+// Returns all normalized phone numbers for a donor across all phone fields.
+function getAllDonorPhones(donor) {
+  var seen = {};
+  var phones = [];
+  function add(p) {
+    var n = normalizePhone(p);
+    if (n && !seen[n]) { seen[n] = true; phones.push(n); }
+  }
+  add(donor.phone);
+  add(donor.phone2);
+  add(donor.phone3);
+  add(donor.phone4);
+  (donor.phones || []).forEach(add);
+  (donor.ivrApprovedPhones || []).forEach(add);
+  return phones;
+}
+
+// Returns true if any of the donor's phones match normalizedPhone.
+function donorMatchesPhone(donor, normalizedPhone) {
+  return getAllDonorPhones(donor).indexOf(normalizedPhone) !== -1;
+}
+
 function getDonorForIvr(phone) {
   var normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
 
-  var donor = findDonorByPhone(normalizedPhone);
-  if (!donor) return null;
-
-  // Pull full donor data (donations, notes, IVR settings) from app_state JSON
+  // Search app_state JSON by ALL phone fields — this is the authoritative source.
   var appDonors = getAppState("donors");
   var appDonor  = null;
   if (Array.isArray(appDonors)) {
     appDonor = appDonors.find(function (d) {
-      return normalizePhone(d.phone) === normalizedPhone;
+      return donorMatchesPhone(d, normalizedPhone);
     }) || null;
   }
 
-  var publicPhoneNote = appDonor && appDonor.publicPhoneNote
+  if (!appDonor) return null;
+
+  // Find the SQLite donors row (for id used in FK references).
+  // Try the canonical primary phone first, then any of the donor's phones.
+  var donor = findDonorByPhone(normalizePhone(appDonor.phone));
+  if (!donor) {
+    var allPhones = getAllDonorPhones(appDonor);
+    for (var i = 0; i < allPhones.length; i++) {
+      donor = findDonorByPhone(allPhones[i]);
+      if (donor) break;
+    }
+  }
+
+  var publicPhoneNote = appDonor.publicPhoneNote
     ? String(appDonor.publicPhoneNote).trim()
     : "";
 
   // Respect per-donor IVR settings; default everything to allowed
-  var rawSettings = (appDonor && appDonor.phoneMessageSettings) || {};
+  var rawSettings = appDonor.phoneMessageSettings || {};
   var settings = {
     allowPayment:       rawSettings.allowPayment       !== false,
     allowPreviousDebts: rawSettings.allowPreviousDebts !== false,
@@ -54,7 +86,7 @@ function getDonorForIvr(phone) {
 
   // Build open debt list sorted newest first
   var openDebts = [];
-  if (appDonor && Array.isArray(appDonor.donations)) {
+  if (Array.isArray(appDonor.donations)) {
     openDebts = appDonor.donations
       .filter(function (d) {
         return !d.paid && Number(d.remainingDebt) > 0;
@@ -73,9 +105,9 @@ function getDonorForIvr(phone) {
   }
 
   return {
-    id:              donor.id,
-    phone:           donor.phone,
-    fullName:        donor.fullName,
+    id:              donor ? donor.id : null,
+    phone:           donor ? donor.phone : appDonor.phone,
+    fullName:        donor ? donor.fullName : (appDonor.fullName || ""),
     currentDebt:     openDebts[0]  || null,
     previousDebts:   openDebts.slice(1),
     publicPhoneNote: publicPhoneNote,
@@ -85,5 +117,7 @@ function getDonorForIvr(phone) {
 
 module.exports = {
   normalizePhone,
+  getAllDonorPhones,
+  donorMatchesPhone,
   getDonorForIvr,
 };

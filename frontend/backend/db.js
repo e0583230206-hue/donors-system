@@ -143,6 +143,14 @@ function initDatabase() {
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS donor_phone_lookup (
+      phone    TEXT PRIMARY KEY,
+      donorId  INTEGER NOT NULL REFERENCES donors(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_phone_lookup_donorId ON donor_phone_lookup(donorId)");
+
   // ── Migrations ──────────────────────────────────────────────────
   try { db.exec("ALTER TABLE workers ADD COLUMN passwordHash TEXT"); } catch (_) {}
   try { db.exec("ALTER TABLE workers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
@@ -280,19 +288,21 @@ var STRIP_PHONE_SQL = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone,'-',''),' '
 function findDonorByPhone(phone) {
   var normalized = normalizePhoneForDb(phone);
   if (!normalized) return undefined;
-  // Also prepare the international variant (e.g. "972521234567") in case
-  // the stored phone was synced in 972-prefixed format.
   var intl = (normalized.startsWith("0") && normalized.length >= 9)
     ? "972" + normalized.slice(1)
     : null;
-  if (intl) {
-    return db.prepare(
-      "SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " IN (?,?) LIMIT 1"
-    ).get(normalized, intl);
-  }
-  return db.prepare(
-    "SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " = ? LIMIT 1"
-  ).get(normalized);
+
+  // Primary phone column
+  var row = intl
+    ? db.prepare("SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " IN (?,?) LIMIT 1").get(normalized, intl)
+    : db.prepare("SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " = ? LIMIT 1").get(normalized);
+  if (row) return row;
+
+  // Secondary phones via lookup table
+  var lookup = db.prepare(
+    "SELECT d.id, d.phone, d.fullName FROM donor_phone_lookup l JOIN donors d ON d.id = l.donorId WHERE l.phone IN (?,?) LIMIT 1"
+  ).get(normalized, intl || normalized);
+  return lookup || undefined;
 }
 
 function upsertDonor(phone, fullName) {
@@ -323,6 +333,19 @@ function upsertDonor(phone, fullName) {
       fullName  = excluded.fullName,
       updatedAt = excluded.updatedAt
   `).run(normalized, name, nowIso());
+}
+
+// Stores secondary/extra phones for a donor in the lookup table.
+// sqliteId: the donors.id row; phones: array of raw phone strings.
+function upsertPhoneLookup(sqliteId, phones) {
+  if (!sqliteId || !Array.isArray(phones)) return;
+  var stmt = db.prepare(
+    "INSERT INTO donor_phone_lookup (phone, donorId) VALUES (?,?) ON CONFLICT(phone) DO UPDATE SET donorId=excluded.donorId"
+  );
+  phones.forEach(function (p) {
+    var n = normalizePhoneForDb(p);
+    if (n) { try { stmt.run(n, Number(sqliteId)); } catch (_) {} }
+  });
 }
 
 // ── IVR Donations ────────────────────────────────────────────────────────────
@@ -497,9 +520,22 @@ function updateDonorDebtAfterPayment(phone, paidAmount) {
     return { donorFound: false, updated: false, reason: "no_donors_in_state" };
   }
 
+  // Match by ANY phone field: phone, phone2, phone3, phone4, phones[], ivrApprovedPhones[]
+  function donorHasPhone(d, n) {
+    var fields = [d.phone, d.phone2, d.phone3, d.phone4];
+    for (var fi = 0; fi < fields.length; fi++) {
+      if (normalizePhoneForDb(fields[fi]) === n) return true;
+    }
+    var extra = (d.phones || []).concat(d.ivrApprovedPhones || []);
+    for (var ei = 0; ei < extra.length; ei++) {
+      if (normalizePhoneForDb(extra[ei]) === n) return true;
+    }
+    return false;
+  }
+
   var donorIdx = -1;
   for (var di = 0; di < donors.length; di++) {
-    if (normalizePhoneForDb(donors[di].phone) === normalizedPhone) {
+    if (donorHasPhone(donors[di], normalizedPhone)) {
       donorIdx = di;
       break;
     }
@@ -675,15 +711,40 @@ function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, do
   );
 }
 
-function getClick2CallLogs(donorId, limit) {
-  var rows = db.prepare(`
-    SELECT id, pbxCallId, workerName, donorPhone, agentExtension, status, errorNote, createdAt
-    FROM click2call_logs
-    WHERE donorId = ?
-    ORDER BY createdAt DESC
-    LIMIT ?
-  `).all(Number(donorId), limit || 50);
-  return rows;
+// Accepts sqliteDonorId (may be null/wrong) AND phone as fallback.
+// Returns logs that match either condition, deduped by id.
+function getClick2CallLogs(sqliteDonorId, limit, phone) {
+  var n = limit || 50;
+  if (sqliteDonorId && phone) {
+    var normalizedPhone = normalizePhoneForDb(phone);
+    return db.prepare(`
+      SELECT id, pbxCallId, workerName, donorPhone, agentExtension, status, errorNote, createdAt
+      FROM click2call_logs
+      WHERE donorId = ? OR donorPhone = ?
+      ORDER BY createdAt DESC
+      LIMIT ?
+    `).all(Number(sqliteDonorId), normalizedPhone || phone, n);
+  }
+  if (sqliteDonorId) {
+    return db.prepare(`
+      SELECT id, pbxCallId, workerName, donorPhone, agentExtension, status, errorNote, createdAt
+      FROM click2call_logs
+      WHERE donorId = ?
+      ORDER BY createdAt DESC
+      LIMIT ?
+    `).all(Number(sqliteDonorId), n);
+  }
+  if (phone) {
+    var np = normalizePhoneForDb(phone);
+    return db.prepare(`
+      SELECT id, pbxCallId, workerName, donorPhone, agentExtension, status, errorNote, createdAt
+      FROM click2call_logs
+      WHERE donorPhone = ?
+      ORDER BY createdAt DESC
+      LIMIT ?
+    `).all(np || phone, n);
+  }
+  return [];
 }
 
 // ── App State (key-value store for frontend data) ────────────────────────────
@@ -938,6 +999,7 @@ module.exports = {
   // Donors
   findDonorByPhone,
   upsertDonor,
+  upsertPhoneLookup,
   getIvrDonations,
   getLastDonationAmountByPhone,
   // Payments

@@ -17,6 +17,7 @@ const {
   updateWorkerPasswordHash,
   clearMustChangePassword,
   upsertDonor,
+  upsertPhoneLookup,
   getIvrDonations,
   getCallSessions,
   getCallLogsByCallId,
@@ -63,6 +64,11 @@ const { getDonorForIvr, normalizePhone }   = require("./donor.service");
 const PORT         = Number(process.env.PORT || 3000);
 const IVR_KEY      = process.env.IVR_KEY || "";
 const FRONTEND_DIR = path.join(__dirname, "..");
+
+if (!IVR_KEY && process.env.NODE_ENV === "production") {
+  console.error("FATAL: IVR_KEY is not set. The server will not start without it in production.");
+  process.exit(1);
+}
 
 const app = express();
 
@@ -316,10 +322,15 @@ app.put("/api/workers/me/password", passwordLimiter, requireAuth, async function
       return res.status(404).json({ error: "Worker not found" });
     }
 
-    if (currentPassword) {
+    // currentPassword is always required — except for the forced first-login change
+    const mustChange = worker.must_change_password === 1;
+    if (!mustChange) {
+      if (!currentPassword) {
+        return res.status(400).json({ error: "יש לספק את הסיסמה הנוכחית" });
+      }
       const valid = await comparePassword(String(currentPassword), worker.passwordHash);
       if (!valid) {
-        return res.status(401).json({ error: "Current password is incorrect" });
+        return res.status(401).json({ error: "הסיסמה הנוכחית שגויה" });
       }
     }
 
@@ -660,9 +671,23 @@ app.get(
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   function (req, res, next) {
     try {
-      var id = Number(req.params.id);
-      if (!id) return res.status(400).json({ error: "invalid id" });
-      var logs = getClick2CallLogs(id, 30);
+      var appId = Number(req.params.id);
+      if (!appId) return res.status(400).json({ error: "invalid id" });
+
+      // Resolve app-level JSON id → SQLite id + primary phone via app_state
+      var sqliteId = null;
+      var primaryPhone = null;
+      var appDonors = getAppState("donors");
+      if (Array.isArray(appDonors)) {
+        var appDonor = appDonors.find(function (d) { return d.id === appId; });
+        if (appDonor && appDonor.phone) {
+          primaryPhone = normalizePhoneForDb(appDonor.phone);
+          var row = require("./db").findDonorByPhone(appDonor.phone);
+          if (row) sqliteId = row.id;
+        }
+      }
+
+      var logs = getClick2CallLogs(sqliteId, 30, primaryPhone);
       return res.json(logs);
     } catch (err) {
       next(err);
@@ -936,6 +961,16 @@ app.post(
     list.forEach(function (item) {
       if (!item || !item.phone || !item.fullName) { skipped += 1; return; }
       upsertDonor(item.phone, item.fullName);
+
+      // Persist secondary phones to lookup table so IVR can find donor by any phone
+      var donorRow = require("./db").findDonorByPhone(item.phone);
+      if (donorRow) {
+        var extras = [item.phone2, item.phone3, item.phone4]
+          .concat(Array.isArray(item.ivrApprovedPhones) ? item.ivrApprovedPhones : [])
+          .filter(Boolean);
+        if (extras.length) upsertPhoneLookup(donorRow.id, extras);
+      }
+
       ok += 1;
     });
 

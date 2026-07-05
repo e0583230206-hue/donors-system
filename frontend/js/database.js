@@ -235,9 +235,16 @@ const Database = {
       body: JSON.stringify(data),
     }).then(function () {
       if (key !== "donors") return;
-      // Sync phone+name to IVR donors table so the phone system sees updates
+      // Sync all phones to IVR donors table so the phone system can identify by any number
       var syncList = (Array.isArray(data) ? data : []).map(function (d) {
-        return { phone: d.phone, fullName: d.fullName };
+        return {
+          phone:             d.phone,
+          phone2:            d.phone2            || "",
+          phone3:            d.phone3            || "",
+          phone4:            d.phone4            || "",
+          ivrApprovedPhones: d.ivrApprovedPhones || [],
+          fullName:          d.fullName,
+        };
       }).filter(function (d) { return d.phone && d.fullName; });
       if (syncList.length === 0) return;
       return fetch("/api/donors/sync", {
