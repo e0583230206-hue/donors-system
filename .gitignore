@@ -15,6 +15,8 @@ npm-debug.log
 # Logs
 logs/
 *.log
+server_err.txt
+server_out.txt
 
 # OS
 .DS_Store

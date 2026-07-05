@@ -1,4 +1,4 @@
-let donors = Database.get("donors");
+﻿let donors = Database.get("donors");
 
 var _timelinePayments = [];
 var _timelineCallLogs = [];
@@ -226,9 +226,9 @@ function generateDonorLetterContent() {
       const status = donation.paid === true ? "כן" : "לא";
       donationsDetailsHTML += "<tr style='border:1px solid #ccc;'>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + formatRegularDate(donation.date || donation.regularDate) + "</td>";
-      donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + (donation.hebrewDate || formatHebrewDate(donation.date)) + "</td>";
-      donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + (donation.parsha || "---") + "</td>";
-      donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + (donation.finalPurpose || donation.purpose || "---") + "</td>";
+      donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + escapeHTML(donation.hebrewDate || formatHebrewDate(donation.date)) + "</td>";
+      donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + escapeHTML(donation.parsha || "---") + "</td>";
+      donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + escapeHTML(donation.finalPurpose || donation.purpose || "---") + "</td>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;text-align:right;color:black;'>" + formatMoney(donation.amount || 0, donation.currency) + "</td>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + status + "</td>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;text-align:right;color:black;'>" + formatMoney(donation.remainingDebt || 0, donation.currency) + "</td>";
@@ -261,7 +261,7 @@ function generateDonorLetterContent() {
   const currentHebrewDateLine =
     dateInfo.dateLine || currentHebrewDate + " " + currentHebrewWeekday;
   const donorLetterLogoSrc = new URL(
-    "images/סמל א בלאט גמרא.png",
+    "images/logo.png",
     window.location.href,
   ).href;
 
@@ -708,7 +708,7 @@ function renderPhonePreview() {
 
   phonePreview.innerHTML = `
     <h3>🔊 טקסט משוער לטלפון</h3>
-    <p>${buildPhoneMessage()}</p>
+    <p>${escapeHTML(buildPhoneMessage())}</p>
     ${previousHtml}
   `;
 }

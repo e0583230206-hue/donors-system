@@ -6,7 +6,8 @@ const helmet      = require("helmet");
 const cors        = require("cors");
 const rateLimit   = require("express-rate-limit");
 
-const fs = require("fs");
+const fs     = require("fs");
+const crypto = require("crypto");
 
 const {
   DB_PATH,
@@ -172,6 +173,18 @@ function maskSecret(value) {
   return s.slice(0, 6) + "..." + s.slice(-6);
 }
 
+// Timing-safe string equality — prevents timing-based key oracle attacks
+function timingSafeEq(a, b) {
+  try {
+    const ba = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    if (ba.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ba, bb);
+  } catch (_) {
+    return false;
+  }
+}
+
 function requireIvrKey(req, res, next) {
   if (!IVR_KEY) {
     console.warn("[IVR] IVR_KEY not configured — access is unrestricted. Set IVR_KEY in .env.");
@@ -180,7 +193,7 @@ function requireIvrKey(req, res, next) {
   // Technoline sends the key as a query param (ivrKey=...).
   // Also accept it from the x-ivr-key header for direct API calls.
   const provided = req.headers["x-ivr-key"] || req.query.ivrKey || "";
-  if (provided !== IVR_KEY) {
+  if (!timingSafeEq(provided, IVR_KEY)) {
     console.warn("[IVR] Rejected request with invalid IVR key", {
       hasHeader:   !!req.headers["x-ivr-key"],
       hasQueryKey: !!req.query.ivrKey,
@@ -236,11 +249,11 @@ app.post("/api/login", loginLimiter, async function (req, res, next) {
 // ── Workers — protected CRUD ──────────────────────────────────────────────────
 app.use("/api/workers", apiLimiter);
 
-// Public list for login dropdown (no auth required)
+// Public list for login dropdown — active workers only, minimal fields
 app.get("/api/workers/list", function (req, res) {
-  const workers = getWorkers().map(function (w) {
-    return { id: w.id, name: w.name, role: w.role, status: w.status };
-  });
+  const workers = getWorkers()
+    .filter(function (w) { return w.status === "פעיל"; })
+    .map(function (w) { return { id: w.id, name: w.name }; });
   res.json(workers);
 });
 
@@ -1378,7 +1391,7 @@ var alfonLimiter = rateLimit({
 function requireAlfonKey(req, res, next) {
   var key = (process.env.ALFON_SYNC_KEY || "").trim();
   if (!key) return res.status(503).json({ error: "ALFON_SYNC_KEY not configured on server" });
-  if (req.headers["x-alfon-key"] !== key) return res.status(401).json({ error: "Invalid API key" });
+  if (!timingSafeEq(req.headers["x-alfon-key"] || "", key)) return res.status(401).json({ error: "Invalid API key" });
   next();
 }
 

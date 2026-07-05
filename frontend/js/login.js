@@ -35,14 +35,12 @@ function showMessage(text, type) {
 
 function fillUsers() {
   userSelect.innerHTML = `<option value="">בחר משתמש</option>`;
-  workers
-    .filter(function (w) { return w.status === "פעיל"; })
-    .forEach(function (w) {
-      const opt    = document.createElement("option");
-      opt.value    = w.id;
-      opt.innerText = w.name + " - " + w.role;
-      userSelect.appendChild(opt);
-    });
+  workers.forEach(function (w) {
+    const opt    = document.createElement("option");
+    opt.value    = w.id;
+    opt.innerText = w.name;
+    userSelect.appendChild(opt);
+  });
 }
 
 async function loadWorkers() {

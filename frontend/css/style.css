@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg-page: #f7f2e8;
   --bg-soft: #ede7db;
   --surface: #fffdf8;
@@ -75,7 +75,7 @@ body::before {
   content: "";
   position: fixed;
   inset: 0;
-  background-image: url("../images/סמל א בלאט גמרא.png");
+  background-image: url("../images/logo.png");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 800px auto;

@@ -68,6 +68,9 @@ async function hashPassword(password) {
   return bcrypt.hash(String(password), SALT_ROUNDS);
 }
 
+// Routes exempt from the must_change_password block (exact matches only)
+const MUST_CHANGE_EXEMPT = new Set(["/api/workers/me/password"]);
+
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
 
@@ -80,6 +83,18 @@ function requireAuth(req, res, next) {
   try {
     req.user     = jwt.verify(token, JWT_SECRET);
     req.userRole = req.user.role;
+
+    // Server-side enforcement of must_change_password
+    const worker = findWorkerById(req.user.id);
+    if (worker && worker.must_change_password === 1) {
+      if (!MUST_CHANGE_EXEMPT.has(req.path)) {
+        return res.status(403).json({
+          error:   "must_change_password",
+          message: "יש לשנות סיסמה לפני הגישה למערכת",
+        });
+      }
+    }
+
     next();
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired token" });
