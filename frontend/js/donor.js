@@ -464,7 +464,7 @@ function renderDetails() {
   }).join("");
 
   // Alfon data section
-  var hasAlfonData = donor.externalId || donor.idNumber || donor.alfonCategory || donor.fatherName;
+  var hasAlfonData = donor.idNumber || donor.alfonCategory || donor.fatherName || donor.titleBefore || donor.titleAfter || donor.firstName || donor.lastName;
   var alfonHtml = hasAlfonData ? `
     <div style="margin-top:14px;padding:10px 14px;background:#f0f8ff;border-radius:8px;border:1px solid #b8d4e8">
       <p style="font-weight:700;margin:0 0 8px;font-size:.9em;color:#1565c0">🔗 נתוני אלפון</p>
@@ -476,8 +476,6 @@ function renderDetails() {
         ${donor.idNumber    ? `<p style="margin:2px 0"><strong>ת.ז.:</strong> ${escapeHTML(donor.idNumber)}</p>` : ""}
         ${donor.fatherName  ? `<p style="margin:2px 0"><strong>שם אב:</strong> ${escapeHTML(donor.fatherName)}</p>` : ""}
         ${donor.alfonCategory ? `<p style="margin:2px 0"><strong>קטגוריה:</strong> ${escapeHTML(donor.alfonCategory)}</p>` : ""}
-        ${donor.alfonSerial ? `<p style="margin:2px 0;color:#888"><strong>מ.ס.:</strong> ${escapeHTML(donor.alfonSerial)}</p>` : ""}
-        ${donor.externalId  ? `<p style="margin:2px 0;color:#888"><strong>ID אלפון:</strong> ${escapeHTML(donor.externalId)}</p>` : ""}
       </div>
     </div>` : "";
 
