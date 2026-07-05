@@ -688,25 +688,28 @@ function campaignErrMsg(body) {
   return body.note || body.error || ("שגיאה " + (body.errorCode || ""));
 }
 
-// Helper: build phone list from donors filtered by recipientFilter
-// Supported filters: "all" | "city:<name>" | "year:<year>"
+// Helper: build phone list from donors with ivrApprovedPhones, filtered by recipientFilter.
+// Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>"
 function buildPhoneList(recipientFilter) {
   var donors = getAppState("donors") || [];
   var filter = String(recipientFilter || "all").trim();
   var phones = [];
   for (var i = 0; i < donors.length; i++) {
-    var d = donors[i];
+    var d        = donors[i];
     var approved = d.ivrApprovedPhones || [];
     if (approved.length === 0) continue;
-    var include = false;
+    var include  = false;
     if (filter === "all") {
       include = true;
+    } else if (filter === "debt") {
+      include = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
     } else if (filter.startsWith("city:")) {
-      var city = filter.slice(5).trim();
-      include = (d.city || "").trim() === city;
-    } else if (filter.startsWith("year:")) {
-      var year = filter.slice(5).trim();
-      include = (d.hebrewYear || "").trim() === year;
+      include = (d.city || "").trim() === filter.slice(5).trim();
+    } else if (filter.startsWith("tag:")) {
+      var tag = filter.slice(4).trim();
+      include = (d.tags || []).indexOf(tag) !== -1;
+    } else if (filter.startsWith("donor:")) {
+      include = d.id === Number(filter.slice(6));
     } else {
       include = true;
     }
@@ -718,9 +721,9 @@ function buildPhoneList(recipientFilter) {
   return phones;
 }
 
-// GET /api/technoline/campaign/recipient-count — preview how many phones a filter returns
+// GET /api/technoline/send/recipient-count?filter=<filter>
 app.get(
-  "/api/technoline/campaign/recipient-count",
+  "/api/technoline/send/recipient-count",
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   function (req, res, next) {
     try {
@@ -730,30 +733,35 @@ app.get(
   }
 );
 
-// GET /api/technoline/campaign/filter-options — cities and years available for filters
+// GET /api/technoline/send/audience-options — tags, cities, debt count for the send screen
 app.get(
-  "/api/technoline/campaign/filter-options",
+  "/api/technoline/send/audience-options",
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   function (req, res, next) {
     try {
       var donors = getAppState("donors") || [];
-      var cities = {}, years = {};
+      var cities  = {}, tags = {};
+      var debtCount = 0;
       donors.forEach(function (d) {
-        if ((d.ivrApprovedPhones || []).length === 0) return;
-        if (d.city)        cities[d.city.trim()]        = true;
-        if (d.hebrewYear)  years[d.hebrewYear.trim()]   = true;
+        var hasApproved = (d.ivrApprovedPhones || []).length > 0;
+        var hasDebt     = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
+        if (hasApproved && hasDebt)                debtCount++;
+        if (hasApproved && d.city)                 cities[d.city.trim()] = true;
+        if (hasApproved && Array.isArray(d.tags))  d.tags.forEach(function (t) { if (t) tags[t.trim()] = true; });
       });
       return res.json({
-        cities: Object.keys(cities).sort(),
-        years:  Object.keys(years).sort(),
+        debtCount: debtCount,
+        cities:    Object.keys(cities).sort(),
+        tags:      Object.keys(tags).sort(),
       });
     } catch (err) { next(err); }
   }
 );
 
-// POST /api/technoline/campaign/run
+// POST /api/technoline/send  (simplified send screen — hides all campaign API details)
+// POST /api/technoline/campaign/run  (legacy alias kept for backward compat)
 app.post(
-  "/api/technoline/campaign/run",
+  ["/api/technoline/send", "/api/technoline/campaign/run"],
   apiLimiter,
   requireRole([ROLES.ADMIN]),
   async function (req, res, next) {

@@ -6,71 +6,128 @@
     <title>שיגור הודעות</title>
     <link rel="stylesheet" href="css/style.css" />
     <style>
-      .send-wizard { max-width: 680px; }
-      .wizard-step {
+      .send-page { max-width: 620px; }
+
+      /* ── Send card ── */
+      .send-card {
         background: #fff;
         border: 1px solid #e0e0e0;
-        border-radius: 10px;
-        padding: 22px 26px;
+        border-radius: 12px;
+        padding: 0;
         margin-bottom: 16px;
+        overflow: hidden;
       }
-      .wizard-step h3 {
-        margin: 0 0 16px;
-        font-size: 1.05em;
+      .send-card-header {
+        padding: 14px 20px;
+        background: #f5f7ff;
+        border-bottom: 1px solid #e0e0e0;
+        font-weight: 700;
+        font-size: .95em;
         color: #1565c0;
         display: flex;
         align-items: center;
         gap: 8px;
       }
-      .wizard-step h3 .step-num {
-        background: #1565c0;
-        color: #fff;
-        border-radius: 50%;
-        width: 24px; height: 24px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: .82em;
-        font-weight: 700;
-        flex-shrink: 0;
-      }
-      .radio-cards { display: flex; flex-direction: column; gap: 10px; }
-      .radio-card {
+      .send-card-body { padding: 18px 20px; }
+
+      /* ── Audience options ── */
+      .audience-grid {
         display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 14px 16px;
-        border: 2px solid #e0e0e0;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .aud-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border: 2px solid #e8e8e8;
         border-radius: 8px;
         cursor: pointer;
-        transition: border-color .15s, background .15s;
+        transition: border-color .13s, background .13s;
       }
-      .radio-card:has(input:checked),
-      .radio-card.checked {
-        border-color: #1565c0;
-        background: #e8f0fe;
-      }
-      .radio-card input[type=radio] { margin-top: 3px; flex-shrink: 0; }
-      .radio-card-body { flex: 1; }
-      .radio-card-body strong { display: block; margin-bottom: 2px; }
-      .radio-card-body small { color: #666; font-size: .84em; line-height: 1.4; }
-      .filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
-      .recipient-count {
-        display: inline-block;
-        background: #e8f0fe;
-        color: #1565c0;
-        font-weight: 700;
+      .aud-row:has(input:checked),
+      .aud-row.selected { border-color: #1565c0; background: #f0f4ff; }
+      .aud-row input[type=radio] { flex-shrink: 0; }
+      .aud-label { font-weight: 600; font-size: .93em; flex: 1; }
+      .aud-badge {
+        background: #1565c0;
+        color: #fff;
         border-radius: 20px;
-        padding: 2px 12px;
-        font-size: .9em;
+        padding: 1px 10px;
+        font-size: .8em;
+        font-weight: 700;
+        white-space: nowrap;
       }
-      .send-btn-wrap { margin-top: 6px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-      #sendStatus { margin-top: 10px; }
-      .history-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-      .campaign-status-active  { color: #1a7a1a; font-weight: 600; }
-      .campaign-status-hold    { color: #b07000; font-weight: 600; }
-      .campaign-status-ended   { color: #555; }
-      .campaign-status-stopped { color: #b00; font-weight: 600; }
+      .aud-badge.zero { background: #bbb; }
+      .aud-sub {
+        display: none;
+        margin-top: 8px;
+        padding-right: 4px;
+      }
+      .aud-row.selected .aud-sub { display: block; }
+
+      /* Donor search */
+      .donor-search-wrap { position: relative; }
+      #donorSearchInput {
+        width: 100%; padding: 8px 12px;
+        border: 1px solid #ccc; border-radius: 6px;
+        font-size: 14px; box-sizing: border-box;
+      }
+      #donorSuggestions {
+        position: absolute; top: 100%; right: 0; left: 0; z-index: 99;
+        background: #fff; border: 1px solid #ccc; border-top: none;
+        border-radius: 0 0 6px 6px; max-height: 200px; overflow-y: auto;
+        display: none;
+      }
+      .donor-suggestion {
+        padding: 8px 12px; cursor: pointer; font-size: .9em;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .donor-suggestion:hover { background: #f0f4ff; }
+      .donor-suggestion.selected-donor { background: #e8f0fe; font-weight: 600; }
+
+      /* ── Message options ── */
+      .msg-options { display: flex; flex-direction: column; gap: 8px; }
+      .msg-row {
+        padding: 12px 16px;
+        border: 2px solid #e8e8e8;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: border-color .13s, background .13s;
+      }
+      .msg-row:has(input:checked),
+      .msg-row.selected { border-color: #1565c0; background: #f0f4ff; }
+      .msg-row-top { display: flex; align-items: center; gap: 10px; }
+      .msg-row-top input[type=radio] { flex-shrink: 0; }
+      .msg-row-top .msg-title { font-weight: 600; font-size: .93em; }
+      .msg-row-top .msg-sub-text { font-size: .82em; color: #666; margin-right: 4px; }
+      .msg-extra { display: none; margin-top: 10px; padding-right: 26px; }
+      .msg-row.selected .msg-extra { display: block; }
+
+      /* ── Send button ── */
+      #sendButton {
+        width: 100%;
+        padding: 16px;
+        font-size: 1.1em;
+        font-weight: 700;
+        border-radius: 10px;
+        cursor: pointer;
+        border: none;
+        background: #1565c0;
+        color: #fff;
+        transition: background .15s, opacity .15s;
+      }
+      #sendButton:disabled { opacity: .55; cursor: not-allowed; }
+      #sendButton:not(:disabled):hover { background: #0d47a1; }
+
+      /* ── Status message ── */
+      #sendStatus { margin-top: 12px; }
+
+      /* ── Recent log ── */
+      .recent-log { margin-top: 28px; }
+      .recent-log h3 { font-size: .95em; color: #555; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 6px; }
+      .log-empty { color: #aaa; font-size: .88em; }
     </style>
   </head>
   <body>
@@ -103,164 +160,110 @@
       <header class="page-header">
         <div>
           <h1>📣 שיגור הודעות</h1>
-          <p>שלח הודעה קולית לתורמים בכמה קליקים</p>
+          <p>בחר למי ומה לשלוח — המערכת תטפל בשאר</p>
         </div>
       </header>
 
-      <div class="send-wizard">
+      <div class="send-page">
 
-        <!-- Step 1: Who -->
-        <div class="wizard-step">
-          <h3><span class="step-num">1</span> למי לשלוח?</h3>
+        <!-- ① Audience -->
+        <div class="send-card">
+          <div class="send-card-header">① למי לשלוח?</div>
+          <div class="send-card-body">
+            <div class="audience-grid" id="audienceGrid">
 
-          <div class="radio-cards" id="recipientCards">
-            <label class="radio-card checked">
-              <input type="radio" name="recipient" value="all" checked />
-              <div class="radio-card-body">
-                <strong>כל התורמים המאושרים ל-IVR</strong>
-                <small id="countAll">טוען...</small>
-              </div>
-            </label>
-            <label class="radio-card" id="cityCard" style="display:none;">
-              <input type="radio" name="recipient" value="city" />
-              <div class="radio-card-body">
-                <strong>לפי עיר</strong>
-                <div class="filter-row">
-                  <select id="citySelect" style="padding:5px 10px;border:1px solid #ccc;border-radius:6px;">
+              <label class="aud-row selected" data-value="debt">
+                <input type="radio" name="audience" value="debt" checked />
+                <span class="aud-label">כל בעלי החוב</span>
+                <span class="aud-badge" id="badgeDebt">…</span>
+              </label>
+
+              <!-- by tag — shown only if tags exist -->
+              <label class="aud-row" data-value="tag" id="rowTag" style="display:none;">
+                <input type="radio" name="audience" value="tag" />
+                <span class="aud-label">לפי תגית</span>
+                <span class="aud-badge zero" id="badgeTag">…</span>
+                <div class="aud-sub">
+                  <select id="tagSelect" style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;">
+                    <option value="">בחר תגית...</option>
+                  </select>
+                </div>
+              </label>
+
+              <!-- by city — shown only if cities exist -->
+              <label class="aud-row" data-value="city" id="rowCity" style="display:none;">
+                <input type="radio" name="audience" value="city" />
+                <span class="aud-label">לפי עיר</span>
+                <span class="aud-badge zero" id="badgeCity">…</span>
+                <div class="aud-sub">
+                  <select id="citySelect" style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;">
                     <option value="">בחר עיר...</option>
                   </select>
-                  <span id="countCity" class="recipient-count" style="display:none;"></span>
                 </div>
-              </div>
-            </label>
-            <label class="radio-card" id="yearCard" style="display:none;">
-              <input type="radio" name="recipient" value="year" />
-              <div class="radio-card-body">
-                <strong>לפי שנה</strong>
-                <div class="filter-row">
-                  <select id="yearSelect" style="padding:5px 10px;border:1px solid #ccc;border-radius:6px;">
-                    <option value="">בחר שנה...</option>
-                  </select>
-                  <span id="countYear" class="recipient-count" style="display:none;"></span>
+              </label>
+
+              <!-- specific donor -->
+              <label class="aud-row" data-value="donor" id="rowDonor">
+                <input type="radio" name="audience" value="donor" />
+                <span class="aud-label">תורם מסוים</span>
+                <span class="aud-badge zero" id="badgeDonor">0</span>
+                <div class="aud-sub">
+                  <div class="donor-search-wrap">
+                    <input id="donorSearchInput" type="search" placeholder="חפש שם או טלפון..." autocomplete="off" />
+                    <div id="donorSuggestions"></div>
+                  </div>
+                  <div id="selectedDonorInfo" style="margin-top:6px;font-size:.85em;color:#1565c0;"></div>
                 </div>
-              </div>
-            </label>
-          </div>
+              </label>
 
-          <p style="margin-top:12px;font-size:.88em;color:#888;">
-            סה"כ ישלחו: <strong id="totalCount" style="color:#1565c0;font-size:1.1em;">—</strong> מספרי טלפון
-          </p>
-        </div>
-
-        <!-- Step 2: Message type -->
-        <div class="wizard-step">
-          <h3><span class="step-num">2</span> איזה הודעה לשלוח?</h3>
-
-          <div class="radio-cards">
-            <label class="radio-card checked">
-              <input type="radio" name="msgType" value="ivr" checked />
-              <div class="radio-card-body">
-                <strong>🔗 חבר לתפריט תרומה (IVR)</strong>
-                <small>כשהתורם עונה, הוא מחובר אוטומטית לתפריט התרומה הרגיל ויכול לשלם מיד</small>
-              </div>
-            </label>
-            <label class="radio-card">
-              <input type="radio" name="msgType" value="text" />
-              <div class="radio-card-body">
-                <strong>🔊 הקרא הודעה</strong>
-                <small>מכין הודעה קולית מטקסט שתיקרא לתורם</small>
-                <div id="textMsgGroup" style="display:none;margin-top:10px;">
-                  <textarea id="messageText" rows="3"
-                    placeholder="שלום, זוהי תזכורת לתרומתך השנתית. ניתן להתקשר אלינו ולתרום..."
-                    style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px;resize:vertical;"></textarea>
-                </div>
-              </div>
-            </label>
+            </div>
           </div>
         </div>
 
-        <!-- Step 3: When -->
-        <div class="wizard-step">
-          <h3><span class="step-num">3</span> מתי לשלוח?</h3>
+        <!-- ② Message -->
+        <div class="send-card">
+          <div class="send-card-header">② מה לשלוח?</div>
+          <div class="send-card-body">
+            <div class="msg-options" id="msgOptions">
 
-          <div class="radio-cards">
-            <label class="radio-card checked">
-              <input type="radio" name="sendWhen" value="now" checked />
-              <div class="radio-card-body">
-                <strong>עכשיו</strong>
-                <small>השיגור מתחיל מיד לאחר האישור</small>
-              </div>
-            </label>
-            <label class="radio-card">
-              <input type="radio" name="sendWhen" value="scheduled" />
-              <div class="radio-card-body">
-                <strong>בתאריך ושעה</strong>
-                <div id="scheduleGroup" style="display:none;margin-top:10px;">
-                  <input type="datetime-local" id="sendTimeInput"
-                    style="padding:8px 12px;border:1px solid #ccc;border-radius:6px;font-size:14px;" />
+              <label class="msg-row selected" data-value="ivr">
+                <div class="msg-row-top">
+                  <input type="radio" name="message" value="ivr" checked />
+                  <span class="msg-title">🔗 מערכת תרומה (IVR)</span>
+                  <span class="msg-sub-text">— התורם מחובר ישירות לתפריט התשלום</span>
                 </div>
-              </div>
-            </label>
-          </div>
+              </label>
 
-          <div style="margin-top:14px;display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="quietHours" checked style="width:16px;height:16px;" />
-            <label for="quietHours" style="cursor:pointer;font-size:.93em;">
-              הפסק אוטומטית בין 23:00 ל-08:00 (שעות שקט)
-            </label>
+              <label class="msg-row" data-value="text">
+                <div class="msg-row-top">
+                  <input type="radio" name="message" value="text" />
+                  <span class="msg-title">🔊 הודעה קולית</span>
+                  <span class="msg-sub-text">— טקסט שיוקרא לתורם</span>
+                </div>
+                <div class="msg-extra">
+                  <textarea id="msgTextInput" rows="3"
+                    placeholder="שלום, זוהי תזכורת לתרומתך. לפרטים נוספים ניתן להתקשר..."
+                    style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea>
+                </div>
+              </label>
+
+            </div>
           </div>
         </div>
 
         <!-- Send -->
-        <div class="send-btn-wrap">
-          <button id="sendButton" class="primary-btn" style="font-size:1.05em;padding:12px 28px;">
-            📣 שלח הודעה
-          </button>
-          <span id="totalCountSummary" style="color:#555;font-size:.92em;"></span>
-        </div>
+        <button id="sendButton" disabled>
+          📣 שלח הודעה ל-<span id="sendCount">0</span> מספרים
+        </button>
         <p id="sendStatus" class="message"></p>
+
+        <!-- Recent sends log -->
+        <div class="recent-log">
+          <h3>שיגורים אחרונים</h3>
+          <div id="recentLog"><p class="log-empty">טוען...</p></div>
+        </div>
+
       </div>
-
-      <!-- History -->
-      <section class="panel" style="margin-top:24px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
-          <h2 style="margin:0">📋 שיגורים אחרונים</h2>
-          <button id="loadHistoryButton" class="secondary-btn" style="padding:6px 16px;">🔄 רענן</button>
-        </div>
-        <p id="historyMessage" class="message" style="margin-top:8px;"></p>
-        <div class="table-wrap" style="margin-top:12px;">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>שם / תיאור</th>
-                <th>סטטוס</th>
-                <th>נשלח</th>
-                <th>נענו</th>
-                <th>תאריך</th>
-                <th>פעולות</th>
-              </tr>
-            </thead>
-            <tbody id="historyTableBody"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- Report modal -->
-      <div id="reportModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:flex-start;overflow-y:auto;padding:20px;box-sizing:border-box;">
-        <div style="background:white;border-radius:10px;width:100%;max-width:860px;padding:28px;position:relative;box-shadow:0 4px 24px rgba(0,0,0,0.25);direction:rtl;margin:auto;">
-          <button onclick="document.getElementById('reportModal').style.display='none'" style="position:absolute;top:14px;left:14px;border:none;font-size:22px;cursor:pointer;background:none;color:#333;">×</button>
-          <h3 id="reportTitle" style="margin:0 0 16px;"></h3>
-          <div id="reportSummary" style="margin-bottom:16px;padding:12px;background:#f5f5f5;border-radius:8px;font-size:.9em;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px 16px;"></div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>טלפון</th><th>שם</th><th>תוצאה</th><th>משך</th><th>מקש</th></tr></thead>
-              <tbody id="reportTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
     </main>
 
     <script src="js/auth.js"></script>

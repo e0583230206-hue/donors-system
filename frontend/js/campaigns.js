@@ -1,137 +1,211 @@
 /* global apiFetch, Database, showToast, escapeHTML */
 
-// ── Radio card visual selection ──────────────────────────────────────────────
+// ── Radio-card visual selection helper ───────────────────────────────────────
 
-document.querySelectorAll(".radio-cards").forEach(function (group) {
-  group.addEventListener("change", function (e) {
-    if (e.target.type !== "radio") return;
-    group.querySelectorAll(".radio-card").forEach(function (card) {
-      card.classList.toggle("checked", card.querySelector("input") === e.target);
+function bindRadioCards(containerSel, radioName) {
+  var container = document.querySelector(containerSel);
+  if (!container) return;
+  container.addEventListener("change", function (e) {
+    if (e.target.name !== radioName) return;
+    container.querySelectorAll("[data-value]").forEach(function (row) {
+      row.classList.toggle("selected", row.dataset.value === e.target.value);
     });
   });
+}
+bindRadioCards("#audienceGrid", "audience");
+bindRadioCards("#msgOptions",   "message");
+
+// Show textarea only when "text" message is selected
+document.querySelectorAll("input[name=message]").forEach(function (r) {
+  r.addEventListener("change", updateSendButton);
 });
 
-// ── Message type toggle ───────────────────────────────────────────────────────
+// ── Audience options (load from server + live count) ─────────────────────────
 
-document.querySelectorAll("input[name=msgType]").forEach(function (r) {
-  r.addEventListener("change", function () {
-    var textGroup = document.getElementById("textMsgGroup");
-    if (textGroup) textGroup.style.display = r.value === "text" ? "" : "none";
-  });
-});
+var selectedDonorId   = null;
+var selectedDonorName = null;
 
-// ── Schedule toggle ───────────────────────────────────────────────────────────
-
-document.querySelectorAll("input[name=sendWhen]").forEach(function (r) {
-  r.addEventListener("change", function () {
-    var sg = document.getElementById("scheduleGroup");
-    if (sg) sg.style.display = r.value === "scheduled" ? "" : "none";
-  });
-});
-
-// ── Recipient filter + counts ─────────────────────────────────────────────────
-
-var filterOptions = { cities: [], years: [] };
-
-async function loadFilterOptions() {
+async function loadAudienceOptions() {
   try {
-    var res  = await apiFetch("/api/technoline/campaign/filter-options");
+    var res  = await apiFetch("/api/technoline/send/audience-options");
     var data = await res.json();
-    filterOptions = data;
 
-    var citySelect = document.getElementById("citySelect");
-    var yearSelect = document.getElementById("yearSelect");
+    // Debt badge
+    var badgeDebt = document.getElementById("badgeDebt");
+    if (badgeDebt) {
+      badgeDebt.textContent = (data.debtCount || 0) + " תורמים";
+      if (!data.debtCount) badgeDebt.classList.add("zero");
+    }
 
+    // Tags
+    if (data.tags && data.tags.length > 0) {
+      var tagSelect = document.getElementById("tagSelect");
+      data.tags.forEach(function (t) {
+        var o = document.createElement("option");
+        o.value = t; o.textContent = t;
+        tagSelect.appendChild(o);
+      });
+      document.getElementById("rowTag").style.display = "";
+    }
+
+    // Cities
     if (data.cities && data.cities.length > 0) {
+      var citySelect = document.getElementById("citySelect");
       data.cities.forEach(function (c) {
         var o = document.createElement("option");
         o.value = c; o.textContent = c;
         citySelect.appendChild(o);
       });
-      document.getElementById("cityCard").style.display = "";
-    }
-
-    if (data.years && data.years.length > 0) {
-      data.years.forEach(function (y) {
-        var o = document.createElement("option");
-        o.value = y; o.textContent = y;
-        yearSelect.appendChild(o);
-      });
-      document.getElementById("yearCard").style.display = "";
+      document.getElementById("rowCity").style.display = "";
     }
   } catch (_) {}
 
-  updateRecipientCount();
+  await refreshCount();
 }
 
 async function fetchCount(filter) {
   try {
-    var res  = await apiFetch("/api/technoline/campaign/recipient-count?filter=" + encodeURIComponent(filter));
+    var res  = await apiFetch("/api/technoline/send/recipient-count?filter=" + encodeURIComponent(filter));
     var data = await res.json();
     return data.count || 0;
   } catch (_) { return 0; }
 }
 
-async function updateRecipientCount() {
-  var allCount = await fetchCount("all");
-  var allNote  = document.getElementById("countAll");
-  if (allNote) allNote.textContent = allCount + " מספרי טלפון";
-  refreshTotalCount();
-}
-
-async function refreshTotalCount() {
-  var selected = getSelectedRecipient();
-  var filter   = buildFilter(selected);
-  var count    = await fetchCount(filter);
-
-  var totalEl   = document.getElementById("totalCount");
-  var summaryEl = document.getElementById("totalCountSummary");
-  if (totalEl)   totalEl.textContent   = count;
-  if (summaryEl) summaryEl.textContent = count > 0 ? "(" + count + " מספרי טלפון)" : "(אין מספרים תואמים)";
-}
-
-function getSelectedRecipient() {
-  var checked = document.querySelector("input[name=recipient]:checked");
-  return checked ? checked.value : "all";
-}
-
-function buildFilter(selected) {
-  if (selected === "city") {
-    var v = (document.getElementById("citySelect") || {}).value || "";
-    return v ? "city:" + v : "all";
+function getAudienceFilter() {
+  var val = (document.querySelector("input[name=audience]:checked") || {}).value || "debt";
+  if (val === "tag") {
+    var tv = (document.getElementById("tagSelect")  || {}).value || "";
+    return tv ? "tag:" + tv : null;
   }
-  if (selected === "year") {
-    var v2 = (document.getElementById("yearSelect") || {}).value || "";
-    return v2 ? "year:" + v2 : "all";
+  if (val === "city") {
+    var cv = (document.getElementById("citySelect") || {}).value || "";
+    return cv ? "city:" + cv : null;
   }
-  return "all";
+  if (val === "donor") {
+    return selectedDonorId ? "donor:" + selectedDonorId : null;
+  }
+  return val; // "debt" | "all"
 }
 
-// Update counts when recipient card changes
-document.querySelectorAll("input[name=recipient]").forEach(function (r) {
-  r.addEventListener("change", refreshTotalCount);
-});
+async function refreshCount() {
+  var filter = getAudienceFilter();
+  var count  = filter ? await fetchCount(filter) : 0;
 
-var citySelect = document.getElementById("citySelect");
-var yearSelect = document.getElementById("yearSelect");
+  var countEl = document.getElementById("sendCount");
+  if (countEl) countEl.textContent = count;
+  updateSendButton(count);
 
-if (citySelect) citySelect.addEventListener("change", async function () {
-  var count = await fetchCount("city:" + this.value);
-  var el    = document.getElementById("countCity");
-  if (el) { el.textContent = count + " מספרים"; el.style.display = count > 0 ? "" : "none"; }
-  refreshTotalCount();
-});
+  // Update per-row badge for sub-selectors
+  var audVal = (document.querySelector("input[name=audience]:checked") || {}).value;
+  if (audVal === "tag")    updateBadge("badgeTag",    count);
+  if (audVal === "city")   updateBadge("badgeCity",   count);
+  if (audVal === "donor")  updateBadge("badgeDonor",  count);
+}
 
-if (yearSelect) yearSelect.addEventListener("change", async function () {
-  var count = await fetchCount("year:" + this.value);
-  var el    = document.getElementById("countYear");
-  if (el) { el.textContent = count + " מספרים"; el.style.display = count > 0 ? "" : "none"; }
-  refreshTotalCount();
+function updateBadge(id, count) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = count;
+  el.classList.toggle("zero", count === 0);
+}
+
+// Re-fetch when audience radio changes or sub-selects change
+document.querySelectorAll("input[name=audience]").forEach(function (r) {
+  r.addEventListener("change", refreshCount);
 });
+var tagSel  = document.getElementById("tagSelect");
+var citySel = document.getElementById("citySelect");
+if (tagSel)  tagSel.addEventListener("change",  refreshCount);
+if (citySel) citySel.addEventListener("change", refreshCount);
+
+// ── Donor search autocomplete ─────────────────────────────────────────────────
+
+var donorInput       = document.getElementById("donorSearchInput");
+var donorSuggestions = document.getElementById("donorSuggestions");
+var donorInfo        = document.getElementById("selectedDonorInfo");
+
+function searchDonors(query) {
+  var donors = Database.get("donors") || [];
+  query      = query.trim().toLowerCase();
+  if (!query) return [];
+  return donors.filter(function (d) {
+    var hasApproved = (d.ivrApprovedPhones || []).length > 0;
+    if (!hasApproved) return false;
+    var nameMatch  = (d.fullName || "").toLowerCase().includes(query);
+    var phoneMatch = [d.phone, d.phone2, d.phone3, d.phone4].some(function (p) {
+      return p && String(p).replace(/\D/g, "").includes(query.replace(/\D/g, ""));
+    });
+    return nameMatch || phoneMatch;
+  }).slice(0, 8);
+}
+
+function selectDonor(donor) {
+  selectedDonorId   = donor.id;
+  selectedDonorName = donor.fullName;
+  if (donorInput) donorInput.value = donor.fullName;
+  if (donorInfo)  donorInfo.textContent = (donor.ivrApprovedPhones || []).join(" | ");
+  if (donorSuggestions) donorSuggestions.style.display = "none";
+  refreshCount();
+}
+
+function clearDonorSelection() {
+  selectedDonorId   = null;
+  selectedDonorName = null;
+  if (donorInfo)  donorInfo.textContent = "";
+}
+
+if (donorInput) {
+  donorInput.addEventListener("input", function () {
+    clearDonorSelection();
+    var results = searchDonors(this.value);
+    if (results.length === 0) {
+      donorSuggestions.style.display = "none";
+      return;
+    }
+    donorSuggestions.innerHTML = results.map(function (d) {
+      var phones = (d.ivrApprovedPhones || []).slice(0, 2).join(", ");
+      return '<div class="donor-suggestion" data-id="' + d.id + '">' +
+        escapeHTML(d.fullName) +
+        (phones ? '<span style="color:#888;font-size:.85em;margin-right:6px"> ' + escapeHTML(phones) + '</span>' : "") +
+        '</div>';
+    }).join("");
+    donorSuggestions.style.display = "";
+  });
+
+  donorInput.addEventListener("blur", function () {
+    setTimeout(function () { if (donorSuggestions) donorSuggestions.style.display = "none"; }, 200);
+  });
+}
+
+if (donorSuggestions) {
+  donorSuggestions.addEventListener("mousedown", function (e) {
+    var item = e.target.closest(".donor-suggestion");
+    if (!item) return;
+    var donors = Database.get("donors") || [];
+    var donor  = donors.find(function (d) { return d.id === Number(item.dataset.id); });
+    if (donor) selectDonor(donor);
+  });
+}
+
+// ── Send button state ─────────────────────────────────────────────────────────
+
+function updateSendButton(count) {
+  var btn = document.getElementById("sendButton");
+  if (!btn) return;
+  var n = typeof count === "number" ? count : Number((document.getElementById("sendCount") || {}).textContent) || 0;
+
+  var msgVal     = (document.querySelector("input[name=message]:checked") || {}).value || "ivr";
+  var textFilled = msgVal !== "text" || ((document.getElementById("msgTextInput") || {}).value || "").trim().length > 0;
+
+  btn.disabled = (n === 0 || !textFilled);
+}
+
+var msgTextInput = document.getElementById("msgTextInput");
+if (msgTextInput) msgTextInput.addEventListener("input", updateSendButton);
 
 // ── Send ──────────────────────────────────────────────────────────────────────
 
-function showSendStatus(text, type) {
+function showStatus(text, type) {
   var el = document.getElementById("sendStatus");
   if (!el) return;
   el.innerText = text;
@@ -140,218 +214,123 @@ function showSendStatus(text, type) {
 }
 
 document.getElementById("sendButton").addEventListener("click", async function () {
-  var btn = this;
+  var btn      = this;
+  var count    = Number((document.getElementById("sendCount") || {}).textContent) || 0;
+  var filter   = getAudienceFilter();
+  var msgVal   = (document.querySelector("input[name=message]:checked") || {}).value || "ivr";
+  var msgText  = ((document.getElementById("msgTextInput") || {}).value || "").trim();
 
-  var selectedRecipient = getSelectedRecipient();
-  var recipientFilter   = buildFilter(selectedRecipient);
-  var msgType           = (document.querySelector("input[name=msgType]:checked") || {}).value || "ivr";
-  var messageText       = (document.getElementById("messageText") || {}).value || "";
-  var sendWhen          = (document.querySelector("input[name=sendWhen]:checked") || {}).value || "now";
-  var quietHours        = !!(document.getElementById("quietHours") || {}).checked;
-
-  // Validate
-  if (msgType === "text" && !messageText.trim()) {
-    showSendStatus("יש להזין טקסט להודעה", "error");
+  if (!filter || count === 0) {
+    showStatus("אין מספרים תואמים לשליחה", "error");
     return;
   }
-  if (sendWhen === "scheduled") {
-    var dtEl = document.getElementById("sendTimeInput");
-    if (!dtEl || !dtEl.value) {
-      showSendStatus("יש לבחור תאריך ושעה לשיגור", "error");
-      return;
-    }
-  }
-
-  var totalCount = Number((document.getElementById("totalCount") || {}).textContent) || 0;
-  if (totalCount === 0) {
-    showSendStatus("אין מספרי טלפון תואמים לשיגור", "error");
+  if (msgVal === "text" && !msgText) {
+    showStatus("יש להזין הודעה", "error");
     return;
   }
 
-  if (!confirm("לשלוח הודעה ל-" + totalCount + " מספרים?")) return;
+  // Clear audience label for confirm dialog
+  var audLabel = getAudienceLabel();
+  if (!confirm("לשלוח הודעה ל-" + count + " מספרים" + (audLabel ? " (" + audLabel + ")" : "") + "?")) return;
 
   btn.disabled    = true;
   btn.textContent = "שולח...";
 
   try {
     var payload = {
-      recipientFilter: recipientFilter,
-      messageKind:     msgType,
-      messageText:     messageText,
-      quietHours:      quietHours,
+      recipientFilter: filter,
+      messageKind:     msgVal,
+      messageText:     msgText,
+      quietHours:      true,
     };
 
-    if (sendWhen === "scheduled") {
-      var d   = new Date(document.getElementById("sendTimeInput").value);
-      var pad = function (n) { return String(n).padStart(2, "0"); };
-      payload.sendTime =
-        (d.getFullYear() % 100) + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
-        " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":00";
-    }
-
-    var res  = await apiFetch("/api/technoline/campaign/run", { method: "POST", body: JSON.stringify(payload) });
+    var res  = await apiFetch("/api/technoline/send", { method: "POST", body: JSON.stringify(payload) });
     var data = await res.json();
 
     if (!res.ok) {
-      showSendStatus(data.error || "שגיאה בשיגור ההודעות", "error");
-      return;
+      showStatus(data.error || "שגיאה בשיגור", "error");
+    } else {
+      var summary = "ההודעות נשוגרו ל-" + (data.phones || count) + " מספרים";
+      if (data.errorPhones)   summary += " | " + data.errorPhones   + " שגיאות פורמט";
+      if (data.blockedPhones) summary += " | " + data.blockedPhones + " חסומים";
+      showStatus("✅ " + summary, "success");
+      showToast("שיגור הושלם");
+      loadRecentLog();
     }
-
-    var summary = "ההודעות נשלחו ל-" + (data.phones || totalCount) + " מספרים";
-    if (data.blockedPhones) summary += " | " + data.blockedPhones + " חסומים";
-    if (data.errorPhones)   summary += " | " + data.errorPhones + " שגיאות פורמט";
-
-    showSendStatus("✅ " + summary, "success");
-    showToast("שיגור הופעל בהצלחה!");
-    loadHistory();
   } catch (_) {
-    showSendStatus("שגיאת תקשורת עם השרת", "error");
+    showStatus("שגיאת תקשורת עם השרת", "error");
   } finally {
     btn.disabled    = false;
-    btn.textContent = "📣 שלח הודעה";
+    btn.innerHTML   = "📣 שלח הודעה ל-<span id='sendCount'>" + count + "</span> מספרים";
   }
 });
 
-// ── History ───────────────────────────────────────────────────────────────────
-
-function statusLabel(s) {
-  var map = {
-    active:  '<span class="campaign-status-active">🟢 פעיל</span>',
-    hold:    '<span class="campaign-status-hold">⏸ מושהה</span>',
-    ended:   '<span class="campaign-status-ended">✔ הסתיים</span>',
-    stoped:  '<span class="campaign-status-stopped">⏹ הופסק</span>',
-    stopped: '<span class="campaign-status-stopped">⏹ הופסק</span>',
-  };
-  return map[(s || "").toLowerCase()] || escapeHTML(s || "—");
+function getAudienceLabel() {
+  var val = (document.querySelector("input[name=audience]:checked") || {}).value || "";
+  if (val === "debt") return "בעלי חוב";
+  if (val === "tag")  return "תגית: " + ((document.getElementById("tagSelect")  || {}).value || "");
+  if (val === "city") return "עיר: "  + ((document.getElementById("citySelect") || {}).value || "");
+  if (val === "donor" && selectedDonorName) return selectedDonorName;
+  return "";
 }
 
-async function loadHistory() {
-  var tbody = document.getElementById("historyTableBody");
-  var msgEl = document.getElementById("historyMessage");
-  if (!tbody) return;
+// ── Recent log (read-only) ────────────────────────────────────────────────────
 
-  tbody.innerHTML = "<tr><td colspan='7' style='color:#888;padding:.8rem;'>טוען...</td></tr>";
+async function loadRecentLog() {
+  var container = document.getElementById("recentLog");
+  if (!container) return;
 
   try {
     var res  = await apiFetch("/api/technoline/campaign/history");
     var data = await res.json();
 
     if (!res.ok) {
-      if (msgEl) { msgEl.innerText = data.error || "שגיאה בטעינה"; msgEl.className = "message show error"; }
-      tbody.innerHTML = "";
+      container.innerHTML = '<p class="log-empty">' + escapeHTML(data.error || "שגיאה בטעינה") + '</p>';
       return;
     }
 
-    var campaigns = Array.isArray(data) ? data : (data.campaigns || data.history || []);
-    if (campaigns.length === 0) {
-      tbody.innerHTML = "<tr><td colspan='7' style='color:#888;text-align:center;padding:.8rem;'>לא נמצאו שיגורים</td></tr>";
+    var list = Array.isArray(data) ? data : (data.campaigns || data.history || []);
+    if (list.length === 0) {
+      container.innerHTML = '<p class="log-empty">אין שיגורים קודמים</p>';
       return;
     }
 
-    tbody.innerHTML = campaigns.map(function (c) {
-      var startStr = c.start_time
-        ? new Date(c.start_time.replace(" ", "T")).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem", hour12: false })
-        : "—";
-      return "<tr>" +
-        "<td style='font-weight:600;color:#888;font-size:.85em'>#" + escapeHTML(String(c.id || "")) + "</td>" +
-        "<td>" + escapeHTML(c.title || "ללא שם") + "</td>" +
-        "<td>" + statusLabel(c.active) + "</td>" +
-        "<td>" + escapeHTML(String(c.total_sent   || "—")) + "</td>" +
-        "<td>" + escapeHTML(String(c.answerd_calls || "—")) + "</td>" +
-        "<td style='white-space:nowrap;font-size:.85em'>" + escapeHTML(startStr) + "</td>" +
-        "<td style='white-space:nowrap'>" + buildActions(c) + "</td>" +
-        "</tr>";
-    }).join("");
+    var statusMap = {
+      active:  "🟢 פעיל",
+      hold:    "⏸ מושהה",
+      ended:   "✔ הסתיים",
+      stoped:  "⏹ הופסק",
+      stopped: "⏹ הופסק",
+    };
+
+    container.innerHTML = '<table style="width:100%;font-size:.88em;border-collapse:collapse;">' +
+      '<thead><tr>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">תאריך</th>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">נשלח</th>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">נענו</th>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">סטטוס</th>' +
+      '</tr></thead><tbody>' +
+      list.slice(0, 10).map(function (c) {
+        var dateStr = c.start_time
+          ? new Date(c.start_time.replace(" ", "T")).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem", hour12: false, dateStyle: "short", timeStyle: "short" })
+          : "—";
+        var status = statusMap[(c.active || "").toLowerCase()] || escapeHTML(c.active || "—");
+        return "<tr>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + escapeHTML(dateStr) + "</td>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + escapeHTML(String(c.total_sent || "—")) + "</td>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + escapeHTML(String(c.answerd_calls || "—")) + "</td>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + status + "</td>" +
+          "</tr>";
+      }).join("") +
+      "</tbody></table>";
   } catch (_) {
-    tbody.innerHTML = "<tr><td colspan='7' style='color:#b00;padding:.8rem;'>שגיאת תקשורת</td></tr>";
+    container.innerHTML = '<p class="log-empty">לא ניתן לטעון שיגורים</p>';
   }
 }
-
-function buildActions(c) {
-  var id   = c.id;
-  var btns = [];
-  btns.push("<button onclick='showReport(" + id + ")' style='font-size:.78em;padding:3px 9px;border:1px solid #1565c0;border-radius:4px;background:#e8f0fe;color:#1565c0;cursor:pointer;margin-left:4px'>פרטים</button>");
-  if (c.active === "active") {
-    btns.push("<button onclick='doAction(" + id + ",\"hold\")' style='font-size:.78em;padding:3px 9px;border:1px solid #b07000;border-radius:4px;background:#fff8e1;color:#b07000;cursor:pointer;margin-left:4px'>⏸ השהה</button>");
-    btns.push("<button onclick='doAction(" + id + ",\"stop\")' style='font-size:.78em;padding:3px 9px;border:1px solid #b00;border-radius:4px;background:#fff0f0;color:#b00;cursor:pointer'>⏹ עצור</button>");
-  } else if (c.active === "hold") {
-    btns.push("<button onclick='doAction(" + id + ",\"resume\")' style='font-size:.78em;padding:3px 9px;border:1px solid #1a7a1a;border-radius:4px;background:#e8f5e9;color:#1a7a1a;cursor:pointer;margin-left:4px'>▶ המשך</button>");
-    btns.push("<button onclick='doAction(" + id + ",\"stop\")' style='font-size:.78em;padding:3px 9px;border:1px solid #b00;border-radius:4px;background:#fff0f0;color:#b00;cursor:pointer'>⏹ עצור</button>");
-  }
-  return btns.join("");
-}
-
-async function doAction(id, action) {
-  var labels = { hold: "להשהות", resume: "להמשיך", stop: "לעצור סופית" };
-  if (!confirm("האם לבצע: " + (labels[action] || action) + " שיגור #" + id + "?")) return;
-  try {
-    var res  = await apiFetch("/api/technoline/campaign/" + id + "/" + action, { method: "POST" });
-    var data = await res.json();
-    if (data.errorCode === 0 || String(data.status || "").toUpperCase() === "OK") {
-      showToast("הפעולה בוצעה");
-      loadHistory();
-    } else {
-      showToast("שגיאה: " + (data.note || data.error || ""));
-    }
-  } catch (_) { showToast("שגיאת תקשורת"); }
-}
-
-// ── Report ────────────────────────────────────────────────────────────────────
-
-async function showReport(id) {
-  var modal = document.getElementById("reportModal");
-  var title = document.getElementById("reportTitle");
-  var sumEl = document.getElementById("reportSummary");
-  var tbody = document.getElementById("reportTableBody");
-  if (!modal) return;
-
-  title.textContent   = "טוען דוח שיגור #" + id + "...";
-  sumEl.innerHTML     = "";
-  tbody.innerHTML     = "<tr><td colspan='5' style='color:#888;padding:.8rem;'>טוען...</td></tr>";
-  modal.style.display = "flex";
-
-  try {
-    var res  = await apiFetch("/api/technoline/campaign/" + id + "/report");
-    var data = await res.json();
-    var c    = data.campaign || data;
-
-    title.textContent = "שיגור #" + id + (c.title ? " — " + c.title : "");
-
-    sumEl.innerHTML = [
-      c.status       ? "<p><strong>סטטוס:</strong> "    + escapeHTML(c.status)              + "</p>" : "",
-      c.recipients   ? "<p><strong>נמענים:</strong> "   + escapeHTML(String(c.recipients))  + "</p>" : "",
-      c.answeredCalls? "<p><strong>נענו:</strong> "     + escapeHTML(String(c.answeredCalls))+ "</p>" : "",
-      c.billing      ? "<p><strong>עלות:</strong> "     + escapeHTML(String(c.billing))     + "</p>" : "",
-    ].join("");
-
-    var rows = data.calls || data.recipients || [];
-    if (rows.length === 0) {
-      tbody.innerHTML = "<tr><td colspan='5' style='color:#888;text-align:center;padding:.8rem;'>אין נתוני שיחות</td></tr>";
-      return;
-    }
-    tbody.innerHTML = rows.map(function (r) {
-      var ok = r.status === "answered";
-      return "<tr>" +
-        "<td dir='ltr'>" + escapeHTML(r.phone || "—") + "</td>" +
-        "<td>" + escapeHTML(r.name  || "—") + "</td>" +
-        "<td style='color:" + (ok ? "#1a7a1a" : "#888") + ";font-weight:600'>" + escapeHTML(r.status || "—") + "</td>" +
-        "<td>" + escapeHTML(r.duration || "—") + "</td>" +
-        "<td>" + escapeHTML(r.digits   || "—") + "</td>" +
-        "</tr>";
-    }).join("");
-  } catch (_) {
-    title.textContent = "שגיאה בטעינת הדוח";
-    tbody.innerHTML   = "";
-  }
-}
-
-document.getElementById("reportModal").addEventListener("click", function (e) {
-  if (e.target === this) this.style.display = "none";
-});
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-document.getElementById("loadHistoryButton").addEventListener("click", loadHistory);
-
-loadFilterOptions();
-loadHistory();
+Database.whenReady(function () {
+  loadAudienceOptions();
+  loadRecentLog();
+});
