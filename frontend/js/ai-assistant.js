@@ -1,6 +1,8 @@
 // ai-assistant.js — Floating AI chat widget (Read Only)
 // Works on any page. On donor.html it picks up donorId from the URL.
 
+console.log("[AI] ai-assistant.js loaded");
+
 (function () {
   "use strict";
 
@@ -239,27 +241,38 @@
   // ── Init ──────────────────────────────────────────────────────────────────────
 
   function init() {
-    // Pick up donor ID from URL if on donor page
-    var params = new URLSearchParams(window.location.search);
-    var idParam = params.get("id");
-    if (idParam) _donorId = Number(idParam) || null;
+    try {
+      console.log("[AI] init() starting, readyState=" + document.readyState);
 
-    // Build and inject DOM
-    var fab   = buildFab();
-    var panel = buildPanel();
-    document.body.appendChild(fab);
-    document.body.appendChild(panel);
+      // Pick up donor ID from URL if on donor page
+      var params = new URLSearchParams(window.location.search);
+      var idParam = params.get("id");
+      if (idParam) _donorId = Number(idParam) || null;
 
-    // Wire events
-    fab.addEventListener("click", function () {
-      var p = document.getElementById("aiPanel");
-      if (p && p.classList.contains("hidden")) { openPanel(); } else { closePanel(); }
-    });
+      // Build and inject DOM
+      var fab   = buildFab();
+      var panel = buildPanel();
+      document.body.appendChild(fab);
+      document.body.appendChild(panel);
 
-    document.getElementById("aiCloseBtn").addEventListener("click", closePanel);
-    document.getElementById("aiClearBtn").addEventListener("click", clearChat);
+      console.log("[AI] FAB appended to body, id=aiFab");
 
-    wireInput();
+      // Wire events
+      fab.addEventListener("click", function () {
+        var p = document.getElementById("aiPanel");
+        if (p && p.classList.contains("hidden")) { openPanel(); } else { closePanel(); }
+      });
+
+      var closeBtn = document.getElementById("aiCloseBtn");
+      var clearBtn = document.getElementById("aiClearBtn");
+      if (closeBtn) closeBtn.addEventListener("click", closePanel);
+      if (clearBtn) clearBtn.addEventListener("click", clearChat);
+
+      wireInput();
+      console.log("[AI] init() done — FAB should be visible bottom-left");
+    } catch (err) {
+      console.error("[AI] init() failed:", err);
+    }
   }
 
   // Wait for DOM
