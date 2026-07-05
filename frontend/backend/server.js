@@ -688,6 +688,69 @@ function campaignErrMsg(body) {
   return body.note || body.error || ("שגיאה " + (body.errorCode || ""));
 }
 
+// Helper: build phone list from donors filtered by recipientFilter
+// Supported filters: "all" | "city:<name>" | "year:<year>"
+function buildPhoneList(recipientFilter) {
+  var donors = getAppState("donors") || [];
+  var filter = String(recipientFilter || "all").trim();
+  var phones = [];
+  for (var i = 0; i < donors.length; i++) {
+    var d = donors[i];
+    var approved = d.ivrApprovedPhones || [];
+    if (approved.length === 0) continue;
+    var include = false;
+    if (filter === "all") {
+      include = true;
+    } else if (filter.startsWith("city:")) {
+      var city = filter.slice(5).trim();
+      include = (d.city || "").trim() === city;
+    } else if (filter.startsWith("year:")) {
+      var year = filter.slice(5).trim();
+      include = (d.hebrewYear || "").trim() === year;
+    } else {
+      include = true;
+    }
+    if (!include) continue;
+    for (var j = 0; j < approved.length; j++) {
+      if (phones.indexOf(approved[j]) === -1) phones.push(approved[j]);
+    }
+  }
+  return phones;
+}
+
+// GET /api/technoline/campaign/recipient-count — preview how many phones a filter returns
+app.get(
+  "/api/technoline/campaign/recipient-count",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var phones = buildPhoneList(req.query.filter || "all");
+      return res.json({ count: phones.length });
+    } catch (err) { next(err); }
+  }
+);
+
+// GET /api/technoline/campaign/filter-options — cities and years available for filters
+app.get(
+  "/api/technoline/campaign/filter-options",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var donors = getAppState("donors") || [];
+      var cities = {}, years = {};
+      donors.forEach(function (d) {
+        if ((d.ivrApprovedPhones || []).length === 0) return;
+        if (d.city)        cities[d.city.trim()]        = true;
+        if (d.hebrewYear)  years[d.hebrewYear.trim()]   = true;
+      });
+      return res.json({
+        cities: Object.keys(cities).sort(),
+        years:  Object.keys(years).sort(),
+      });
+    } catch (err) { next(err); }
+  }
+);
+
 // POST /api/technoline/campaign/run
 app.post(
   "/api/technoline/campaign/run",
@@ -698,72 +761,61 @@ app.post(
       var apiKey = process.env.TECHNOLINE_API_KEY || "";
       if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
 
-      var body           = req.body || {};
-      var title          = String(body.title          || "").trim();
-      var messagesType   = String(body.messagesType   || "audioText").trim();
-      var audioText      = String(body.audioText      || "").trim();
-      var extensionNum   = String(body.extension      || "").trim();
-      var apiUrl         = String(body.apiUrl         || "").trim();
-      var callLength     = body.callLength     || 25;
-      var dialRetries    = body.dialRetries    || 1;
-      var betweenRetries = body.betweenRetries || 20;
-      var reasonableHours = (body.reasonableHours === true || body.reasonableHours === "yes") ? "yes" : "no";
-      var sendTime       = body.sendTime || null;
-      var phonesOverride = body.phones   || null;
+      var body            = req.body || {};
+      var title           = String(body.title           || "").trim();
+      var messageKind     = String(body.messageKind     || "ivr").trim();   // "ivr" | "text"
+      var messageText     = String(body.messageText     || "").trim();
+      var recipientFilter = String(body.recipientFilter || "all").trim();
+      var sendTime        = body.sendTime || null;
+      var quietHours      = body.quietHours !== false;   // default true
 
-      // Build phone list from ivrApprovedPhones unless explicit list provided
+      // Resolve IVR extension: use env, fallback to body.extension for advanced callers
+      var ivrExtension = String(
+        process.env.TECHNOLINE_IVR_EXTENSION || body.extension || ""
+      ).trim();
+
+      // Build phone list using filter
+      var phonesOverride = body.phones || null;
       var phones;
       if (Array.isArray(phonesOverride) && phonesOverride.length > 0) {
         phones = phonesOverride;
       } else {
-        var donors = getAppState("donors") || [];
-        phones = [];
-        for (var i = 0; i < donors.length; i++) {
-          var approved = donors[i].ivrApprovedPhones || [];
-          for (var j = 0; j < approved.length; j++) {
-            if (phones.indexOf(approved[j]) === -1) phones.push(approved[j]);
-          }
-        }
+        phones = buildPhoneList(recipientFilter);
       }
 
       if (phones.length === 0) {
-        return res.status(400).json({ error: "אין מספרי טלפון מאושרים לשליחה" });
+        return res.status(400).json({ error: "אין מספרי טלפון מאושרים לשליחה עם הסינון הנבחר" });
       }
 
-      if (messagesType === "audioText" && !audioText) {
-        return res.status(400).json({ error: "יש לספק טקסט להקראה (audioText)" });
+      if (messageKind === "ivr" && !ivrExtension) {
+        return res.status(503).json({ error: "TECHNOLINE_IVR_EXTENSION לא מוגדר בשרת" });
       }
-      if (messagesType === "extensionActivation" && !extensionNum) {
-        return res.status(400).json({ error: "יש לספק מספר שלוחה (extension)" });
-      }
-      if (messagesType === "apiUrl" && !apiUrl) {
-        return res.status(400).json({ error: "יש לספק כתובת API (apiUrl)" });
+      if (messageKind === "text" && !messageText) {
+        return res.status(400).json({ error: "יש להזין טקסט להודעה" });
       }
 
+      // Smart defaults — hidden from UI
       var params = {
         action:          "campaignRun",
         apiKey:          apiKey,
         phones:          JSON.stringify(phones),
-        betweenRetries:  betweenRetries,
-        callLength:      callLength,
-        dialRetries:     dialRetries,
-        reasonableHours: reasonableHours,
+        betweenRetries:  30,
+        callLength:      25,
+        dialRetries:     2,
+        reasonableHours: quietHours ? "yes" : "no",
       };
       if (title)    params.title    = title;
       if (sendTime) params.sendTime = sendTime;
 
-      if (messagesType === "audioText") {
-        params.audioText    = audioText;
-      } else if (messagesType === "extensionActivation") {
+      if (messageKind === "ivr") {
         params.messagesType        = "extensionActivation";
-        params.extensionActivation = extensionNum;
-      } else if (messagesType === "apiUrl") {
-        params.messagesType = "apiUrl";
-        params.apiUrl       = apiUrl;
+        params.extensionActivation = ivrExtension;
+      } else {
+        params.audioText = messageText;
       }
 
       var urlParams = new URLSearchParams(params);
-      console.log("[Campaign] launching", phones.length, "phones | title:", title, "| type:", messagesType);
+      console.log("[Campaign] launching", phones.length, "phones | title:", title, "| kind:", messageKind);
 
       var techRes  = await fetch("https://app.ipsales.co.il/campaignApi.php", {
         method:  "POST",

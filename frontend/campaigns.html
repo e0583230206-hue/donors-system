@@ -3,8 +3,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>קמפיינים יוצאים</title>
+    <title>שיגור הודעות</title>
     <link rel="stylesheet" href="css/style.css" />
+    <style>
+      .send-wizard { max-width: 680px; }
+      .wizard-step {
+        background: #fff;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 22px 26px;
+        margin-bottom: 16px;
+      }
+      .wizard-step h3 {
+        margin: 0 0 16px;
+        font-size: 1.05em;
+        color: #1565c0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .wizard-step h3 .step-num {
+        background: #1565c0;
+        color: #fff;
+        border-radius: 50%;
+        width: 24px; height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: .82em;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+      .radio-cards { display: flex; flex-direction: column; gap: 10px; }
+      .radio-card {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px 16px;
+        border: 2px solid #e0e0e0;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: border-color .15s, background .15s;
+      }
+      .radio-card:has(input:checked),
+      .radio-card.checked {
+        border-color: #1565c0;
+        background: #e8f0fe;
+      }
+      .radio-card input[type=radio] { margin-top: 3px; flex-shrink: 0; }
+      .radio-card-body { flex: 1; }
+      .radio-card-body strong { display: block; margin-bottom: 2px; }
+      .radio-card-body small { color: #666; font-size: .84em; line-height: 1.4; }
+      .filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+      .recipient-count {
+        display: inline-block;
+        background: #e8f0fe;
+        color: #1565c0;
+        font-weight: 700;
+        border-radius: 20px;
+        padding: 2px 12px;
+        font-size: .9em;
+      }
+      .send-btn-wrap { margin-top: 6px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      #sendStatus { margin-top: 10px; }
+      .history-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .campaign-status-active  { color: #1a7a1a; font-weight: 600; }
+      .campaign-status-hold    { color: #b07000; font-weight: 600; }
+      .campaign-status-ended   { color: #555; }
+      .campaign-status-stopped { color: #b00; font-weight: 600; }
+    </style>
   </head>
   <body>
     <aside class="sidebar">
@@ -13,7 +80,6 @@
         <span>א בלאט גמרא</span>
         <small>ניהול תורמים</small>
       </div>
-
       <nav>
         <a href="index.html">🏠 דף הבית</a>
         <a href="donors.html">👤 תורמים</a>
@@ -26,7 +92,7 @@
         <a href="logs.html">🕒 יומן מערכת</a>
         <a href="ivr-monitor.html">📺 מוניטור IVR</a>
         <a href="approvals.html">✅ אישור חיובים</a>
-        <a href="campaigns.html" class="active">📣 קמפיינים</a>
+        <a href="campaigns.html" class="active">📣 שיגור הודעות</a>
         <a href="settings.html">⚙️ הגדרות</a>
         <a href="README.html">📖 מדריך משתמש</a>
       </nav>
@@ -36,105 +102,142 @@
     <main class="main">
       <header class="page-header">
         <div>
-          <h1>📣 קמפיינים יוצאים</h1>
-          <p>שיגור הודעות קוליות יוצאות לתורמים עם מספרים מאושרי IVR</p>
+          <h1>📣 שיגור הודעות</h1>
+          <p>שלח הודעה קולית לתורמים בכמה קליקים</p>
         </div>
       </header>
 
-      <!-- Launch new campaign -->
-      <section class="panel" id="newCampaignPanel">
-        <h2>🚀 הפעלת קמפיין חדש</h2>
-        <p id="approvedCountNote" style="color:var(--muted);font-size:.9em;margin-bottom:14px;"></p>
+      <div class="send-wizard">
 
-        <div class="form-grid">
-          <div>
-            <label for="campaignTitle">שם הקמפיין</label>
-            <input id="campaignTitle" type="text" placeholder="לדוגמה: תזכורת תרומה תשרי תשפ״ו" />
+        <!-- Step 1: Who -->
+        <div class="wizard-step">
+          <h3><span class="step-num">1</span> למי לשלוח?</h3>
+
+          <div class="radio-cards" id="recipientCards">
+            <label class="radio-card checked">
+              <input type="radio" name="recipient" value="all" checked />
+              <div class="radio-card-body">
+                <strong>כל התורמים המאושרים ל-IVR</strong>
+                <small id="countAll">טוען...</small>
+              </div>
+            </label>
+            <label class="radio-card" id="cityCard" style="display:none;">
+              <input type="radio" name="recipient" value="city" />
+              <div class="radio-card-body">
+                <strong>לפי עיר</strong>
+                <div class="filter-row">
+                  <select id="citySelect" style="padding:5px 10px;border:1px solid #ccc;border-radius:6px;">
+                    <option value="">בחר עיר...</option>
+                  </select>
+                  <span id="countCity" class="recipient-count" style="display:none;"></span>
+                </div>
+              </div>
+            </label>
+            <label class="radio-card" id="yearCard" style="display:none;">
+              <input type="radio" name="recipient" value="year" />
+              <div class="radio-card-body">
+                <strong>לפי שנה</strong>
+                <div class="filter-row">
+                  <select id="yearSelect" style="padding:5px 10px;border:1px solid #ccc;border-radius:6px;">
+                    <option value="">בחר שנה...</option>
+                  </select>
+                  <span id="countYear" class="recipient-count" style="display:none;"></span>
+                </div>
+              </div>
+            </label>
           </div>
 
-          <div>
-            <label for="campaignMessagesType">סוג ההודעה</label>
-            <select id="campaignMessagesType">
-              <option value="audioText">טקסט להקראה (TTS)</option>
-              <option value="extensionActivation">שלוחת IVR (ביתי)</option>
-              <option value="apiUrl">כתובת API</option>
-            </select>
+          <p style="margin-top:12px;font-size:.88em;color:#888;">
+            סה"כ ישלחו: <strong id="totalCount" style="color:#1565c0;font-size:1.1em;">—</strong> מספרי טלפון
+          </p>
+        </div>
+
+        <!-- Step 2: Message type -->
+        <div class="wizard-step">
+          <h3><span class="step-num">2</span> איזה הודעה לשלוח?</h3>
+
+          <div class="radio-cards">
+            <label class="radio-card checked">
+              <input type="radio" name="msgType" value="ivr" checked />
+              <div class="radio-card-body">
+                <strong>🔗 חבר לתפריט תרומה (IVR)</strong>
+                <small>כשהתורם עונה, הוא מחובר אוטומטית לתפריט התרומה הרגיל ויכול לשלם מיד</small>
+              </div>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="msgType" value="text" />
+              <div class="radio-card-body">
+                <strong>🔊 הקרא הודעה</strong>
+                <small>מכין הודעה קולית מטקסט שתיקרא לתורם</small>
+                <div id="textMsgGroup" style="display:none;margin-top:10px;">
+                  <textarea id="messageText" rows="3"
+                    placeholder="שלום, זוהי תזכורת לתרומתך השנתית. ניתן להתקשר אלינו ולתרום..."
+                    style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px;resize:vertical;"></textarea>
+                </div>
+              </div>
+            </label>
           </div>
         </div>
 
-        <!-- TTS text -->
-        <div id="audioTextGroup" style="margin-top:10px;">
-          <label for="campaignAudioText">טקסט לקריאה (עברית)</label>
-          <textarea id="campaignAudioText" rows="3" placeholder="שלום, אנחנו מתקשרים לתזכורת על תרומתך השנתית..." style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px;"></textarea>
-        </div>
+        <!-- Step 3: When -->
+        <div class="wizard-step">
+          <h3><span class="step-num">3</span> מתי לשלוח?</h3>
 
-        <!-- Extension -->
-        <div id="extensionGroup" style="margin-top:10px;display:none;">
-          <label for="campaignExtension">מספר שלוחה (IVR ביתי)</label>
-          <input id="campaignExtension" type="text" inputmode="numeric" placeholder="לדוגמה: 100" style="width:100%;" />
-          <small style="color:var(--muted)">כשהתורם עונה הוא יחובר לשלוחה זו ויוכל לתרום דרך ��-IVR הרגיל</small>
-        </div>
+          <div class="radio-cards">
+            <label class="radio-card checked">
+              <input type="radio" name="sendWhen" value="now" checked />
+              <div class="radio-card-body">
+                <strong>עכשיו</strong>
+                <small>השיגור מתחיל מיד לאחר האישור</small>
+              </div>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="sendWhen" value="scheduled" />
+              <div class="radio-card-body">
+                <strong>בתאריך ושעה</strong>
+                <div id="scheduleGroup" style="display:none;margin-top:10px;">
+                  <input type="datetime-local" id="sendTimeInput"
+                    style="padding:8px 12px;border:1px solid #ccc;border-radius:6px;font-size:14px;" />
+                </div>
+              </div>
+            </label>
+          </div>
 
-        <!-- API URL -->
-        <div id="apiUrlGroup" style="margin-top:10px;display:none;">
-          <label for="campaignApiUrl">כתובת API (HTTPS)</label>
-          <input id="campaignApiUrl" type="url" placeholder="https://your-server.com/ivr-handler" style="width:100%;" />
-        </div>
-
-        <div class="form-grid" style="margin-top:14px;">
-          <div>
-            <label for="campaignCallLength">משך שיחה מרבי (שניות, 6-30)</label>
-            <input id="campaignCallLength" type="number" min="6" max="30" value="25" />
-          </div>
-          <div>
-            <label for="campaignDialRetries">ניסיונות חיוג (1-5)</label>
-            <input id="campaignDialRetries" type="number" min="1" max="5" value="1" />
-          </div>
-          <div>
-            <label for="campaignBetweenRetries">דקות בין ניסיונות (5-120)</label>
-            <input id="campaignBetweenRetries" type="number" min="5" max="120" value="20" />
-          </div>
-          <div>
-            <label for="campaignSendTime">זמן שליחה (ריק = מיידי)</label>
-            <input id="campaignSendTime" type="datetime-local" />
+          <div style="margin-top:14px;display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="quietHours" checked style="width:16px;height:16px;" />
+            <label for="quietHours" style="cursor:pointer;font-size:.93em;">
+              הפסק אוטומטית בין 23:00 ל-08:00 (שעות שקט)
+            </label>
           </div>
         </div>
 
-        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-          <input id="campaignReasonableHours" type="checkbox" checked />
-          <label for="campaignReasonableHours" style="font-weight:normal;cursor:pointer;">השהה אוטומטית בין 23:00 ל-08:00</label>
+        <!-- Send -->
+        <div class="send-btn-wrap">
+          <button id="sendButton" class="primary-btn" style="font-size:1.05em;padding:12px 28px;">
+            📣 שלח הודעה
+          </button>
+          <span id="totalCountSummary" style="color:#555;font-size:.92em;"></span>
         </div>
+        <p id="sendStatus" class="message"></p>
+      </div>
 
-        <div style="margin-top:18px;display:flex;gap:10px;">
-          <button id="launchCampaignButton" class="primary-btn">🚀 הפעל קמפיין</button>
-          <button id="demoLaunchButton" class="secondary-btn">🔍 בדיקת תקינות (demo)</button>
-        </div>
-        <p id="campaignLaunchMessage" class="message" style="margin-top:10px;"></p>
-      </section>
-
-      <!-- Campaign history -->
-      <section class="panel">
+      <!-- History -->
+      <section class="panel" style="margin-top:24px;">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
-          <h2 style="margin:0">📋 היסטוריית קמפיינים</h2>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <input type="date" id="historyFromDate" style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;" />
-            <input type="date" id="historyToDate"   style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;" />
-            <button id="loadHistoryButton" class="secondary-btn" style="padding:6px 14px;">🔄 טען</button>
-          </div>
+          <h2 style="margin:0">📋 שיגורים אחרונים</h2>
+          <button id="loadHistoryButton" class="secondary-btn" style="padding:6px 16px;">🔄 רענן</button>
         </div>
         <p id="historyMessage" class="message" style="margin-top:8px;"></p>
         <div class="table-wrap" style="margin-top:12px;">
-          <table id="historyTable">
+          <table>
             <thead>
               <tr>
                 <th>#</th>
-                <th>שם</th>
+                <th>שם / תיאור</th>
                 <th>סטטוס</th>
-                <th>מספרים</th>
+                <th>נשלח</th>
                 <th>נענו</th>
-                <th>נשלחו</th>
-                <th>עלות</th>
-                <th>התחלה</th>
+                <th>תאריך</th>
                 <th>פעולות</th>
               </tr>
             </thead>
@@ -143,25 +246,15 @@
         </div>
       </section>
 
-      <!-- Campaign report modal -->
-      <div id="campaignReportModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:flex-start;overflow-y:auto;padding:20px;box-sizing:border-box;">
-        <div style="background:white;border-radius:10px;width:100%;max-width:900px;padding:28px;position:relative;box-shadow:0 4px 24px rgba(0,0,0,0.25);direction:rtl;margin:auto;">
-          <button onclick="document.getElementById('campaignReportModal').style.display='none'" style="position:absolute;top:14px;left:14px;border:none;font-size:22px;cursor:pointer;background:none;color:#333;">×</button>
-          <h3 id="reportTitle" style="margin:0 0 16px;">דוח קמפיין</h3>
+      <!-- Report modal -->
+      <div id="reportModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:flex-start;overflow-y:auto;padding:20px;box-sizing:border-box;">
+        <div style="background:white;border-radius:10px;width:100%;max-width:860px;padding:28px;position:relative;box-shadow:0 4px 24px rgba(0,0,0,0.25);direction:rtl;margin:auto;">
+          <button onclick="document.getElementById('reportModal').style.display='none'" style="position:absolute;top:14px;left:14px;border:none;font-size:22px;cursor:pointer;background:none;color:#333;">×</button>
+          <h3 id="reportTitle" style="margin:0 0 16px;"></h3>
           <div id="reportSummary" style="margin-bottom:16px;padding:12px;background:#f5f5f5;border-radius:8px;font-size:.9em;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px 16px;"></div>
           <div class="table-wrap">
             <table>
-              <thead>
-                <tr>
-                  <th>טלפון</th>
-                  <th>שם</th>
-                  <th>תוצאה</th>
-                  <th>משך</th>
-                  <th>ניסיון</th>
-                  <th>מקש</th>
-                  <th>SIP</th>
-                </tr>
-              </thead>
+              <thead><tr><th>טלפון</th><th>שם</th><th>תוצאה</th><th>משך</th><th>מקש</th></tr></thead>
               <tbody id="reportTableBody"></tbody>
             </table>
           </div>
