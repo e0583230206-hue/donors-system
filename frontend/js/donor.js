@@ -793,7 +793,14 @@ function formatTimelineDate(dateStr) {
 
 function renderTimeline() {
   var container = document.getElementById("donorTimeline");
+  console.log("[timeline] container:", container);
   if (!container) return;
+
+  console.log("[timeline] donor:", donor && donor.id, "donations:", donor && donor.donations && donor.donations.length);
+  console.log("[timeline] payments:", _timelinePayments);
+  console.log("[timeline] click2call:", _timelineCallLogs);
+  console.log("[timeline] donations array:", donor && donor.donations);
+  console.log("[timeline] auditLogs:", Database.get("logs"));
 
   var events = [];
   var seen = {};
@@ -909,6 +916,8 @@ function renderTimeline() {
   });
 
   events.sort(function (a, b) { return (b.date || "").localeCompare(a.date || ""); });
+
+  console.log("[timeline] events before render:", events.length, events);
 
   if (events.length === 0) {
     container.innerHTML = '<div style="color:var(--muted);font-size:13px">אין פעילות להצגה</div>';
