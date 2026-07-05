@@ -675,6 +675,17 @@ function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, do
   );
 }
 
+function getClick2CallLogs(donorId, limit) {
+  var rows = db.prepare(`
+    SELECT id, pbxCallId, workerName, donorPhone, agentExtension, status, errorNote, createdAt
+    FROM click2call_logs
+    WHERE donorId = ?
+    ORDER BY createdAt DESC
+    LIMIT ?
+  `).all(Number(donorId), limit || 50);
+  return rows;
+}
+
 // ── App State (key-value store for frontend data) ────────────────────────────
 
 const ALLOWED_APP_STATE_KEYS = new Set([
@@ -949,6 +960,7 @@ module.exports = {
   getCallLogsByCallId,
   // Click-to-Call
   logClick2Call,
+  getClick2CallLogs,
   // App state
   getAppState,
   setAppState,

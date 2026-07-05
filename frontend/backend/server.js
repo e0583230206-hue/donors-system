@@ -22,6 +22,7 @@ const {
   getCallLogsByCallId,
   insertCallLog,
   logClick2Call,
+  getClick2CallLogs,
   getDashboardStats,
   getIvrMonitorStats,
   getIvrAlerts,
@@ -584,6 +585,84 @@ app.put(
       setAppState("donors", donors);
 
       return res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Technoline Mailing List sync ─────────────────────────────────────────────
+app.post(
+  "/api/technoline/mailing-list/sync",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  async function (req, res, next) {
+    try {
+      var apiKey       = process.env.TECHNOLINE_API_KEY        || "";
+      var mailingListId = process.env.TECHNOLINE_MAILING_LIST_ID || "";
+
+      if (!apiKey)        return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
+      if (!mailingListId) return res.status(503).json({ error: "TECHNOLINE_MAILING_LIST_ID לא מוגדר בשרת" });
+
+      var donors   = getAppState("donors") || [];
+      var contacts = [];
+
+      for (var i = 0; i < donors.length; i++) {
+        var d      = donors[i];
+        var phones = d.ivrApprovedPhones || [];
+        if (phones.length === 0) continue;
+        var first = (d.firstName || "").trim();
+        var last  = (d.lastName  || d.fullName || "").trim();
+        for (var j = 0; j < phones.length; j++) {
+          contacts.push({ phone: phones[j], firstName: first, lastName: last, status: 0 });
+        }
+      }
+
+      if (contacts.length === 0) {
+        return res.json({ ok: true, synced: 0, message: "אין מספרים מאושרים לסינכרון" });
+      }
+
+      var techParams = new URLSearchParams({
+        action:      "uplodePhones",
+        apiKey:      apiKey,
+        mailingList: mailingListId,
+        insertType:  "all",
+        phones:      JSON.stringify(contacts),
+      });
+
+      console.log("[MailingList] syncing", contacts.length, "contacts to list", mailingListId);
+
+      var techRes  = await fetch("https://app.ipsales.co.il/mailingListsApi.php", {
+        method:  "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body:    techParams.toString(),
+        signal:  AbortSignal.timeout(30000),
+      });
+      var techBody = await techRes.json();
+
+      console.log("[MailingList] response:", JSON.stringify(techBody));
+
+      return res.json({
+        ok:     true,
+        synced: contacts.length,
+        result: techBody,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Donor Click2Call logs ─────────────────────────────────────────────────────
+app.get(
+  "/api/donors/:id/click2call-logs",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: "invalid id" });
+      var logs = getClick2CallLogs(id, 30);
+      return res.json(logs);
     } catch (err) {
       next(err);
     }

@@ -1119,6 +1119,7 @@ Database.whenReady(function () {
   ensureDonorDefaults();
   renderAll();
   loadDonorPayments();
+  loadClick2CallLogs();
   if (parshaInput && !parshaInput.value.trim()) {
     parshaInput.value = getCurrentParsha();
   }
@@ -1223,6 +1224,7 @@ Database.whenReady(function () {
       } else {
         callDonorModal.style.display = "none";
         showToast("הטלפון שלך יצלצל — כשתענה, תחובר אוטומטית אל " + donor.fullName + " (" + targetPhone + ")");
+        loadClick2CallLogs();
       }
     } catch (_) {
       callDonorStatus.textContent = "שגיאת תקשורת עם השרת";
@@ -1264,6 +1266,43 @@ async function loadDonorPayments() {
         "<td>" + escapeHTML(p.source || "ivr") + "</td>" +
         "<td title='" + escapeHTML(p.callId || "") + "' style='font-size:.8em;color:#666'>" + escapeHTML(shortCid) + "</td>" +
         "<td>" + statusHtml + "</td>" +
+        "</tr>";
+    }).join("");
+  } catch (_) {}
+  finally { loading.style.display = "none"; }
+}
+
+// ── Click2Call history for this donor ────────────────────────────────────────
+async function loadClick2CallLogs() {
+  if (!donorId || typeof apiFetch !== "function") return;
+  var panel   = document.getElementById("click2callLogsPanel");
+  var loading = document.getElementById("click2callLogsLoading");
+  var tbody   = document.getElementById("click2callLogsTable");
+  if (!panel || !tbody) return;
+
+  loading.style.display = "block";
+  try {
+    var res = await apiFetch("/api/donors/" + encodeURIComponent(donorId) + "/click2call-logs");
+    if (!res.ok) return;
+    var logs = await res.json();
+    if (!logs || logs.length === 0) return;
+
+    panel.style.display = "";
+    tbody.innerHTML = logs.map(function (l) {
+      var dateStr = l.createdAt
+        ? new Date(l.createdAt).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem", hour12: false })
+        : "—";
+      var statusHtml = l.status === "success"
+        ? '<span style="color:#1a7a1a;font-weight:600">🟢 נשלח</span>'
+        : '<span style="color:#b00;font-weight:600">🔴 נכשל</span>';
+      var note = l.errorNote || "—";
+      return "<tr>" +
+        "<td style='white-space:nowrap'>" + escapeHTML(dateStr) + "</td>" +
+        "<td dir='ltr'>" + escapeHTML(l.donorPhone || "—") + "</td>" +
+        "<td>" + statusHtml + "</td>" +
+        "<td>" + escapeHTML(l.agentExtension || "—") + "</td>" +
+        "<td>" + escapeHTML(l.workerName || "—") + "</td>" +
+        "<td style='font-size:.85em;color:#555'>" + escapeHTML(note) + "</td>" +
         "</tr>";
     }).join("");
   } catch (_) {}

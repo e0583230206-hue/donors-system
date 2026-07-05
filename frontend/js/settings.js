@@ -566,6 +566,48 @@ function saveCurrencySetting() {
 
 if (saveCurrencyBtn) saveCurrencyBtn.addEventListener("click", saveCurrencySetting);
 Database.whenReady(function () { loadCurrencySetting(); });
+
+// ── Technoline Mailing List sync ──────────────────────────────────────────────
+var mailingListSyncButton  = document.getElementById("mailingListSyncButton");
+var mailingListSyncMessage = document.getElementById("mailingListSyncMessage");
+
+function showSyncMsg(text, type) {
+  if (!mailingListSyncMessage) return;
+  mailingListSyncMessage.innerText = text;
+  mailingListSyncMessage.className = "message show " + (type || "success");
+  setTimeout(function () { mailingListSyncMessage.className = "message"; mailingListSyncMessage.innerText = ""; }, 5000);
+}
+
+if (mailingListSyncButton) {
+  mailingListSyncButton.addEventListener("click", async function () {
+    if (!requireAdminAction("רק מנהל יכול לסנכרן את רשימת התפוצה")) return;
+    mailingListSyncButton.disabled = true;
+    mailingListSyncButton.textContent = "מסנכרן...";
+    try {
+      var res = await apiFetch("/api/technoline/mailing-list/sync", { method: "POST" });
+      var data = await res.json();
+      if (!res.ok) {
+        showSyncMsg(data.error || "שגיאה בסינכרון", "error");
+      } else if (data.synced === 0) {
+        showSyncMsg("אין מספרים מאושרים לסינכרון", "error");
+      } else {
+        var r = data.result || {};
+        showSyncMsg(
+          "סונכרנו " + data.synced + " מספרים. " +
+          "חדשים: " + (r.newNumbers || 0) + " | עודכנו: " + (r.updateNumbers || 0) +
+          (r.errorNumbers ? " | שגיאות: " + r.errorNumbers : ""),
+          "success"
+        );
+      }
+    } catch (_) {
+      showSyncMsg("שגיאת תקשורת עם השרת", "error");
+    } finally {
+      mailingListSyncButton.disabled = false;
+      mailingListSyncButton.textContent = "🔄 סנכרן עכשיו";
+    }
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 addWorkerButton.addEventListener("click", function () {
