@@ -230,10 +230,16 @@ function sanitizeCell(v) {
 }
 
 function downloadXLSX(filename, sheetName, rows) {
+  var safe = rows.map(function (row) {
+    return row.map(function (cell) {
+      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
+      return cell;
+    });
+  });
   const workbook  = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  const worksheet = XLSX.utils.aoa_to_sheet(safe);
 
-  worksheet["!cols"] = rows[0].map(function () { return { wch: 24 }; });
+  worksheet["!cols"] = safe[0].map(function () { return { wch: 24 }; });
   worksheet["!rtl"]  = true;
 
   workbook.Workbook = { Views: [{ RTL: true }] };

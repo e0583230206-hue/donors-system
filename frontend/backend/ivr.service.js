@@ -46,6 +46,12 @@ function sanitizeQuery(q) {
   };
 }
 
+// Redact PII from console logs in production.
+// Set IVR_DEBUG=true in .env to restore full logging without changing NODE_ENV.
+var IVR_DEBUG = process.env.IVR_DEBUG === "true";
+var _isProd   = process.env.NODE_ENV === "production" && !IVR_DEBUG;
+function mask(v) { return _isProd ? "[REDACTED]" : v; }
+
 // ── Step detection ────────────────────────────────────────────────────────────
 
 function detectIvrStep(q) {
@@ -102,21 +108,38 @@ function detectIvrStep(q) {
 // "amount" param in the query; we recover the amount from the donor record.
 
 function resolvePaymentAmount(q, donor) {
-  // User typed a custom DTMF amount — always prefer this
-  var dtmf = parsePositiveAmount(lastParam(q, "amount"));
+  var pay    = lastParam(q, "payChoice");
+  var debt   = lastParam(q, "debtChoice");
+  var rawAmt = lastParam(q, "amount");
+
+  // payChoice=1 → full current debt takes priority over any accumulated amount param.
+  // Technoline accumulates params across requests, so an old custom-amount entry may
+  // still be present even after the user later chose "pay full" (payChoice=1).
+  // Using amount in that case would charge the wrong figure.
+  if (pay === "1") {
+    if (rawAmt !== undefined) {
+      console.warn("[IVR] resolvePaymentAmount: payChoice=1 but stale amount param present — param collision detected, using full debt");
+    }
+    if (donor && donor.currentDebt) return donor.currentDebt.amount;
+    return null;
+  }
+
+  // debtChoice=1 → sum all open debts takes priority for the same reason.
+  if (debt === "1") {
+    if (rawAmt !== undefined) {
+      console.warn("[IVR] resolvePaymentAmount: debtChoice=1 but stale amount param present — param collision detected, using all-debts total");
+    }
+    if (donor) {
+      var allDebts = (donor.currentDebt ? [donor.currentDebt] : []).concat(donor.previousDebts || []);
+      var total = allDebts.reduce(function (s, d) { return s + d.amount; }, 0);
+      if (total > 0) return Math.round(total * 100) / 100;
+    }
+    return null;
+  }
+
+  // Custom amount path (pay=2 or debt=2): use the DTMF-entered value.
+  var dtmf = parsePositiveAmount(rawAmt);
   if (dtmf !== null) return dtmf;
-
-  // payChoice=1 → full current debt
-  if (lastParam(q, "payChoice") === "1" && donor && donor.currentDebt) {
-    return donor.currentDebt.amount;
-  }
-
-  // debtChoice=1 → sum all open debts
-  if (lastParam(q, "debtChoice") === "1" && donor) {
-    var allDebts = (donor.currentDebt ? [donor.currentDebt] : []).concat(donor.previousDebts || []);
-    var total = allDebts.reduce(function (s, d) { return s + d.amount; }, 0);
-    if (total > 0) return Math.round(total * 100) / 100;
-  }
 
   return null;
 }
@@ -200,7 +223,7 @@ function handleIvrQuery(query) {
 
   console.log("[IVR] step:", step,
               "| callId:", callId,
-              "| phone:", phone,
+              "| phone:", mask(phone),
               "| params:", Object.keys(q).join(","),
               "| payment raw:", q.payment !== undefined ? JSON.stringify(q.payment) : "absent",
               "| PBXcallStatus:", q.PBXcallStatus || "absent");
@@ -237,8 +260,8 @@ function handleIvrQuery(query) {
     }
   }
 
-  console.log("[IVR] donor:", donor ? donor.fullName : "unknown",
-              "| currentDebt:", donor && donor.currentDebt ? donor.currentDebt.amount : "none",
+  console.log("[IVR] donor:", donor ? mask(donor.fullName) : "unknown",
+              "| currentDebt:", donor && donor.currentDebt ? mask(donor.currentDebt.amount) : "none",
               "| previousDebts count:", donor ? (donor.previousDebts || []).length : "N/A");
 
   // ── Per-step audit log ────────────────────────────────────────────────────
@@ -279,9 +302,9 @@ function handleIvrQuery(query) {
       if (amount === null) {
         // Technoline reported success but we cannot determine the amount.
         console.error("[IVR] payment=OK but amount could not be resolved.",
-                      "| donor:", donor ? donor.fullName : "unknown",
-                      "| currentDebt:", donor && donor.currentDebt ? JSON.stringify(donor.currentDebt) : "none",
-                      "| previousDebts:", donor ? JSON.stringify(donor.previousDebts || []) : "N/A",
+                      "| donor:", donor ? mask(donor.fullName) : "unknown",
+                      "| currentDebt:", donor && donor.currentDebt ? (mask(donor.currentDebt.amount) + " " + (donor.currentDebt.currency || "")) : "none",
+                      "| prevDebtsCount:", donor ? (donor.previousDebts || []).length : "N/A",
                       "| sanitized query:", JSON.stringify(sanitizeQuery(q)));
         safeInsertCallLog(callId, phone, "error", {
           reason: "payment_ok_but_no_amount",
@@ -294,15 +317,15 @@ function handleIvrQuery(query) {
       // Use lastParam for confirmation number in case it was also accumulated
       var confirmationNumber = asText(lastParam(q, "CONFIRM_payment")) || null;
 
-      console.log("[IVR] payment=OK | amount:", amount, "| confirmation:", confirmationNumber,
-                  "| donor:", donor ? donor.fullName : "unknown",
+      console.log("[IVR] payment=OK | amount:", mask(amount), "| confirmation:", mask(confirmationNumber),
+                  "| donor:", donor ? mask(donor.fullName) : "unknown",
                   "| donorId:", donor ? donor.id : null);
 
       // ── Save payment record ──────────────────────────────────────────────────
       var saveResult = { duplicate: false };
       try {
         console.log("[IVR] calling saveIvrPaymentOnce | callId:", callId,
-                    "phone:", phone, "amount:", amount, "confirmation:", confirmationNumber);
+                    "phone:", mask(phone), "amount:", mask(amount), "confirmation:", mask(confirmationNumber));
         saveResult = saveIvrPaymentOnce({
           callId:             callId,
           phone:              phone,
@@ -311,12 +334,12 @@ function handleIvrQuery(query) {
           confirmationNumber: confirmationNumber,
         });
         console.log("[IVR] Payment saved to DB. callId:", callId,
-                    "| amount:", amount, "| confirmation:", confirmationNumber,
+                    "| amount:", mask(amount), "| confirmation:", mask(confirmationNumber),
                     "| duplicate:", saveResult.duplicate);
       } catch (saveErr) {
         console.error("[IVR] CRITICAL: failed to save payment record.",
-                      "| callId:", callId, "| amount:", amount,
-                      "| phone:", phone, "| confirmation:", confirmationNumber,
+                      "| callId:", callId, "| amount:", mask(amount),
+                      "| phone:", mask(phone), "| confirmation:", mask(confirmationNumber),
                       "| error:", saveErr.message || saveErr);
         safeInsertCallLog(callId, phone, "error", {
           reason:             "payment_db_save_failed",
@@ -327,16 +350,16 @@ function handleIvrQuery(query) {
       }
 
       // ── Update donor's open debt in app_state ────────────────────────────────
-      console.log("[IVR] calling updateDonorDebtAfterPayment | phone:", phone, "amount:", amount);
+      console.log("[IVR] calling updateDonorDebtAfterPayment | phone:", mask(phone), "amount:", mask(amount));
       var debtResult = updateDonorDebtAfterPayment(phone, amount);
       console.log("[IVR] updateDonorDebtAfterPayment returned:", JSON.stringify(debtResult));
 
       if (debtResult.updated) {
-        console.log("[IVR] Donor debt updated. phone:", phone,
-                    "| paid:", amount, "| affectedDebts:", debtResult.affectedDebts);
+        console.log("[IVR] Donor debt updated. phone:", mask(phone),
+                    "| paid:", mask(amount), "| affectedDebts:", debtResult.affectedDebts);
       } else {
         console.warn("[IVR] Donor debt NOT updated after payment.",
-                     "| phone:", phone, "| amount:", amount,
+                     "| phone:", mask(phone), "| amount:", mask(amount),
                      "| reason:", debtResult.reason);
         if (!debtResult.donorFound || debtResult.reason === "no_open_debts") {
           safeInsertCallLog(callId, phone, "error", {

@@ -275,9 +275,9 @@ function renderOpenTasks(openTasks) {
       <td>${escapeHTML(task.title)}</td>
       <td>${escapeHTML(task.workerName)}</td>
       <td>${escapeHTML(donorName)} ${donorButton}</td>
-      <td class="${priorityClass}">${task.priority}</td>
+      <td class="${priorityClass}">${escapeHTML(task.priority)}</td>
       <td>${formatDate(task.dueDate)}</td>
-      <td>${task.status}</td>
+      <td>${escapeHTML(task.status)}</td>
       <td>${escapeHTML(task.description || "")}</td>
       <td>
         <button class="warning-btn" onclick="setTaskInProgress(${task.id})">
@@ -317,7 +317,7 @@ function renderDoneTasks(doneTasks) {
       <td>${escapeHTML(task.title)}</td>
       <td>${escapeHTML(task.workerName)}</td>
       <td>${escapeHTML(donorName)}</td>
-      <td class="${priorityClass}">${task.priority}</td>
+      <td class="${priorityClass}">${escapeHTML(task.priority)}</td>
       <td>${formatDate(task.dueDate)}</td>
       <td>${escapeHTML(task.description || "")}</td>
       <td>${formatDateTime(task.doneAt)}</td>
@@ -366,9 +366,15 @@ function renderTasks() {
 }
 
 function downloadXLSX(filename, sheetName, rows) {
+  var safe = rows.map(function (row) {
+    return row.map(function (cell) {
+      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
+      return cell;
+    });
+  });
   var workbook = XLSX.utils.book_new();
-  var worksheet = XLSX.utils.aoa_to_sheet(rows);
-  worksheet["!cols"] = rows[0].map(function () { return { wch: 22 }; });
+  var worksheet = XLSX.utils.aoa_to_sheet(safe);
+  worksheet["!cols"] = safe[0].map(function () { return { wch: 22 }; });
   worksheet["!rtl"] = true;
   workbook.Workbook = { Views: [{ RTL: true }] };
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);

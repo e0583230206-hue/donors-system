@@ -246,7 +246,7 @@ function renderWorkers() {
       <td>${escapeHTML(worker.name)}</td>
       <td>${escapeHTML(worker.role)}</td>
       <td class="${worker.status === "פעיל" ? "green-text" : "red-text"}">
-        ${worker.status}
+        ${escapeHTML(worker.status)}
       </td>
       <td>${formatDate(worker.createdAt)}</td>
       <td>

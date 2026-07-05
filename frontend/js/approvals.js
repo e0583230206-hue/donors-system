@@ -358,7 +358,7 @@ function renderApprovals() {
       <td>${escapeHTML(item.purpose)}</td>
       <td class="red-text">${formatMoney(item.amount)}</td>
       <td>${escapeHTML(item.phoneText)}</td>
-      <td class="${getStatusClass(item.status)}">${item.status}</td>
+      <td class="${getStatusClass(item.status)}">${escapeHTML(item.status)}</td>
       <td>${escapeHTML(item.approvedBy || "")}</td>
       <td>${formatDateTime(item.approvedAt)}</td>
       <td>
@@ -385,9 +385,15 @@ function renderApprovals() {
 }
 
 function downloadXLSX(filename, sheetName, rows) {
+  var safe = rows.map(function (row) {
+    return row.map(function (cell) {
+      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
+      return cell;
+    });
+  });
   var workbook = XLSX.utils.book_new();
-  var worksheet = XLSX.utils.aoa_to_sheet(rows);
-  worksheet["!cols"] = rows[0].map(function () { return { wch: 22 }; });
+  var worksheet = XLSX.utils.aoa_to_sheet(safe);
+  worksheet["!cols"] = safe[0].map(function () { return { wch: 22 }; });
   worksheet["!rtl"] = true;
   workbook.Workbook = { Views: [{ RTL: true }] };
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);

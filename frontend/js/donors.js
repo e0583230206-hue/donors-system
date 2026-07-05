@@ -312,7 +312,7 @@ function deleteDonor(id) {
     showMessage("התורם נמחק בהצלחה");
   }
 }
-
+
 function importFromExcel() {
   const fileInput = document.getElementById("fileInput");
   fileInput.click();
@@ -597,6 +597,10 @@ function handleFileUpload(event) {
   var file = event.target.files[0];
   if (!file) return;
   event.target.value = "";
+  if (file.size > 10 * 1024 * 1024) {
+    alert("קובץ ה-Excel גדול מדי (מקסימום 10MB). אנא בחר קובץ קטן יותר.");
+    return;
+  }
 
   var reader = new FileReader();
   reader.onload = function (e) {
