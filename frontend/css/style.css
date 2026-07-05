@@ -1708,10 +1708,14 @@ body.sidebar-collapsed .sidebar-search { display: none; }
   border: 2px solid var(--surface);
   box-shadow: 0 0 0 2px var(--primary);
 }
-.timeline-item.donation::before  { background: #7B8F5E; box-shadow: 0 0 0 2px #7B8F5E; }
-.timeline-item.task::before      { background: #1d4ed8; box-shadow: 0 0 0 2px #1d4ed8; }
-.timeline-item.reminder::before  { background: #d97706; box-shadow: 0 0 0 2px #d97706; }
-.timeline-item.callback::before  { background: #9333ea; box-shadow: 0 0 0 2px #9333ea; }
+.timeline-item.donation::before    { background: #7B8F5E; box-shadow: 0 0 0 2px #7B8F5E; }
+.timeline-item.task::before        { background: #1d4ed8; box-shadow: 0 0 0 2px #1d4ed8; }
+.timeline-item.reminder::before    { background: #d97706; box-shadow: 0 0 0 2px #d97706; }
+.timeline-item.callback::before    { background: #9333ea; box-shadow: 0 0 0 2px #9333ea; }
+.timeline-item.ivr_payment::before { background: #059669; box-shadow: 0 0 0 2px #059669; }
+.timeline-item.call::before        { background: #0891b2; box-shadow: 0 0 0 2px #0891b2; }
+.timeline-item.donor_change::before{ background: #b45309; box-shadow: 0 0 0 2px #b45309; }
+.timeline-item.note::before        { background: #64748b; box-shadow: 0 0 0 2px #64748b; }
 .timeline-date { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
 .timeline-text { font-size: 13px; color: var(--text); font-weight: 600; }
 .timeline-sub  { font-size: 12px; color: var(--muted); margin-top: 2px; }

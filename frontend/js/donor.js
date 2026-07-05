@@ -1,5 +1,8 @@
 let donors = Database.get("donors");
 
+var _timelinePayments = [];
+var _timelineCallLogs = [];
+
 function normalizePhoneLocal(p) {
   var digits = String(p === undefined || p === null ? "" : p).trim().replace(/\D/g, "");
   if (!digits) return "";
@@ -795,36 +798,32 @@ function renderTimeline() {
   var events = [];
   var seen = {};
 
-  function addTimelineEvent(type, id, date, text, sub) {
+  function addEv(type, id, date, text, sub) {
     if (!date) return;
-
-    var key = type + ":" + (id || date + ":" + text);
+    var key = type + ":" + (id != null ? id : date + ":" + text);
     if (seen[key]) return;
     seen[key] = true;
-
-    events.push({
-      type: type,
-      date: date,
-      text: text,
-      sub: sub || "",
-    });
+    events.push({ type: type, date: date, text: text, sub: sub || "" });
   }
 
+  // תרומות וחובות
   (donor.donations || []).forEach(function (d) {
-    addTimelineEvent(
-      "donation",
-      d.id,
+    var subText = d.paid
+      ? "שולם במלואו"
+      : (d.paidPartial
+        ? "שולם חלקית — יתרה: " + formatMoney(d.remainingDebt || 0, d.currency)
+        : "חוב פתוח: " + formatMoney(d.remainingDebt || 0, d.currency));
+    addEv(
+      "donation", d.id,
       d.date || d.createdAt || "",
-      "תרומה: " + formatMoney(d.amount || 0, d.currency) + " עבור " + escapeHTML(d.finalPurpose || "כללי"),
-      d.paid ? "שולם במלואו" : ("חוב פתוח: " + formatMoney(d.remainingDebt || 0, d.currency))
+      "תרומה: " + formatMoney(d.amount || 0, d.currency) + " — " + escapeHTML(d.finalPurpose || "כללי"),
+      subText
     );
   });
 
+  // משימות (על התורם)
   (donor.tasks || []).forEach(function (t) {
-    addTimelineEvent(
-      "task",
-      t.id,
-      t.createdAt || t.dueDate || "",
+    addEv("task", t.id, t.createdAt || t.dueDate || "",
       "משימה: " + escapeHTML(t.title || ""),
       t.done ? "הושלמה" : ("לביצוע" + (t.dueDate ? " עד " + t.dueDate : ""))
     );
@@ -832,48 +831,80 @@ function renderTimeline() {
 
   Database.get("tasks").forEach(function (t) {
     if (Number(t.donorId) !== donor.id) return;
-
-    addTimelineEvent(
-      "task",
-      t.id,
-      t.createdAt || t.dueDate || "",
+    addEv("task", t.id, t.createdAt || t.dueDate || "",
       "משימה: " + escapeHTML(t.title || ""),
       t.done ? "הושלמה" : ("לביצוע" + (t.dueDate ? " עד " + t.dueDate : ""))
     );
   });
 
+  // תזכורות
   (donor.reminders || []).forEach(function (r) {
-    addTimelineEvent(
-      "reminder",
-      r.id,
-      r.date || r.createdAt || "",
+    addEv("reminder", r.id, r.date || r.createdAt || "",
       "תזכורת: " + escapeHTML(r.description || r.text || ""),
       r.done ? "טופל" : "פתוח"
     );
   });
 
+  // הודעות לחזרה
   (donor.callbacks || []).forEach(function (c) {
-    addTimelineEvent(
-      "callback",
-      c.id,
-      c.createdAt || c.date || "",
+    addEv("callback", c.id, c.createdAt || c.date || "",
       "הודעה לחזרה: " + escapeHTML(c.reason || c.description || ""),
       c.done ? "טופל" : "פתוח"
     );
   });
 
+  // הערות
   [
     { value: donor.notes, date: donor.notesUpdatedAt || donor.notesCreatedAt, label: "הערה" },
     { value: donor.internalStaffNote, date: donor.internalStaffNoteUpdatedAt || donor.internalStaffNoteCreatedAt, label: "הערה פנימית" },
     { value: donor.publicPhoneNote, date: donor.publicPhoneNoteUpdatedAt || donor.publicPhoneNoteCreatedAt, label: "הערה לטלפון" },
   ].forEach(function (note, index) {
     if (!note.value || !note.date) return;
-    addTimelineEvent(
-      "note",
-      "note-" + index,
-      note.date,
-      note.label + ": " + escapeHTML(note.value),
-      ""
+    addEv("note", "note-" + index, note.date,
+      note.label + ": " + escapeHTML(note.value), ""
+    );
+  });
+
+  // תשלומי IVR (נטענו מהשרת)
+  _timelinePayments.forEach(function (p) {
+    var conf = p.confirmationNumber ? " | אישור: " + escapeHTML(p.confirmationNumber) : "";
+    addEv("ivr_payment", "pay-" + p.id,
+      p.timestamp || p.createdAt || "",
+      "תשלום IVR: ₪" + Number(p.amount || 0).toFixed(2),
+      (p.status === "success" ? "הצליח" : "נכשל") + conf
+    );
+  });
+
+  // צינתוקים (נטענו מהשרת)
+  _timelineCallLogs.forEach(function (l) {
+    var phone = l.donorPhone ? " → " + escapeHTML(l.donorPhone) : "";
+    var worker = l.workerName ? " | " + escapeHTML(l.workerName) : "";
+    var errNote = l.errorNote ? " — " + escapeHTML(l.errorNote) : "";
+    addEv("call", "call-" + l.id,
+      l.createdAt || "",
+      "צינתוק" + phone,
+      (l.status === "success" ? "נשלח" : "נכשל") + worker + errNote
+    );
+  });
+
+  // שינויי פרטי תורם (מה-AuditLog המקומי)
+  var allLogs = Database.get("logs") || [];
+  allLogs.forEach(function (log) {
+    if (String(log.entityId) !== String(donor.id)) return;
+    if (log.entityType !== "donor" && log.entityType !== "donation") return;
+    var actionLabel = {
+      create: "נוצר",
+      update: "עודכן",
+      payment: "תשלום",
+      import: "יובא",
+    }[log.action] || log.actionLabel || log.action || "שינוי";
+    var entityLabel = log.entityType === "donation" ? "חוב/תרומה" : "תורם";
+    var details = log.details ? ": " + escapeHTML(log.details) : "";
+    var byUser = log.user && log.user.name ? " | " + escapeHTML(log.user.name) : "";
+    addEv("donor_change", "log-" + log.id,
+      log.createdAt || log.date || "",
+      actionLabel + " " + entityLabel + details,
+      byUser ? byUser.slice(3) : ""
     );
   });
 
@@ -888,7 +919,7 @@ function renderTimeline() {
     return '<div class="timeline-item ' + ev.type + '">' +
       '<div class="timeline-date">' + formatTimelineDate(ev.date) + '</div>' +
       '<div class="timeline-text">' + ev.text + '</div>' +
-      '<div class="timeline-sub">' + ev.sub + '</div>' +
+      (ev.sub ? '<div class="timeline-sub">' + ev.sub + '</div>' : '') +
     '</div>';
   }).join("");
 }
@@ -1251,6 +1282,9 @@ async function loadDonorPayments() {
     var payments = await res.json();
     if (!payments || payments.length === 0) return;
 
+    _timelinePayments = payments;
+    renderTimeline();
+
     panel.style.display = "";
     tbody.innerHTML = payments.map(function (p) {
       var d = p.timestamp || p.createdAt || "";
@@ -1286,6 +1320,9 @@ async function loadClick2CallLogs() {
     if (!res.ok) return;
     var logs = await res.json();
     if (!logs || logs.length === 0) return;
+
+    _timelineCallLogs = logs;
+    renderTimeline();
 
     panel.style.display = "";
     tbody.innerHTML = logs.map(function (l) {
