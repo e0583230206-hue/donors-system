@@ -924,13 +924,26 @@ function renderTimeline() {
     return;
   }
 
-  container.innerHTML = events.map(function (ev) {
+  var html = events.map(function (ev) {
     return '<div class="timeline-item ' + ev.type + '">' +
       '<div class="timeline-date">' + formatTimelineDate(ev.date) + '</div>' +
       '<div class="timeline-text">' + ev.text + '</div>' +
       (ev.sub ? '<div class="timeline-sub">' + ev.sub + '</div>' : '') +
     '</div>';
   }).join("");
+
+  console.log("[timeline] html length:", html.length);
+  console.log("[timeline] html sample:", html.slice(0, 200));
+  container.innerHTML = html;
+  console.log("[timeline] innerHTML length after:", container.innerHTML.length);
+  console.log("[timeline] children count:", container.children.length);
+  var cs = window.getComputedStyle(container);
+  console.log("[timeline] container computed: display=" + cs.display + " visibility=" + cs.visibility + " height=" + cs.height + " overflow=" + cs.overflow + " opacity=" + cs.opacity);
+  var panel = container.closest(".panel");
+  if (panel) {
+    var ps = window.getComputedStyle(panel);
+    console.log("[timeline] panel computed: display=" + ps.display + " visibility=" + ps.visibility + " height=" + ps.height);
+  }
 }
 
 function renderAll() {
