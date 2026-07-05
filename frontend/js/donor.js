@@ -793,14 +793,7 @@ function formatTimelineDate(dateStr) {
 
 function renderTimeline() {
   var container = document.getElementById("donorTimeline");
-  console.log("[timeline] container:", container);
   if (!container) return;
-
-  console.log("[timeline] donor:", donor && donor.id, "donations:", donor && donor.donations && donor.donations.length);
-  console.log("[timeline] payments:", _timelinePayments);
-  console.log("[timeline] click2call:", _timelineCallLogs);
-  console.log("[timeline] donations array:", donor && donor.donations);
-  console.log("[timeline] auditLogs:", Database.get("logs"));
 
   var events = [];
   var seen = {};
@@ -917,33 +910,18 @@ function renderTimeline() {
 
   events.sort(function (a, b) { return (b.date || "").localeCompare(a.date || ""); });
 
-  console.log("[timeline] events before render:", events.length, events);
-
   if (events.length === 0) {
     container.innerHTML = '<div style="color:var(--muted);font-size:13px">אין פעילות להצגה</div>';
     return;
   }
 
-  var html = events.map(function (ev) {
+  container.innerHTML = events.map(function (ev) {
     return '<div class="timeline-item ' + ev.type + '">' +
       '<div class="timeline-date">' + formatTimelineDate(ev.date) + '</div>' +
       '<div class="timeline-text">' + ev.text + '</div>' +
       (ev.sub ? '<div class="timeline-sub">' + ev.sub + '</div>' : '') +
     '</div>';
   }).join("");
-
-  console.log("[timeline] html length:", html.length);
-  console.log("[timeline] html sample:", html.slice(0, 200));
-  container.innerHTML = html;
-  console.log("[timeline] innerHTML length after:", container.innerHTML.length);
-  console.log("[timeline] children count:", container.children.length);
-  var cs = window.getComputedStyle(container);
-  console.log("[timeline] container computed: display=" + cs.display + " visibility=" + cs.visibility + " height=" + cs.height + " overflow=" + cs.overflow + " opacity=" + cs.opacity);
-  var panel = container.closest(".panel");
-  if (panel) {
-    var ps = window.getComputedStyle(panel);
-    console.log("[timeline] panel computed: display=" + ps.display + " visibility=" + ps.visibility + " height=" + ps.height);
-  }
 }
 
 function renderAll() {
