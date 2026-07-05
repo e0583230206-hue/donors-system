@@ -161,6 +161,25 @@ async function updateServerDashboard() {
     if (el("ivrWeekTotal"))   el("ivrWeekTotal").innerText   = fmt(ps.week  && ps.week.total);
     if (el("ivrMonthTotal"))  el("ivrMonthTotal").innerText  = fmt(ps.month && ps.month.total);
   } catch (_) {}
+
+  // Click2Call count this week (from dashboard stats)
+  try {
+    const dRes = await apiFetch("/api/dashboard");
+    if (dRes.ok) {
+      const ds = await dRes.json();
+      if (el("click2callWeekCount") && typeof ds.click2callThisWeek === "number") {
+        el("click2callWeekCount").innerText = ds.click2callThisWeek;
+      }
+    }
+  } catch (_) {}
+
+  // Donors without an approved IVR phone (client-side)
+  try {
+    var noIvrCount = donors.filter(function (d) {
+      return !d.ivrApprovedPhones || d.ivrApprovedPhones.length === 0;
+    }).length;
+    if (el("noIvrPhoneCount")) el("noIvrPhoneCount").innerText = noIvrCount;
+  } catch (_) {}
 }
 
 function renderActivity(data) {

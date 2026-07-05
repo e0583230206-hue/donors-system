@@ -726,3 +726,96 @@ reloadWorkers().then(function () { renderWorkers(); });
     if (e.key === "Enter") document.getElementById("fpBtn").click();
   });
 }());
+
+// ── Server backup management ──────────────────────────────────────────────────
+(function () {
+  var runBtn  = document.getElementById("runServerBackupBtn");
+  var listBtn = document.getElementById("loadServerBackupsBtn");
+  var msgEl   = document.getElementById("serverBackupMsg");
+  var listEl  = document.getElementById("serverBackupList");
+  if (!runBtn && !listBtn) return;
+
+  function showSrvMsg(txt, type) {
+    if (!msgEl) return;
+    msgEl.innerText = txt;
+    msgEl.className = "message" + (type === "error" ? " error" : type === "success" ? " success" : "");
+    setTimeout(function () { msgEl.className = "message"; msgEl.innerText = ""; }, 5000);
+  }
+
+  function formatBytes(b) {
+    if (b < 1024)       return b + " B";
+    if (b < 1048576)    return (b / 1024).toFixed(1) + " KB";
+    return (b / 1048576).toFixed(1) + " MB";
+  }
+
+  function renderBackupList(files) {
+    if (!listEl) return;
+    if (!files || files.length === 0) {
+      listEl.innerHTML = "<p style='color:var(--muted);font-size:13px;'>אין גיבויים זמינים.</p>";
+      return;
+    }
+    listEl.innerHTML = "<table style='width:100%;border-collapse:collapse;font-size:13px;'>" +
+      "<thead><tr style='background:var(--bg2,#f5f5f5);'>" +
+        "<th style='padding:6px 10px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>שם קובץ</th>" +
+        "<th style='padding:6px 10px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>גודל</th>" +
+        "<th style='padding:6px 10px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>תאריך</th>" +
+        "<th style='padding:6px 10px;border-bottom:1px solid var(--border,#ddd);'></th>" +
+      "</tr></thead><tbody>" +
+      files.map(function (f) {
+        return "<tr style='border-bottom:1px solid var(--border,#eee);'>" +
+          "<td style='padding:6px 10px;direction:ltr;text-align:right;'>" + f.name + "</td>" +
+          "<td style='padding:6px 10px;'>" + formatBytes(f.size) + "</td>" +
+          "<td style='padding:6px 10px;'>" + new Date(f.mtime).toLocaleString("he-IL") + "</td>" +
+          "<td style='padding:6px 10px;'><button class='warning-btn' style='padding:3px 12px;font-size:.82em;' onclick='restoreServerBackup(\"" + f.name + "\")'>♻️ שחזר</button></td>" +
+          "</tr>";
+      }).join("") +
+      "</tbody></table>";
+  }
+
+  window.restoreServerBackup = function (filename) {
+    if (!confirm("לשחזר את הנתונים מ-" + filename + "?\nהפעולה תדרוס את הנתונים הנוכחיים בשרת.")) return;
+    var tok = sessionStorage.getItem("authToken") || "";
+    fetch("/api/admin/backups/restore/" + encodeURIComponent(filename), {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + tok },
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          showSrvMsg("✅ שוחזרו " + data.restored + " קבצים מ-" + filename, "success");
+          setTimeout(function () { location.reload(); }, 1500);
+        } else {
+          showSrvMsg("❌ " + (data.error || "שגיאה בשחזור"), "error");
+        }
+      })
+      .catch(function () { showSrvMsg("❌ שגיאת רשת", "error"); });
+  };
+
+  if (listBtn) {
+    listBtn.addEventListener("click", function () {
+      var tok = sessionStorage.getItem("authToken") || "";
+      fetch("/api/admin/backups/list", { headers: { "Authorization": "Bearer " + tok } })
+        .then(function (r) { return r.json(); })
+        .then(function (files) { renderBackupList(files); })
+        .catch(function () { showSrvMsg("❌ שגיאת רשת", "error"); });
+    });
+  }
+
+  if (runBtn) {
+    runBtn.addEventListener("click", function () {
+      runBtn.disabled = true;
+      var tok = sessionStorage.getItem("authToken") || "";
+      fetch("/api/admin/backups/run", { method: "POST", headers: { "Authorization": "Bearer " + tok } })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          runBtn.disabled = false;
+          if (data.ok) {
+            showSrvMsg("✅ גיבוי נוצר: " + data.name, "success");
+            if (listEl && listEl.innerHTML) listBtn && listBtn.click();
+          } else {
+            showSrvMsg("❌ " + (data.error || "שגיאה"), "error");
+          }
+        })
+        .catch(function () { runBtn.disabled = false; showSrvMsg("❌ שגיאת רשת", "error"); });
+    });
+  }
+}());

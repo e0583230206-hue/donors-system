@@ -162,6 +162,17 @@
         </div>
       </section>
 
+      <section class="panel" id="serverBackupPanel">
+        <h2>🗄️ גיבויי שרת</h2>
+        <p style="color:var(--muted);margin-bottom:14px;font-size:14px">גיבויים אוטומטיים יומיים של מסד הנתונים. ניתן לשחזר נתונים מכל גיבוי.</p>
+        <div class="form-grid">
+          <button id="runServerBackupBtn" class="success-btn">💾 צור גיבוי עכשיו</button>
+          <button id="loadServerBackupsBtn" class="secondary-btn">📋 טען רשימת גיבויים</button>
+        </div>
+        <p id="serverBackupMsg" class="message"></p>
+        <div id="serverBackupList" style="margin-top:12px;"></div>
+      </section>
+
       <section class="panel" id="mailingListSyncPanel">
         <h2>📋 סינכרון רשימת תפוצה — טכנוליין</h2>
         <p style="color:var(--muted);margin-bottom:14px;font-size:14px">מסנכרן את כל המספרים המאושרים ל-IVR לרשימת התפוצה בטכנוליין (לצורך קמפיינים יוצאים).</p>

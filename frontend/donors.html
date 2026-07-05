@@ -62,11 +62,31 @@
         <div class="form-actions page-actions">
           <button id="addDonorButton" class="primary-btn">הוסף תורם</button>
           <button id="importButton" class="success-btn">📊 יבוא מאקסל</button>
+          <button id="undoImportButton" class="warning-btn" style="display:none;">↩️ בטל ייבוא אחרון</button>
         </div>
         <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;" />
 
         <p id="messageBox" class="message"></p>
       </section>
+
+      <!-- Excel import preview modal -->
+      <div id="importPreviewModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:1100;justify-content:center;align-items:flex-start;padding-top:40px;overflow-y:auto;">
+        <div style="background:var(--bg,#fff);border-radius:12px;max-width:780px;width:95%;padding:0;box-shadow:0 8px 40px rgba(0,0,0,.4);direction:rtl;">
+          <div style="padding:18px 22px;border-bottom:1px solid var(--border,#ddd);display:flex;justify-content:space-between;align-items:center;">
+            <h2 style="margin:0;font-size:1.1em;">📊 תצוגה מקדימה — ייבוא מאקסל</h2>
+            <button id="importPreviewClose" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--muted);">✕</button>
+          </div>
+          <div style="padding:18px 22px;">
+            <div id="importPreviewSummary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;"></div>
+            <div id="importPreviewTable" style="max-height:340px;overflow-y:auto;font-size:.88em;"></div>
+            <p id="importPreviewBackupNote" style="margin:14px 0 0;font-size:.83em;color:var(--muted);">גיבוי אוטומטי יישמר לפני ביצוע הייבוא.</p>
+          </div>
+          <div style="padding:14px 22px;border-top:1px solid var(--border,#ddd);display:flex;gap:10px;justify-content:flex-end;">
+            <button id="importPreviewCancel" class="secondary-btn">ביטול</button>
+            <button id="importPreviewConfirm" class="success-btn">✅ אשר ויבא</button>
+          </div>
+        </div>
+      </div>
 
       <section class="panel crm-search-panel">
         <h2>🔍 חיפוש, מיון וסינון</h2>

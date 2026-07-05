@@ -30,6 +30,7 @@ const {
   getAppState,
   setAppState,
   backupDatabase,
+  restoreFromBackup,
   dbHealthCheck,
   getPayments,
   getPaymentById,
@@ -1535,6 +1536,65 @@ app.post(
 app.use(function (req, res) {
   res.status(404).json({ error: "Not found" });
 });
+
+// ── Server backup management (admin only) ────────────────────────────────────
+
+const BACKUP_DIR = path.join(__dirname, "backups");
+
+app.get(
+  "/api/admin/backups/list",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      if (!fs.existsSync(BACKUP_DIR)) return res.json([]);
+      const files = fs.readdirSync(BACKUP_DIR)
+        .filter(function (f) { return f.endsWith(".sqlite"); })
+        .sort()
+        .reverse()
+        .map(function (f) {
+          var stat = fs.statSync(path.join(BACKUP_DIR, f));
+          return { name: f, size: stat.size, mtime: stat.mtime.toISOString() };
+        });
+      res.json(files);
+    } catch (err) { next(err); }
+  }
+);
+
+app.post(
+  "/api/admin/backups/run",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
+      const dest  = path.join(BACKUP_DIR, "data-" + stamp + ".sqlite");
+      backupDatabase(dest);
+      insertAuditLog({ action: "BACKUP_RUN", entityType: "system", entityId: "", entityName: "manual backup", details: dest, workerName: req.worker ? req.worker.name : "admin" });
+      res.json({ ok: true, name: path.basename(dest) });
+    } catch (err) { next(err); }
+  }
+);
+
+app.post(
+  "/api/admin/backups/restore/:filename",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      const filename = path.basename(req.params.filename); // strip any path traversal
+      if (!filename.endsWith(".sqlite") || filename.includes("..")) {
+        return res.status(400).json({ error: "שם קובץ לא תקין" });
+      }
+      const srcPath = path.join(BACKUP_DIR, filename);
+      if (!fs.existsSync(srcPath)) return res.status(404).json({ error: "גיבוי לא נמצא" });
+      const restored = restoreFromBackup(srcPath);
+      insertAuditLog({ action: "BACKUP_RESTORED", entityType: "system", entityId: "", entityName: filename, details: restored + " keys restored", workerName: req.worker ? req.worker.name : "admin" });
+      res.json({ ok: true, restored: restored });
+    } catch (err) { next(err); }
+  }
+);
 
 // ── Global error handler ──────────────────────────────────────────────────────
 app.use(function (err, req, res, _next) {

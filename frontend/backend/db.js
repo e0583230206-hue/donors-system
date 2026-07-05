@@ -783,6 +783,28 @@ function backupDatabase(destPath) {
   db.exec("VACUUM INTO '" + String(destPath).replace(/'/g, "''") + "'");
 }
 
+// Opens srcPath as a read-only SQLite DB and copies every app_state row into
+// the live DB.  Only allowed keys are imported.
+function restoreFromBackup(srcPath) {
+  const { DatabaseSync: DS } = require("node:sqlite");
+  const bk = new DS(srcPath, { readOnly: true });
+  try {
+    const rows = bk.prepare("SELECT key, value FROM app_state").all();
+    let restored = 0;
+    rows.forEach(function (row) {
+      if (!ALLOWED_APP_STATE_KEYS.has(row.key)) return;
+      try {
+        const parsed = JSON.parse(row.value);
+        setAppState(row.key, parsed);
+        restored++;
+      } catch (_) {}
+    });
+    return restored;
+  } finally {
+    try { bk.close(); } catch (_) {}
+  }
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 function getDashboardStats() {
@@ -799,18 +821,35 @@ function getDashboardStats() {
   const successCallsRow = db.prepare("SELECT COUNT(*) AS count FROM ivr_call_logs WHERE step = 'payment_success'").get();
   const totalCallsRow   = db.prepare("SELECT COUNT(*) AS count FROM ivr_call_logs WHERE step != 'payment_success'").get();
 
+  // Click2Call calls this week (Mon..today in Asia/Jerusalem)
+  const weekStart = (function () {
+    const now = new Date(new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Jerusalem",
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date()));
+    const d = new Date(today);
+    const day = d.getDay(); // 0=Sun
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((day + 6) % 7));
+    return monday.toISOString().slice(0, 10);
+  }());
+  const click2callWeekRow = db.prepare(
+    "SELECT COUNT(*) AS count FROM click2call_logs WHERE substr(createdAt,1,10) >= ? AND substr(createdAt,1,10) <= ?"
+  ).get(weekStart, today);
+
   const totalPayments      = paymentRow.count   || legacyPayRow.count  || 0;
   const totalPaymentAmount = paymentRow.amount  || legacyPayRow.amount || 0;
   const totalCalls         = totalCallsRow.count || 0;
   const successCount       = successCallsRow.count || 0;
 
   return {
-    totalDonors:        donorRow.count || 0,
-    totalPayments:      totalPayments,
-    totalPaymentAmount: totalPaymentAmount,
-    callsToday:         callsTodayRow.count || 0,
-    failedCalls:        failedCallsRow.count || 0,
-    successRate:        totalCalls > 0 ? Math.round((successCount / totalCalls) * 10000) / 100 : 0,
+    totalDonors:           donorRow.count || 0,
+    totalPayments:         totalPayments,
+    totalPaymentAmount:    totalPaymentAmount,
+    callsToday:            callsTodayRow.count || 0,
+    failedCalls:           failedCallsRow.count || 0,
+    successRate:           totalCalls > 0 ? Math.round((successCount / totalCalls) * 10000) / 100 : 0,
+    click2callThisWeek:    click2callWeekRow.count || 0,
   };
 }
 
@@ -1028,6 +1067,7 @@ module.exports = {
   setAppState,
   // Backup
   backupDatabase,
+  restoreFromBackup,
   // Dashboard
   getDashboardStats,
   // IVR Monitor

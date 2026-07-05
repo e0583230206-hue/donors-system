@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>רשימת בדיקות E2E — א בלאט גמרא CRM</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #111; color: #ddd; padding: 24px 16px; direction: rtl; }
+    h1 { font-size: 1.5em; margin-bottom: 4px; color: #fff; }
+    .subtitle { color: #888; font-size: .88em; margin-bottom: 28px; }
+    .progress-bar-wrap { background: #222; border-radius: 6px; height: 16px; margin-bottom: 28px; overflow: hidden; }
+    .progress-bar { height: 100%; background: #27ae60; border-radius: 6px; transition: width .3s; }
+    .progress-label { text-align: center; font-size: .8em; color: #aaa; margin-top: 4px; margin-bottom: 28px; }
+    section { margin-bottom: 28px; }
+    section h2 { font-size: 1em; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid #333; padding-bottom: 8px; margin-bottom: 12px; }
+    .item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; user-select: none; transition: background .15s; margin-bottom: 4px; }
+    .item:hover { background: #1a1a1a; }
+    .item input[type=checkbox] { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; accent-color: #27ae60; cursor: pointer; }
+    .item label { cursor: pointer; flex: 1; font-size: .9em; line-height: 1.5; }
+    .item label .note { display: block; font-size: .8em; color: #666; margin-top: 2px; }
+    .item.done label { text-decoration: line-through; color: #555; }
+    .badge { display: inline-block; font-size: .75em; padding: 1px 7px; border-radius: 10px; margin-right: 6px; vertical-align: middle; }
+    .badge-critical { background: #c0392b; color: #fff; }
+    .badge-high     { background: #e67e22; color: #fff; }
+    .badge-medium   { background: #2980b9; color: #fff; }
+    .actions { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+    button { padding: 7px 16px; border-radius: 6px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; font-size: .87em; }
+    button:hover { background: #2a2a2a; }
+    button.primary { background: #27ae60; border-color: #27ae60; color: #fff; }
+    @media (prefers-color-scheme: light) {
+      body { background: #f5f5f5; color: #222; }
+      section h2 { color: #666; border-bottom-color: #ddd; }
+      .item:hover { background: #eee; }
+      .item.done label { color: #aaa; }
+      .progress-bar-wrap { background: #e0e0e0; }
+      button { background: #fff; border-color: #ccc; color: #333; }
+      button:hover { background: #f0f0f0; }
+    }
+  </style>
+</head>
+<body>
+  <h1>📋 רשימת בדיקות E2E — א בלאט גמרא CRM</h1>
+  <p class="subtitle">סמן כל בדיקה לאחר אימות ידני. המצב נשמר בדפדפן.</p>
+
+  <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+  <div class="progress-label" id="progressLabel">0 / 0 בוצעו</div>
+
+  <div class="actions">
+    <button onclick="checkAll()">✅ סמן הכל</button>
+    <button onclick="uncheckAll()">↩️ נקה הכל</button>
+    <button class="primary" onclick="exportReport()">📥 ייצא דוח</button>
+  </div>
+
+  <!-- ── Authentication ── -->
+  <section>
+    <h2>אימות גישה</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>כניסה עם שם משתמש וסיסמה תקינים — מקבל טוקן ומפנה לדשבורד<span class="note">POST /api/login → authToken ב-sessionStorage</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>כניסה עם סיסמה שגויה — מקבל שגיאה 401<span class="note">login.html</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>גישה לדף מוגן ללא טוקן — מנותב ל-login.html<span class="note">auth.js requireAuth</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>שינוי סיסמה עצמי — מצריך סיסמה נוכחית<span class="note">PUT /api/workers/me/password</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>כניסה עם must_change_password=1 — מאפשר שינוי ללא סיסמה נוכחית</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>יציאה (logout) — מנקה authToken ומפנה ל-login</label>
+    </div>
+  </section>
+
+  <!-- ── Donors ── -->
+  <section>
+    <h2>ניהול תורמים</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>הוספת תורם חדש — שם + טלפון — נשמר ומוצג ברשימה<span class="note">donors.html → addDonor()</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>חיפוש תורם לפי שם, טלפון, עיר, תגית</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>כרטיס תורם — עריכת שדות (שם, טלפון, עיר, הערות)</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>הוספת תרומה לתורם — סכום, מטרה, שיטת תשלום<span class="note">donor.html</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>מחיקת תורם — אישור ו-UI מתעדכן</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>ייבוא מאקסל — קובץ עם תורמים חדשים — תצוגה מקדימה לפני ביצוע<span class="note">importPreviewModal מוצג לפני שמירה</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>ייבוא מאקסל — dedup: תורם קיים לפי טלפון — מועבר ל"עדכון" לא "חדש"</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>ייבוא מאקסל — dedup: תורם קיים לפי ת"ז — מועבר ל"עדכון"</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>ביטול ייבוא אחרון — שחזור רשימה קודמת מ-localStorage</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>ייבוא עם שורה חסרת טלפון — מופיעה בדוח "דולגו"</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>מיון רשימת תורמים: שם / חוב / תרומות / חדש קודם</label>
+    </div>
+  </section>
+
+  <!-- ── IVR & Phones ── -->
+  <section>
+    <h2>IVR וזיהוי טלפון</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>GET /api/ivr/donor?phone=... — מחזיר תורם לפי טלפון ראשי</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>GET /api/ivr/donor?phone=... — מחזיר תורם לפי טלפון משני (phone2/phone3/phone4)<span class="note">donor_phone_lookup table</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>עדכון חוב לאחר תשלום IVR — POST /api/ivr/payment — מעדכן remainingDebt גם על טלפון משני</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>GET /api/ivr/donor — טלפון לא מוכר — מחזיר 404 (לא קורס)<span class="note">לא fatal crash על IVR_KEY חסר</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>סנכרון תורמים POST /api/donors/sync — שומר phone2/phone3/phone4 ב-donor_phone_lookup</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>מוניטור IVR — ivr-monitor.html — מציג שיחות, סטטוס, התראות</label>
+    </div>
+  </section>
+
+  <!-- ── Click2Call ── -->
+  <section>
+    <h2>Click2Call</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>לחיצה על "התקשר" בכרטיס תורם — POST /api/click2call — מחזיר success/error<span class="note">donor.html</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>לוג Click2Call לתורם — GET /api/donors/:id/click2call-logs — מציג שיחות</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>טייל "שיחות Click2Call השבוע" בדשבורד מציג ספירה נכונה</label>
+    </div>
+  </section>
+
+  <!-- ── Dashboard ── -->
+  <section>
+    <h2>דשבורד</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>טאיל "תורמים" — מציג סה"כ תורמים</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>טאיל "חובות" — סכום חובות פתוחים</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>שורת IVR — מציגה נתוני תשלומי IVR היום/שבוע/חודש</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>טאיל "ללא טלפון IVR" — ספירה נכונה של תורמים ללא ivrApprovedPhones</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>גרף תרומות חודשי מתעדכן עם נתוני תורמים</label>
+    </div>
+  </section>
+
+  <!-- ── Tasks / Reminders / Callbacks ── -->
+  <section>
+    <h2>משימות, תזכורות, חזרות</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>הוספת משימה לתורם — נשמרת ומוצגת בעמוד tasks.html</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>סימון משימה כ"בוצע" — מסירה מהרשימה הפעילה</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>תזכורת לתאריך — מוצגת בעמוד reminders.html ובדשבורד</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>הוספת הודעה לחזרה — מוצגת ב-phone.html עם ספירה בסרגל</label>
+    </div>
+  </section>
+
+  <!-- ── Debts / Approvals ── -->
+  <section>
+    <h2>חובות ואישור חיובים</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>עמוד חובות (debts.html) — רשימת תורמים עם חוב פתוח ממוינת</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>אישור חיוב (approvals.html) — אישור/דחייה → סטטוס מתעדכן</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>עמוד דוחות (reports.html) — ייצוא Excel תקין</label>
+    </div>
+  </section>
+
+  <!-- ── Settings / Workers ── -->
+  <section>
+    <h2>הגדרות ועובדים</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>הוספת עובד חדש — שם + תפקיד + סיסמה — נשמר ומופיע ברשימה</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>מחיקת עובד — מסיר מהרשימה</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>שינוי סיסמה לעובד (ע"י מנהל) — הצלחה ברורה</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>גיבוי ידני ("צור גיבוי עכשיו") — יוצר קובץ .sqlite בשרת</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>טעינת רשימת גיבויי שרת — מציגה קבצים עם כפתור "שחזר"</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>שחזור מגיבוי שרת — app_state מתעדכן וטוקן שחזור מוצג</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>הורדת גיבוי JSON (localStorage)</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>שחזור מגיבוי JSON — מוטען ומוצג מחדש</label>
+    </div>
+  </section>
+
+  <!-- ── Campaigns / Mailing ── -->
+  <section>
+    <h2>קמפיינים וסנכרון</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>עמוד קמפיינים (campaigns.html) — שליחת הודעה לרשימת תורמים<span class="note">חובה: TECHNOLINE_AGENT_EXTENSION + IP whitelist</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>סנכרון רשימת תפוצה (settings.html) — POST ל-Technoline mailingListsApi</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>ייבוא CSV (sync.html) — תצוגה מקדימה + ביצוע</label>
+    </div>
+  </section>
+
+  <!-- ── Server & Security ── -->
+  <section>
+    <h2>שרת ואבטחה</h2>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>משתני סביבה: JWT_SECRET, IVR_KEY, TECHNOLINE_API_KEY מוגדרים ב-.env (לא ב-git)<span class="note">.env ב-.gitignore</span></label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-critical">קריטי</span>IVR_KEY בסביבת production — שרת לא עולה אם חסר</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>Rate limiter — יותר מ-20 בקשות/דקה מ-IP אחד מחזיר 429</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>גישה ל-/api/admin/* ללא הרשאת admin — מחזיר 403</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-high">גבוה</span>DB Health Check — GET /api/health — מחזיר {"ok":true}</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>יומן מערכת (logs.html) — מציג פעולות אחרונות</label>
+    </div>
+    <div class="item" onclick="toggle(this)">
+      <input type="checkbox" /><label><span class="badge badge-medium">בינוני</span>Audit log — GET /api/admin/audit-log — מכיל רשומות פעולה</label>
+    </div>
+  </section>
+
+  <script>
+    var KEY = "e2e_checklist_v1";
+
+    function loadState() {
+      try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (_) { return {}; }
+    }
+
+    function saveState(state) {
+      localStorage.setItem(KEY, JSON.stringify(state));
+    }
+
+    function allItems() {
+      return Array.from(document.querySelectorAll(".item"));
+    }
+
+    function itemKey(el) {
+      return el.querySelector("label").textContent.trim().slice(0, 60);
+    }
+
+    function applyState() {
+      var state = loadState();
+      allItems().forEach(function (el) {
+        var cb = el.querySelector("input[type=checkbox]");
+        var checked = !!state[itemKey(el)];
+        cb.checked = checked;
+        el.classList.toggle("done", checked);
+      });
+      updateProgress();
+    }
+
+    function toggle(el) {
+      var cb = el.querySelector("input[type=checkbox]");
+      cb.checked = !cb.checked;
+      el.classList.toggle("done", cb.checked);
+      var state = loadState();
+      state[itemKey(el)] = cb.checked;
+      saveState(state);
+      updateProgress();
+    }
+
+    function updateProgress() {
+      var items = allItems();
+      var done  = items.filter(function (el) { return el.classList.contains("done"); }).length;
+      var total = items.length;
+      var pct   = total ? Math.round((done / total) * 100) : 0;
+      document.getElementById("progressBar").style.width = pct + "%";
+      document.getElementById("progressLabel").textContent = done + " / " + total + " בוצעו (" + pct + "%)";
+    }
+
+    function checkAll() {
+      var state = loadState();
+      allItems().forEach(function (el) {
+        var cb = el.querySelector("input[type=checkbox]");
+        cb.checked = true;
+        el.classList.add("done");
+        state[itemKey(el)] = true;
+      });
+      saveState(state);
+      updateProgress();
+    }
+
+    function uncheckAll() {
+      if (!confirm("לנקות את כל הסימונים?")) return;
+      localStorage.removeItem(KEY);
+      allItems().forEach(function (el) {
+        el.querySelector("input[type=checkbox]").checked = false;
+        el.classList.remove("done");
+      });
+      updateProgress();
+    }
+
+    function exportReport() {
+      var items = allItems();
+      var done  = items.filter(function (el) { return el.classList.contains("done"); });
+      var fail  = items.filter(function (el) { return !el.classList.contains("done"); });
+      var lines = [
+        "דוח בדיקות E2E — " + new Date().toLocaleString("he-IL"),
+        "=".repeat(50),
+        "עברו: " + done.length + " / " + items.length,
+        "",
+      ];
+      if (fail.length) {
+        lines.push("--- לא בוצעו ---");
+        fail.forEach(function (el) {
+          lines.push("☐ " + el.querySelector("label").textContent.trim().replace(/\s+/g, " "));
+        });
+        lines.push("");
+      }
+      lines.push("--- בוצעו ---");
+      done.forEach(function (el) {
+        lines.push("☑ " + el.querySelector("label").textContent.trim().replace(/\s+/g, " "));
+      });
+      var blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "e2e-report-" + new Date().toISOString().slice(0, 10) + ".txt";
+      a.click();
+    }
+
+    applyState();
+  </script>
+</body>
+</html>
