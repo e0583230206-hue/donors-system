@@ -46,6 +46,7 @@ const {
 
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
 const CITY_MAP = require("./city_map");
+const { queryAI } = require("./ai.service");
 
 const {
   ROLES,
@@ -1458,6 +1459,38 @@ app.post("/api/sync/alfon-pending/:id/reject", requireRole([ROLES.ADMIN]), funct
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ── AI Assistant (read-only) ──────────────────────────────────────────────────
+app.post(
+  "/api/ai/query",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var body     = req.body || {};
+      var question = String(body.question || "").trim();
+      var donorId  = body.donorId ? Number(body.donorId) : null;
+
+      if (!question) {
+        return res.status(400).json({ error: "שאלה ריקה" });
+      }
+      if (question.length > 500) {
+        return res.status(400).json({ error: "שאלה ארוכה מדי (מקסימום 500 תווים)" });
+      }
+
+      var result = await queryAI(donorId, question);
+
+      return res.json({
+        answer:   result.answer,
+        intent:   result.intent,
+        model:    result.model || "local",
+        fallback: result.fallback || false,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use(function (req, res) {
