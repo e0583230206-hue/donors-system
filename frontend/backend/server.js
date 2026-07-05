@@ -46,7 +46,7 @@ const {
 
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
 const CITY_MAP = require("./city_map");
-const { queryAI } = require("./ai.service");
+const { queryAI } = require("./ai");
 
 const {
   ROLES,
@@ -1470,6 +1470,7 @@ app.post(
       var body     = req.body || {};
       var question = String(body.question || "").trim();
       var donorId  = body.donorId ? Number(body.donorId) : null;
+      var history  = Array.isArray(body.history) ? body.history.slice(-10) : [];
 
       if (!question) {
         return res.status(400).json({ error: "שאלה ריקה" });
@@ -1478,13 +1479,14 @@ app.post(
         return res.status(400).json({ error: "שאלה ארוכה מדי (מקסימום 500 תווים)" });
       }
 
-      var result = await queryAI(donorId, question);
+      var result = await queryAI({ question, donorId, history });
 
       return res.json({
-        answer:   result.answer,
-        intent:   result.intent,
-        model:    result.model || "local",
-        fallback: result.fallback || false,
+        answer:      result.answer,
+        intent:      result.intent,
+        model:       result.model || "local",
+        fallback:    result.fallback || false,
+        suggestions: result.suggestions || [],
       });
     } catch (err) {
       next(err);

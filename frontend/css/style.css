@@ -2199,6 +2199,27 @@ body.sidebar-collapsed .sidebar-search { display: none; }
   border-bottom-left-radius: 4px;
 }
 
+/* Follow-up suggestion buttons */
+.ai-suggestions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 12px 10px;
+  direction: rtl;
+}
+.ai-suggestion-btn {
+  background: var(--primary-soft);
+  border: 1px solid var(--primary);
+  color: var(--primary-dark);
+  border-radius: 14px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background 0.15s;
+}
+.ai-suggestion-btn:hover { background: var(--primary); color: #fff; }
+
 /* Typing indicator */
 .ai-typing {
   display: flex;

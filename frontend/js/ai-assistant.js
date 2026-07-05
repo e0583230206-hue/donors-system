@@ -1,34 +1,56 @@
-// ai-assistant.js — Floating AI chat widget (Read Only)
-// Works on any page. On donor.html it picks up donorId from the URL.
-
-console.log("[AI] ai-assistant.js loaded");
+// ai-assistant.js — AI Assistant v2.0 (Read Only)
+// Persistent history in localStorage, follow-up suggestion buttons after each response.
+console.log("[AI] ai-assistant.js v2 loaded");
 
 (function () {
   "use strict";
 
+  var STORAGE_KEY = "crm_ai_chat_v2";
+  var MAX_HISTORY = 20; // max messages to keep in localStorage
+
   var _donorId = null;
-  var _history = []; // { role: "user"|"assistant", text }
+  var _history = []; // [{role, text, intent}]
   var _busy    = false;
 
   // ── Quick-action buttons ──────────────────────────────────────────────────────
 
   var DONOR_QUICK_ACTIONS = [
-    { label: "📋 מצב התורם",          q: "מה מצב התורם הזה?" },
-    { label: "⚠️ חובות פתוחים",       q: "כמה חובות פתוחים יש לו?" },
-    { label: "💰 תרומה אחרונה",        q: "מתי הוא תרם לאחרונה?" },
-    { label: "✅ משימות פתוחות",       q: "מה המשימות הפתוחות?" },
-    { label: "📅 ציר זמן",             q: "ציר זמן הפעילות" },
-    { label: "💳 היסטוריית תשלומים",   q: "היסטוריית תשלומים" },
+    { label: "📋 מצב התורם",         q: "מה מצב התורם הזה?" },
+    { label: "⚠️ חובות פתוחים",      q: "כמה חובות פתוחים יש לו?" },
+    { label: "💰 תרומה אחרונה",       q: "מתי הוא תרם לאחרונה?" },
+    { label: "✅ משימות פתוחות",      q: "מה המשימות הפתוחות?" },
+    { label: "📅 ציר זמן",            q: "ציר זמן הפעילות" },
+    { label: "💡 המלצה",              q: "מה ההמלצה שלך לגבי תורם זה?" },
   ];
 
   var GLOBAL_QUICK_ACTIONS = [
-    { label: "😴 לא פעיל חצי שנה",    q: "מי לא תרם בחצי השנה האחרונה?" },
-    { label: "😴 לא פעיל שנה",         q: "מי לא תרם בשנה האחרונה?" },
-    { label: "⚠️ חובות לפי עדיפות",   q: "חובות פתוחים לפי עדיפות" },
-    { label: "🏆 תורמים גדולים",       q: "מי התורמים הגדולים ביותר?" },
+    { label: "📊 מצב המערכת",         q: "תן לי סיכום כללי של המערכת" },
+    { label: "😴 לא פעיל חצי שנה",   q: "מי לא תרם בחצי השנה האחרונה?" },
+    { label: "⚠️ חובות לפי עדיפות",  q: "חובות פתוחים לפי עדיפות" },
+    { label: "📞 למי להתקשר?",        q: "למי כדאי להתקשר היום?" },
+    { label: "⚡ Quick Wins",          q: "אילו חובות קל לסגור מהר?" },
+    { label: "🏆 תורמים גדולים",      q: "מי התורמים הגדולים ביותר?" },
   ];
 
-  // ── DOM builders ─────────────────────────────────────────────────────────────
+  // ── localStorage persistence ──────────────────────────────────────────────────
+
+  function loadHistory() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+  }
+
+  function saveHistory() {
+    try {
+      var toSave = _history.slice(-MAX_HISTORY);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    } catch (e) { /* ignore */ }
+  }
+
+  // ── DOM builders ──────────────────────────────────────────────────────────────
 
   function buildPanel() {
     var panel = document.createElement("div");
@@ -50,7 +72,7 @@ console.log("[AI] ai-assistant.js loaded");
       '<div class="ai-messages" id="aiMessages">',
         '<div class="ai-welcome">',
           '<p>שלום! אני העוזר של מערכת ניהול התורמים.</p>',
-          '<p>אני יכול לעזור לך לקבל תובנות על התורמים — לחץ על אחד מהכפתורים למעלה, או כתוב שאלה חופשית.</p>',
+          '<p>בחר שאלה מהכפתורים למעלה, או כתוב שאלה חופשית.</p>',
         '</div>',
       '</div>',
       '<div class="ai-input-row">',
@@ -79,29 +101,44 @@ console.log("[AI] ai-assistant.js loaded");
   }
 
   function renderMarkdown(text) {
-    // Bold **text**
-    var html = escapeHtml(text)
+    return escapeHtml(text)
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/\n/g, "<br>");
-    return html;
   }
 
   function appendMessage(role, text) {
     var el = document.getElementById("aiMessages");
     if (!el) return;
-
-    // Remove welcome message on first real message
     var welcome = el.querySelector(".ai-welcome");
     if (welcome) welcome.remove();
 
     var div = document.createElement("div");
     div.className = "ai-msg ai-msg-" + role;
-    if (role === "assistant") {
-      div.innerHTML = '<div class="ai-msg-bubble">' + renderMarkdown(text) + '</div>';
-    } else {
-      div.innerHTML = '<div class="ai-msg-bubble">' + escapeHtml(text) + '</div>';
-    }
+    div.innerHTML = '<div class="ai-msg-bubble">' +
+      (role === "assistant" ? renderMarkdown(text) : escapeHtml(text)) +
+      '</div>';
     el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function appendSuggestions(suggestions) {
+    if (!Array.isArray(suggestions) || !suggestions.length) return;
+    var el = document.getElementById("aiMessages");
+    if (!el) return;
+
+    var row = document.createElement("div");
+    row.className = "ai-suggestions-row";
+    suggestions.forEach(function (label) {
+      var btn = document.createElement("button");
+      btn.className = "ai-suggestion-btn";
+      btn.textContent = label;
+      btn.addEventListener("click", function () {
+        row.remove();
+        sendQuestion(label);
+      });
+      row.appendChild(btn);
+    });
+    el.appendChild(row);
     el.scrollTop = el.scrollHeight;
   }
 
@@ -121,11 +158,36 @@ console.log("[AI] ai-assistant.js loaded");
     if (t) t.remove();
   }
 
+  // ── Restore history from localStorage ────────────────────────────────────────
+
+  function restoreHistory() {
+    _history = loadHistory();
+    if (!_history.length) return;
+    // Remove welcome message first
+    var el = document.getElementById("aiMessages");
+    if (el) {
+      var welcome = el.querySelector(".ai-welcome");
+      if (welcome) welcome.remove();
+    }
+    _history.forEach(function (m) {
+      appendMessage(m.role, m.text);
+    });
+    // Re-show suggestions from last assistant message
+    var lastAsst = _history.slice().reverse().find(function (m) { return m.role === "assistant"; });
+    if (lastAsst && lastAsst.suggestions && lastAsst.suggestions.length) {
+      appendSuggestions(lastAsst.suggestions);
+    }
+  }
+
   // ── API call ──────────────────────────────────────────────────────────────────
 
   function sendQuestion(question) {
-    if (_busy || !question.trim()) return;
+    if (_busy || !String(question || "").trim()) return;
     _busy = true;
+
+    // Remove any existing suggestion row
+    var existingSuggestions = document.querySelectorAll(".ai-suggestions-row");
+    existingSuggestions.forEach(function (el) { el.remove(); });
 
     var input   = document.getElementById("aiInput");
     var sendBtn = document.getElementById("aiSendBtn");
@@ -146,6 +208,7 @@ console.log("[AI] ai-assistant.js loaded");
       body: JSON.stringify({
         question: question,
         donorId:  _donorId || undefined,
+        history:  _history.slice(-10),
       }),
     })
       .then(function (res) { return res.json(); })
@@ -155,13 +218,15 @@ console.log("[AI] ai-assistant.js loaded");
         if (data.fallback) {
           answer += "\n\n_(OpenAI לא זמין — תשובה מהמנוע המקומי)_";
         }
-        _history.push({ role: "assistant", text: answer });
+        var suggestions = data.suggestions || [];
+        _history.push({ role: "assistant", text: answer, intent: data.intent, suggestions: suggestions });
+        saveHistory();
         appendMessage("assistant", answer);
+        appendSuggestions(suggestions);
       })
       .catch(function (err) {
         removeTyping();
-        var msg = "שגיאה בתקשורת עם השרת.";
-        appendMessage("assistant", msg);
+        appendMessage("assistant", "שגיאה בתקשורת עם השרת.");
         console.error("[AI]", err);
       })
       .finally(function () {
@@ -208,8 +273,11 @@ console.log("[AI] ai-assistant.js loaded");
 
   function clearChat() {
     _history = [];
+    saveHistory();
     var el = document.getElementById("aiMessages");
     if (el) el.innerHTML = '<div class="ai-welcome"><p>שיחה נוקתה. בחר שאלה או כתוב ידנית.</p></div>';
+    // Remove suggestion rows
+    document.querySelectorAll(".ai-suggestions-row").forEach(function (r) { r.remove(); });
   }
 
   // ── Input auto-grow + Enter key ───────────────────────────────────────────────
@@ -217,7 +285,6 @@ console.log("[AI] ai-assistant.js loaded");
   function wireInput() {
     var input   = document.getElementById("aiInput");
     var sendBtn = document.getElementById("aiSendBtn");
-
     if (!input || !sendBtn) return;
 
     input.addEventListener("input", function () {
@@ -226,7 +293,6 @@ console.log("[AI] ai-assistant.js loaded");
     });
 
     input.addEventListener("keydown", function (e) {
-      // Enter without Shift = send
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         sendQuestion(this.value.trim());
@@ -242,22 +308,17 @@ console.log("[AI] ai-assistant.js loaded");
 
   function init() {
     try {
-      console.log("[AI] init() starting, readyState=" + document.readyState);
+      console.log("[AI] init() v2 starting, readyState=" + document.readyState);
 
-      // Pick up donor ID from URL if on donor page
       var params = new URLSearchParams(window.location.search);
       var idParam = params.get("id");
       if (idParam) _donorId = Number(idParam) || null;
 
-      // Build and inject DOM
       var fab   = buildFab();
       var panel = buildPanel();
       document.body.appendChild(fab);
       document.body.appendChild(panel);
 
-      console.log("[AI] FAB appended to body, id=aiFab");
-
-      // Wire events
       fab.addEventListener("click", function () {
         var p = document.getElementById("aiPanel");
         if (p && p.classList.contains("hidden")) { openPanel(); } else { closePanel(); }
@@ -269,13 +330,14 @@ console.log("[AI] ai-assistant.js loaded");
       if (clearBtn) clearBtn.addEventListener("click", clearChat);
 
       wireInput();
-      console.log("[AI] init() done — FAB should be visible bottom-left");
+      restoreHistory();
+
+      console.log("[AI] init() v2 done — FAB visible bottom-left");
     } catch (err) {
-      console.error("[AI] init() failed:", err);
+      console.error("[AI] init() v2 failed:", err);
     }
   }
 
-  // Wait for DOM
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
   } else {
