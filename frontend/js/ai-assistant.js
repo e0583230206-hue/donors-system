@@ -1,38 +1,60 @@
-// ai-assistant.js — AI Assistant v2.0 (Read Only)
-// Persistent history in localStorage, follow-up suggestion buttons after each response.
-console.log("[AI] ai-assistant.js v2 loaded");
+// ai-assistant.js — AI Assistant v3.0 (Read Only)
+// pageContext detection, debug mode (?aiDebug=1), rich ResponseObject rendering
+console.log("[AI] ai-assistant.js v3 loaded");
 
 (function () {
   "use strict";
 
   var STORAGE_KEY = "crm_ai_chat_v2";
-  var MAX_HISTORY = 20; // max messages to keep in localStorage
+  var MAX_HISTORY = 20;
 
-  var _donorId = null;
-  var _history = []; // [{role, text, intent}]
-  var _busy    = false;
+  var _donorId     = null;
+  var _pageContext = "global";
+  var _debugMode   = false;
+  var _history     = [];
+  var _busy        = false;
+
+  // ── Page-context detection ────────────────────────────────────────────────────
+
+  function detectPageContext() {
+    var path = window.location.pathname.toLowerCase();
+    var params = new URLSearchParams(window.location.search);
+
+    _debugMode = params.get("aiDebug") === "1";
+
+    var idParam = params.get("id");
+    if (idParam) _donorId = Number(idParam) || null;
+
+    if (/donor/.test(path) && idParam)             return "donor";
+    if (/debt/.test(path))                         return "debts";
+    if (/task/.test(path))                         return "tasks";
+    if (/reminder/.test(path))                     return "reminders";
+    if (/report/.test(path))                       return "reports";
+    if (/phone|ivr|call/.test(path))               return "phone";
+    return "global";
+  }
 
   // ── Quick-action buttons ──────────────────────────────────────────────────────
 
   var DONOR_QUICK_ACTIONS = [
-    { label: "📋 מצב התורם",         q: "מה מצב התורם הזה?" },
-    { label: "⚠️ חובות פתוחים",      q: "כמה חובות פתוחים יש לו?" },
-    { label: "💰 תרומה אחרונה",       q: "מתי הוא תרם לאחרונה?" },
-    { label: "✅ משימות פתוחות",      q: "מה המשימות הפתוחות?" },
-    { label: "📅 ציר זמן",            q: "ציר זמן הפעילות" },
-    { label: "💡 המלצה",              q: "מה ההמלצה שלך לגבי תורם זה?" },
+    { label: "📋 מצב התורם",        q: "מה מצב התורם הזה?" },
+    { label: "⚠️ חובות פתוחים",     q: "כמה חובות פתוחים יש לו?" },
+    { label: "💰 תרומה אחרונה",      q: "מתי הוא תרם לאחרונה?" },
+    { label: "✅ משימות פתוחות",     q: "מה המשימות הפתוחות?" },
+    { label: "📅 ציר זמן",           q: "ציר זמן הפעילות" },
+    { label: "💡 המלצה",             q: "מה ההמלצה שלך לגבי תורם זה?" },
   ];
 
   var GLOBAL_QUICK_ACTIONS = [
-    { label: "📊 מצב המערכת",         q: "תן לי סיכום כללי של המערכת" },
-    { label: "😴 לא פעיל חצי שנה",   q: "מי לא תרם בחצי השנה האחרונה?" },
-    { label: "⚠️ חובות לפי עדיפות",  q: "חובות פתוחים לפי עדיפות" },
-    { label: "📞 למי להתקשר?",        q: "למי כדאי להתקשר היום?" },
-    { label: "⚡ Quick Wins",          q: "אילו חובות קל לסגור מהר?" },
-    { label: "🏆 תורמים גדולים",      q: "מי התורמים הגדולים ביותר?" },
+    { label: "📊 מצב המערכת",        q: "תן לי סיכום כללי של המערכת" },
+    { label: "😴 לא פעיל חצי שנה",  q: "מי לא תרם בחצי השנה האחרונה?" },
+    { label: "⚠️ חובות לפי עדיפות", q: "חובות פתוחים לפי עדיפות" },
+    { label: "📞 למי להתקשר?",       q: "למי כדאי להתקשר היום?" },
+    { label: "⚡ Quick Wins",         q: "אילו חובות קל לסגור מהר?" },
+    { label: "🏆 תורמים גדולים",     q: "מי התורמים הגדולים ביותר?" },
   ];
 
-  // ── localStorage persistence ──────────────────────────────────────────────────
+  // ── localStorage ──────────────────────────────────────────────────────────────
 
   function loadHistory() {
     try {
@@ -45,8 +67,7 @@ console.log("[AI] ai-assistant.js v2 loaded");
 
   function saveHistory() {
     try {
-      var toSave = _history.slice(-MAX_HISTORY);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(_history.slice(-MAX_HISTORY)));
     } catch (e) { /* ignore */ }
   }
 
@@ -62,6 +83,7 @@ console.log("[AI] ai-assistant.js v2 loaded");
           '<span class="ai-panel-icon">🤖</span>',
           '<span>עוזר AI</span>',
           '<span class="ai-read-only-badge">Read Only</span>',
+          (_debugMode ? '<span class="ai-debug-badge">DEBUG</span>' : ""),
         '</div>',
         '<div class="ai-panel-controls">',
           '<button class="ai-ctrl-btn" id="aiClearBtn" title="נקה שיחה">🗑️</button>',
@@ -106,7 +128,23 @@ console.log("[AI] ai-assistant.js v2 loaded");
       .replace(/\n/g, "<br>");
   }
 
-  function appendMessage(role, text) {
+  function buildDebugPanel(debug) {
+    if (!_debugMode || !debug) return "";
+    var lines = [
+      "intent: " + escapeHtml(debug.intent || "—"),
+      "confidence: " + (debug.confidence !== undefined ? Number(debug.confidence).toFixed(2) : "—"),
+      "model: " + escapeHtml(debug.model || "—"),
+      "pageContext: " + escapeHtml(debug.pageContext || "—"),
+    ];
+    if (debug.entities && Object.keys(debug.entities).length) {
+      lines.push("entities: " + escapeHtml(JSON.stringify(debug.entities)));
+    }
+    return '<div class="ai-debug-panel">' + lines.map(function (l) {
+      return '<span>' + l + '</span>';
+    }).join("") + '</div>';
+  }
+
+  function appendMessage(role, text, debug) {
     var el = document.getElementById("aiMessages");
     if (!el) return;
     var welcome = el.querySelector(".ai-welcome");
@@ -114,9 +152,9 @@ console.log("[AI] ai-assistant.js v2 loaded");
 
     var div = document.createElement("div");
     div.className = "ai-msg ai-msg-" + role;
-    div.innerHTML = '<div class="ai-msg-bubble">' +
-      (role === "assistant" ? renderMarkdown(text) : escapeHtml(text)) +
-      '</div>';
+    var bubble = role === "assistant" ? renderMarkdown(text) : escapeHtml(text);
+    var debugHtml = role === "assistant" ? buildDebugPanel(debug) : "";
+    div.innerHTML = '<div class="ai-msg-bubble">' + bubble + '</div>' + debugHtml;
     el.appendChild(div);
     el.scrollTop = el.scrollHeight;
   }
@@ -158,21 +196,19 @@ console.log("[AI] ai-assistant.js v2 loaded");
     if (t) t.remove();
   }
 
-  // ── Restore history from localStorage ────────────────────────────────────────
+  // ── Restore history ───────────────────────────────────────────────────────────
 
   function restoreHistory() {
     _history = loadHistory();
     if (!_history.length) return;
-    // Remove welcome message first
     var el = document.getElementById("aiMessages");
     if (el) {
       var welcome = el.querySelector(".ai-welcome");
       if (welcome) welcome.remove();
     }
     _history.forEach(function (m) {
-      appendMessage(m.role, m.text);
+      appendMessage(m.role, m.text, m.debug);
     });
-    // Re-show suggestions from last assistant message
     var lastAsst = _history.slice().reverse().find(function (m) { return m.role === "assistant"; });
     if (lastAsst && lastAsst.suggestions && lastAsst.suggestions.length) {
       appendSuggestions(lastAsst.suggestions);
@@ -185,9 +221,7 @@ console.log("[AI] ai-assistant.js v2 loaded");
     if (_busy || !String(question || "").trim()) return;
     _busy = true;
 
-    // Remove any existing suggestion row
-    var existingSuggestions = document.querySelectorAll(".ai-suggestions-row");
-    existingSuggestions.forEach(function (el) { el.remove(); });
+    document.querySelectorAll(".ai-suggestions-row").forEach(function (el) { el.remove(); });
 
     var input   = document.getElementById("aiInput");
     var sendBtn = document.getElementById("aiSendBtn");
@@ -206,9 +240,10 @@ console.log("[AI] ai-assistant.js v2 loaded");
         "Authorization": "Bearer " + tok,
       },
       body: JSON.stringify({
-        question: question,
-        donorId:  _donorId || undefined,
-        history:  _history.slice(-10),
+        question:    question,
+        donorId:     _donorId || undefined,
+        history:     _history.slice(-10),
+        pageContext: _pageContext,
       }),
     })
       .then(function (res) { return res.json(); })
@@ -219,9 +254,10 @@ console.log("[AI] ai-assistant.js v2 loaded");
           answer += "\n\n_(OpenAI לא זמין — תשובה מהמנוע המקומי)_";
         }
         var suggestions = data.suggestions || [];
-        _history.push({ role: "assistant", text: answer, intent: data.intent, suggestions: suggestions });
+        var debug = data.debug || null;
+        _history.push({ role: "assistant", text: answer, intent: data.intent, suggestions: suggestions, debug: debug });
         saveHistory();
-        appendMessage("assistant", answer);
+        appendMessage("assistant", answer, debug);
         appendSuggestions(suggestions);
       })
       .catch(function (err) {
@@ -276,7 +312,6 @@ console.log("[AI] ai-assistant.js v2 loaded");
     saveHistory();
     var el = document.getElementById("aiMessages");
     if (el) el.innerHTML = '<div class="ai-welcome"><p>שיחה נוקתה. בחר שאלה או כתוב ידנית.</p></div>';
-    // Remove suggestion rows
     document.querySelectorAll(".ai-suggestions-row").forEach(function (r) { r.remove(); });
   }
 
@@ -308,11 +343,10 @@ console.log("[AI] ai-assistant.js v2 loaded");
 
   function init() {
     try {
-      console.log("[AI] init() v2 starting, readyState=" + document.readyState);
+      console.log("[AI] init() v3 starting, readyState=" + document.readyState);
 
-      var params = new URLSearchParams(window.location.search);
-      var idParam = params.get("id");
-      if (idParam) _donorId = Number(idParam) || null;
+      _pageContext = detectPageContext();
+      console.log("[AI] pageContext=" + _pageContext + ", donorId=" + _donorId + ", debug=" + _debugMode);
 
       var fab   = buildFab();
       var panel = buildPanel();
@@ -332,9 +366,9 @@ console.log("[AI] ai-assistant.js v2 loaded");
       wireInput();
       restoreHistory();
 
-      console.log("[AI] init() v2 done — FAB visible bottom-left");
+      console.log("[AI] init() v3 done — FAB visible, pageContext=" + _pageContext);
     } catch (err) {
-      console.error("[AI] init() v2 failed:", err);
+      console.error("[AI] init() v3 failed:", err);
     }
   }
 

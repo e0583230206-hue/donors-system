@@ -1,66 +1,84 @@
 "use strict";
-// engines/openai.js — OpenAI GPT adapter
-// Falls back to local engine if API call fails.
+// engines/openai.js — OpenAI GPT adapter v3
+// Returns a ResponseObject (JSON) from GPT, then runs through formatter.
 
-const https = require("https");
+const https  = require("https");
 const { buildDonorContext, buildGlobalContext } = require("../context");
+const { format, parseOpenAIResponse }          = require("../formatter");
 
+// ─── System prompt ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
-  if (!ctx) return "You are an AI assistant for a Jewish charity CRM system. Answer in Hebrew only.";
+  const base = [
+    "אתה עוזר CRM חכם למערכת ניהול תורמים של ארגון צדקה יהודי.",
+    "כללים מחייבים:",
+    "1. ענה בעברית בלבד — שפה טבעית, מקצועית ומעשית.",
+    "2. Read Only בלבד — אל תמליץ על שינוי נתונים, רק על פעולות אנושיות (התקשרות, מעקב).",
+    "3. אם חסר מידע, אמור במפורש שאין מספיק נתונים — אל תמציא.",
+    "4. המלצות חייבות להתבסס על הנתונים בלבד.",
+    "5. החזר תשובה בפורמט JSON הבא בדיוק (ללא ```json):",
+    '{',
+    '  "summary": "משפט מסכם אחד בעברית",',
+    '  "metrics": [{"label": "...", "value": "..."}],',
+    '  "sections": [{"title": "...", "items": ["..."]}],',
+    '  "conclusion": "מסקנה בעברית",',
+    '  "recommendation": "המלצה מעשית ספציפית בעברית",',
+    '  "suggestions": ["שאלת המשך 1", "שאלת המשך 2", "שאלת המשך 3"]',
+    '}',
+  ].join("\n");
 
-  const { fmtMoney } = ctx;
+  if (!ctx) return base;
+
+  const { fmtMoney, fmtDate } = ctx;
 
   if (ctx.type === "donor") {
     const { donor, stats, openDebts } = ctx;
     return [
-      "You are an AI assistant for a Jewish charity donor management CRM.",
-      "Answer ONLY in Hebrew. Be concise. Never modify data.",
+      base,
       "",
-      `Donor: ${donor.fullName || "Unknown"} | City: ${donor.city || "-"} | Phone: ${donor.phone || "-"}`,
-      `Donations: ${stats.totalDonations} | Paid: ${fmtMoney(stats.totalPaid)} | Debt: ${fmtMoney(stats.totalDebt)}`,
-      `Last donation: ${stats.lastDonationFmt} (${stats.daysSinceLastDonation} days ago)`,
-      `Open debts: ${stats.openDebtsCount}`,
-      `Tags: ${(donor.tags || []).join(", ") || "none"}`,
-      `Notes: ${donor.notes || "none"}`,
-      "",
-      "Answer based on this data. If unsure, say so in Hebrew.",
+      "=== נתוני תורם ===",
+      "שם: " + (donor.fullName || "לא ידוע"),
+      "עיר: " + (donor.city || "לא ידוע") + " | טלפון: " + (donor.phone || "אין"),
+      "תרומות: " + stats.totalDonations + " | שולם: " + fmtMoney(stats.totalPaid) + " | חוב: " + fmtMoney(stats.totalDebt),
+      "תרומה אחרונה: " + stats.lastDonationFmt + " (" + stats.daysSinceLastDonation + " ימים)",
+      "חובות פתוחים: " + stats.openDebtsCount,
+      "תגיות: " + (donor.tags || []).join(", ") || "אין",
+      "הערות: " + (donor.notes || "אין"),
     ].join("\n");
   }
 
   // Global context — brief summary
   const { summary } = ctx;
   return [
-    "You are an AI assistant for a Jewish charity donor management CRM.",
-    "Answer ONLY in Hebrew. Be concise. Never modify data.",
+    base,
     "",
-    `System: ${summary.totalDonors} donors | Active: ${summary.activeDonors}`,
-    `Total debt: ${fmtMoney(summary.totalDebt)} across ${summary.withDebt} donors`,
-    `Total paid: ${fmtMoney(summary.totalPaid)}`,
-    `Dormant 180d: ${summary.dormant180} | Dormant 365d: ${summary.dormant365}`,
-    `Open tasks: ${summary.openTasksCount} (${summary.urgentCount} urgent)`,
-    `Campaign ready: ${summary.campaignReady} | No phone: ${summary.noPhone}`,
-    "",
-    "Answer based on this data. If unsure, say so in Hebrew.",
+    "=== נתוני מערכת ===",
+    "תורמים: " + summary.totalDonors + " (פעילים: " + summary.activeDonors + ")",
+    "חוב כולל: " + fmtMoney(summary.totalDebt) + " (" + summary.withDebt + " תורמים)",
+    "גביה כוללת: " + fmtMoney(summary.totalPaid),
+    "רדומים 180+: " + summary.dormant180 + " | 365+: " + summary.dormant365,
+    "משימות פתוחות: " + summary.openTasksCount + " (" + summary.urgentCount + " דחופות)",
+    "מוכנים לקמפיין: " + summary.campaignReady,
   ].join("\n");
 }
 
+// ─── HTTP call to OpenAI ───────────────────────────────────────────────────────
 function callOpenAI(apiKey, model, messages) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ model, messages, max_tokens: 600, temperature: 0.4 });
+  return new Promise(function (resolve, reject) {
+    const body = JSON.stringify({ model: model, messages: messages, max_tokens: 700, temperature: 0.3 });
     const opts  = {
       hostname: "api.openai.com",
       path:     "/v1/chat/completions",
       method:   "POST",
       headers: {
-        "Content-Type":  "application/json",
-        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type":   "application/json",
+        "Authorization":  "Bearer " + apiKey,
         "Content-Length": Buffer.byteLength(body),
       },
     };
-    const req = https.request(opts, res => {
-      let raw = "";
-      res.on("data", c => { raw += c; });
-      res.on("end", () => {
+    const req = https.request(opts, function (res) {
+      var raw = "";
+      res.on("data", function (c) { raw += c; });
+      res.on("end", function () {
         try {
           const parsed = JSON.parse(raw);
           if (parsed.error) { reject(new Error(parsed.error.message)); return; }
@@ -69,23 +87,23 @@ function callOpenAI(apiKey, model, messages) {
       });
     });
     req.on("error", reject);
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error("OpenAI timeout")); });
+    req.setTimeout(18000, function () { req.destroy(); reject(new Error("OpenAI timeout")); });
     req.write(body);
     req.end();
   });
 }
 
-async function query({ question, donorId, history }) {
+// ─── Main query ───────────────────────────────────────────────────────────────
+async function query({ question, donorId, history, pageContext }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-  const ctx = donorId ? buildDonorContext(donorId) : buildGlobalContext();
+  const ctx          = donorId ? buildDonorContext(donorId) : buildGlobalContext();
   const systemPrompt = buildSystemPrompt(ctx);
 
-  // Build messages array from history + current question
   const messages = [{ role: "system", content: systemPrompt }];
   if (Array.isArray(history)) {
-    history.slice(-6).forEach(m => {
+    history.slice(-6).forEach(function (m) {
       if (m.role === "user" || m.role === "assistant") {
         messages.push({ role: m.role, content: m.text || m.content || "" });
       }
@@ -94,14 +112,19 @@ async function query({ question, donorId, history }) {
   messages.push({ role: "user", content: question });
 
   const model  = process.env.OPENAI_MODEL || "gpt-4o-mini";
-  const answer = await callOpenAI(apiKey, model, messages);
+  const raw    = await callOpenAI(apiKey, model, messages);
+  const parsed = parseOpenAIResponse(raw);
+
+  // If raw fallback (not JSON), return it as-is
+  const answer = parsed._rawFallback ? parsed._rawFallback : format(parsed);
 
   return {
-    answer,
-    intent: "openai",
-    model:  `openai:${model}`,
-    fallback: false,
-    suggestions: ["ספר לי עוד", "מה ההמלצה שלך?", "מה הצעד הבא?"],
+    answer:      answer,
+    intent:      "openai",
+    model:       "openai:" + model,
+    fallback:    false,
+    suggestions: parsed.suggestions || ["ספר לי עוד", "מה ההמלצה שלך?", "מה הצעד הבא?"],
+    debug:       { intent: "openai", model: "openai:" + model, pageContext },
   };
 }
 

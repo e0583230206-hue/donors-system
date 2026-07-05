@@ -2115,6 +2115,31 @@ body.sidebar-collapsed .sidebar-search { display: none; }
   letter-spacing: 0.5px;
 }
 .ai-panel-controls { display: flex; gap: 6px; }
+.ai-debug-badge {
+  font-size: 10px;
+  background: #f59e0b;
+  color: #1a1a1a;
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.ai-debug-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: #1e293b;
+  border-radius: 6px;
+  border-left: 3px solid #f59e0b;
+  font-size: 11px;
+  font-family: monospace;
+  color: #94a3b8;
+  direction: ltr;
+  text-align: left;
+}
+.ai-debug-panel span { white-space: nowrap; }
 .ai-ctrl-btn {
   background: rgba(255,255,255,0.15);
   border: none;

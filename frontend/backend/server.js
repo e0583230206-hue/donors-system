@@ -1467,10 +1467,11 @@ app.post(
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   async function (req, res, next) {
     try {
-      var body     = req.body || {};
-      var question = String(body.question || "").trim();
-      var donorId  = body.donorId ? Number(body.donorId) : null;
-      var history  = Array.isArray(body.history) ? body.history.slice(-10) : [];
+      var body        = req.body || {};
+      var question    = String(body.question || "").trim();
+      var donorId     = body.donorId ? Number(body.donorId) : null;
+      var history     = Array.isArray(body.history) ? body.history.slice(-10) : [];
+      var pageContext = String(body.pageContext || "global");
 
       if (!question) {
         return res.status(400).json({ error: "שאלה ריקה" });
@@ -1479,7 +1480,7 @@ app.post(
         return res.status(400).json({ error: "שאלה ארוכה מדי (מקסימום 500 תווים)" });
       }
 
-      var result = await queryAI({ question, donorId, history });
+      var result = await queryAI({ question, donorId, history, pageContext });
 
       return res.json({
         answer:      result.answer,
@@ -1487,6 +1488,7 @@ app.post(
         model:       result.model || "local",
         fallback:    result.fallback || false,
         suggestions: result.suggestions || [],
+        debug:       result.debug || null,
       });
     } catch (err) {
       next(err);

@@ -92,9 +92,12 @@ function buildDonorContext(donorId) {
 }
 
 function buildGlobalContext() {
-  const allDonors  = getAppState("donors")    || [];
-  const tasks      = getAppState("tasks")     || [];
-  const reminders  = getAppState("reminders") || [];
+  const rawDonors  = getAppState("donors");
+  const allDonors  = Array.isArray(rawDonors) ? rawDonors : [];
+  const rawTasks   = getAppState("tasks");
+  const tasks      = Array.isArray(rawTasks) ? rawTasks : [];
+  const rawRem     = getAppState("reminders");
+  const reminders  = Array.isArray(rawRem) ? rawRem : [];
 
   const statsPerDonor = allDonors.map(d => ({ donor: d, stats: getDonorStats(d) }));
   const now = Date.now();
