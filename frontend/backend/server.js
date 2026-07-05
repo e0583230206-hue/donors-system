@@ -669,6 +669,196 @@ app.get(
   }
 );
 
+// ── Technoline Campaign Management ───────────────────────────────────────────
+
+function techCampaignFetch(action, extraParams) {
+  var apiKey = process.env.TECHNOLINE_API_KEY || "";
+  if (!apiKey) throw new Error("TECHNOLINE_API_KEY לא מוגדר בשרת");
+  var params = new URLSearchParams(Object.assign({ action: action, apiKey: apiKey }, extraParams || {}));
+  return fetch("https://app.ipsales.co.il/campaignApi.php", {
+    method:  "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:    params.toString(),
+    signal:  AbortSignal.timeout(30000),
+  }).then(function (r) { return r.json(); });
+}
+
+function campaignErrMsg(body) {
+  if (body.errorCode === -99) return "IP השרת אינו ברשימת ההיתרים של טכנוליין — יש לפנות לתמיכה.";
+  return body.note || body.error || ("שגיאה " + (body.errorCode || ""));
+}
+
+// POST /api/technoline/campaign/run
+app.post(
+  "/api/technoline/campaign/run",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  async function (req, res, next) {
+    try {
+      var apiKey = process.env.TECHNOLINE_API_KEY || "";
+      if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
+
+      var body           = req.body || {};
+      var title          = String(body.title          || "").trim();
+      var messagesType   = String(body.messagesType   || "audioText").trim();
+      var audioText      = String(body.audioText      || "").trim();
+      var extensionNum   = String(body.extension      || "").trim();
+      var apiUrl         = String(body.apiUrl         || "").trim();
+      var callLength     = body.callLength     || 25;
+      var dialRetries    = body.dialRetries    || 1;
+      var betweenRetries = body.betweenRetries || 20;
+      var reasonableHours = (body.reasonableHours === true || body.reasonableHours === "yes") ? "yes" : "no";
+      var sendTime       = body.sendTime || null;
+      var phonesOverride = body.phones   || null;
+
+      // Build phone list from ivrApprovedPhones unless explicit list provided
+      var phones;
+      if (Array.isArray(phonesOverride) && phonesOverride.length > 0) {
+        phones = phonesOverride;
+      } else {
+        var donors = getAppState("donors") || [];
+        phones = [];
+        for (var i = 0; i < donors.length; i++) {
+          var approved = donors[i].ivrApprovedPhones || [];
+          for (var j = 0; j < approved.length; j++) {
+            if (phones.indexOf(approved[j]) === -1) phones.push(approved[j]);
+          }
+        }
+      }
+
+      if (phones.length === 0) {
+        return res.status(400).json({ error: "אין מספרי טלפון מאושרים לשליחה" });
+      }
+
+      if (messagesType === "audioText" && !audioText) {
+        return res.status(400).json({ error: "יש לספק טקסט להקראה (audioText)" });
+      }
+      if (messagesType === "extensionActivation" && !extensionNum) {
+        return res.status(400).json({ error: "יש לספק מספר שלוחה (extension)" });
+      }
+      if (messagesType === "apiUrl" && !apiUrl) {
+        return res.status(400).json({ error: "יש לספק כתובת API (apiUrl)" });
+      }
+
+      var params = {
+        action:          "campaignRun",
+        apiKey:          apiKey,
+        phones:          JSON.stringify(phones),
+        betweenRetries:  betweenRetries,
+        callLength:      callLength,
+        dialRetries:     dialRetries,
+        reasonableHours: reasonableHours,
+      };
+      if (title)    params.title    = title;
+      if (sendTime) params.sendTime = sendTime;
+
+      if (messagesType === "audioText") {
+        params.audioText    = audioText;
+      } else if (messagesType === "extensionActivation") {
+        params.messagesType        = "extensionActivation";
+        params.extensionActivation = extensionNum;
+      } else if (messagesType === "apiUrl") {
+        params.messagesType = "apiUrl";
+        params.apiUrl       = apiUrl;
+      }
+
+      var urlParams = new URLSearchParams(params);
+      console.log("[Campaign] launching", phones.length, "phones | title:", title, "| type:", messagesType);
+
+      var techRes  = await fetch("https://app.ipsales.co.il/campaignApi.php", {
+        method:  "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body:    urlParams.toString(),
+        signal:  AbortSignal.timeout(30000),
+      });
+      var techBody = await techRes.json();
+
+      console.log("[Campaign] response:", JSON.stringify(techBody));
+
+      if (String(techBody.status).toUpperCase() !== "OK") {
+        return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode });
+      }
+
+      return res.json({
+        ok:            true,
+        campaignId:    techBody.campaignId,
+        phones:        techBody.phones,
+        errorPhones:   techBody.errorPhones,
+        blockedPhones: techBody.blockedPhones,
+        billing:       techBody.billing,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/technoline/campaign/history
+app.get(
+  "/api/technoline/campaign/history",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var extra = {};
+      if (req.query.fromDate) extra.fromDate = req.query.fromDate;
+      if (req.query.toDate)   extra.toDate   = req.query.toDate;
+      var body = await techCampaignFetch("campaignsHistory", extra);
+      if (String(body.status).toUpperCase() !== "OK") {
+        return res.status(400).json({ error: campaignErrMsg(body) });
+      }
+      return res.json(body);
+    } catch (err) { next(err); }
+  }
+);
+
+// GET /api/technoline/campaign/:id/report
+app.get(
+  "/api/technoline/campaign/:id/report",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var body = await techCampaignFetch("campaignReport", { campaignId: req.params.id });
+      return res.json(body);
+    } catch (err) { next(err); }
+  }
+);
+
+// POST /api/technoline/campaign/:id/hold
+app.post(
+  "/api/technoline/campaign/:id/hold",
+  requireRole([ROLES.ADMIN]),
+  async function (req, res, next) {
+    try {
+      var body = await techCampaignFetch("campaignHold", { campaignId: req.params.id });
+      return res.json(body);
+    } catch (err) { next(err); }
+  }
+);
+
+// POST /api/technoline/campaign/:id/resume
+app.post(
+  "/api/technoline/campaign/:id/resume",
+  requireRole([ROLES.ADMIN]),
+  async function (req, res, next) {
+    try {
+      var body = await techCampaignFetch("campaignResumption", { campaignId: req.params.id });
+      return res.json(body);
+    } catch (err) { next(err); }
+  }
+);
+
+// POST /api/technoline/campaign/:id/stop
+app.post(
+  "/api/technoline/campaign/:id/stop",
+  requireRole([ROLES.ADMIN]),
+  async function (req, res, next) {
+    try {
+      var body = await techCampaignFetch("campaignStop", { campaignId: req.params.id });
+      return res.json(body);
+    } catch (err) { next(err); }
+  }
+);
+
 // ── Donor sync ────────────────────────────────────────────────────────────────
 app.post(
   "/api/donors/sync",
