@@ -165,7 +165,7 @@ function buildFinanceReport() {
     const row = document.createElement("tr");
 
     row.innerHTML = `
-      <td>${purpose}</td>
+      <td>${escapeHTML(purpose)}</td>
       <td>${item.count}</td>
       <td>${formatMoney(item.committed)}</td>
       <td class="green-text">${formatMoney(item.paid)}</td>
@@ -207,10 +207,10 @@ function buildWorkersReport() {
     const row = document.createElement("tr");
 
     row.innerHTML = `
-      <td>${worker.name}</td>
-      <td>${worker.role}</td>
+      <td>${escapeHTML(worker.name)}</td>
+      <td>${escapeHTML(worker.role)}</td>
       <td class="${worker.status === "פעיל" ? "green-text" : "red-text"}">
-        ${worker.status}
+        ${escapeHTML(worker.status)}
       </td>
       <td>${countTasksForWorker(worker.name, false)}</td>
       <td>${countTasksForWorker(worker.name, true)}</td>
@@ -220,6 +220,13 @@ function buildWorkersReport() {
 
     workersReportTable.appendChild(row);
   });
+}
+
+// Guard against CSV/Excel formula injection (= + - @ as first char)
+function sanitizeCell(v) {
+  if (typeof v !== "string") return v;
+  if (/^[=+\-@|]/.test(v)) return "'" + v;
+  return v;
 }
 
 function downloadXLSX(filename, sheetName, rows) {
@@ -252,11 +259,11 @@ function exportDonors() {
     }, 0);
 
     rows.push([
-      donor.fullName || "",
-      donor.phone || "",
-      donor.city || "",
-      donor.address || "",
-      donor.status || "",
+      sanitizeCell(donor.fullName || ""),
+      sanitizeCell(donor.phone    || ""),
+      sanitizeCell(donor.city     || ""),
+      sanitizeCell(donor.address  || ""),
+      sanitizeCell(donor.status   || ""),
       donations.length,
       paid,
       debt,
@@ -279,13 +286,13 @@ function exportDebts() {
 
       if (debt > 0) {
         rows.push([
-          donor.fullName || "",
-          donor.phone || "",
-          donation.finalPurpose || "",
+          sanitizeCell(donor.fullName            || ""),
+          sanitizeCell(donor.phone               || ""),
+          sanitizeCell(donation.finalPurpose     || ""),
           debt,
-          donation.regularDate || donation.date || "",
-          donation.hebrewDate || "",
-          donation.note || "",
+          sanitizeCell(donation.regularDate || donation.date || ""),
+          sanitizeCell(donation.hebrewDate       || ""),
+          sanitizeCell(donation.note             || ""),
         ]);
       }
     });
@@ -309,9 +316,9 @@ function exportWorkers() {
 
   workers.forEach(function (worker) {
     rows.push([
-      worker.name || "",
-      worker.role || "",
-      worker.status || "",
+      sanitizeCell(worker.name   || ""),
+      sanitizeCell(worker.role   || ""),
+      sanitizeCell(worker.status || ""),
       countTasksForWorker(worker.name, false),
       countTasksForWorker(worker.name, true),
       countCallbacksForWorker(worker.name, false),
@@ -483,15 +490,15 @@ function exportFilteredDonations() {
 
   filtered.forEach(function (d) {
     rows.push([
-      d.donorName    || "",
-      d.donorPhone   || "",
-      d.donorCity    || "",
-      d.finalPurpose || "",
+      sanitizeCell(d.donorName    || ""),
+      sanitizeCell(d.donorPhone   || ""),
+      sanitizeCell(d.donorCity    || ""),
+      sanitizeCell(d.finalPurpose || ""),
       Number(d.amount        || 0),
       Number(d.paidPartial   || 0),
       Number(d.remainingDebt || 0),
-      d.regularDate || d.date || "",
-      d.note || "",
+      sanitizeCell(d.regularDate || d.date || ""),
+      sanitizeCell(d.note        || ""),
     ]);
   });
 

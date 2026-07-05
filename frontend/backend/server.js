@@ -1033,17 +1033,24 @@ app.get(
   }
 );
 
-// ── Softphone: SIP config (requires valid session) ────────────────────────────
-app.get("/api/sip-config", requireAuth, function (req, res) {
-  var dbCfg = getAppState("sip_config");
-  var fromDb = dbCfg && typeof dbCfg === "object" && !Array.isArray(dbCfg);
-  res.json({
-    server: (fromDb && dbCfg.server) || process.env.SIP_SERVER || "",
-    ext:    (fromDb && dbCfg.ext)    || process.env.SIP_EXT    || "",
-    user:   (fromDb && dbCfg.user)   || process.env.SIP_USER   || "",
-    pass:   (fromDb && dbCfg.pass)   || process.env.SIP_PASS   || "",
-  });
-});
+// ── Softphone: SIP config ────────────────────────────────────────────────────
+// SECURITY NOTE: SIP_PASS is a PBX credential. Access is intentionally
+// restricted to ADMIN and SECRETARY because those are the only roles that
+// use the softphone. If a sip_user role is introduced in future, add it here.
+app.get(
+  "/api/sip-config",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res) {
+    var dbCfg  = getAppState("sip_config");
+    var fromDb = dbCfg && typeof dbCfg === "object" && !Array.isArray(dbCfg);
+    res.json({
+      server: (fromDb && dbCfg.server) || process.env.SIP_SERVER || "",
+      ext:    (fromDb && dbCfg.ext)    || process.env.SIP_EXT    || "",
+      user:   (fromDb && dbCfg.user)   || process.env.SIP_USER   || "",
+      pass:   (fromDb && dbCfg.pass)   || process.env.SIP_PASS   || "",
+    });
+  }
+);
 
 app.put("/api/sip-config", requireRole([ROLES.ADMIN]), function (req, res) {
   var server = String(req.body.server || "").trim();

@@ -1,10 +1,40 @@
 "use strict";
 // engines/openai.js — OpenAI GPT adapter v3
-// Returns a ResponseObject (JSON) from GPT, then runs through formatter.
+// PRIVACY: only aggregated / non-identifying statistics are sent to OpenAI.
+// Phone numbers, internal notes, and staff comments are NEVER transmitted.
+// OpenAI is only active when OPENAI_API_KEY is explicitly set in .env.
 
 const https  = require("https");
 const { buildDonorContext, buildGlobalContext } = require("../context");
 const { format, parseOpenAIResponse }          = require("../formatter");
+
+// ─── Privacy sanitiser ────────────────────────────────────────────────────────
+// Removes all PII and sensitive fields before constructing the prompt.
+// Call this on any context object before it reaches buildSystemPrompt.
+function sanitizeContextForOpenAI(ctx) {
+  if (!ctx) return ctx;
+  if (ctx.type === "donor" && ctx.donor) {
+    // Work on a shallow-cloned donor so we don't mutate the original
+    const d = Object.assign({}, ctx.donor);
+    // Strip all phone fields
+    delete d.phone;
+    delete d.phone2;
+    delete d.phone3;
+    delete d.phone4;
+    delete d.phones;
+    delete d.ivrApprovedPhones;
+    // Strip all notes / internal comments
+    delete d.notes;
+    delete d.internalStaffNote;
+    delete d.publicPhoneNote;
+    // Strip identity / address
+    delete d.idNumber;
+    delete d.address;
+    return Object.assign({}, ctx, { donor: d });
+  }
+  // Global context contains no per-donor PII — summary stats only — safe as-is.
+  return ctx;
+}
 
 // ─── System prompt ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
@@ -31,18 +61,18 @@ function buildSystemPrompt(ctx) {
   const { fmtMoney, fmtDate } = ctx;
 
   if (ctx.type === "donor") {
-    const { donor, stats, openDebts } = ctx;
+    const { donor, stats } = ctx;
+    // NOTE: phone, notes, address, idNumber are stripped by sanitizeContextForOpenAI
     return [
       base,
       "",
       "=== נתוני תורם ===",
       "שם: " + (donor.fullName || "לא ידוע"),
-      "עיר: " + (donor.city || "לא ידוע") + " | טלפון: " + (donor.phone || "אין"),
+      "עיר: " + (donor.city || "לא ידוע"),
       "תרומות: " + stats.totalDonations + " | שולם: " + fmtMoney(stats.totalPaid) + " | חוב: " + fmtMoney(stats.totalDebt),
       "תרומה אחרונה: " + stats.lastDonationFmt + " (" + stats.daysSinceLastDonation + " ימים)",
       "חובות פתוחים: " + stats.openDebtsCount,
-      "תגיות: " + (donor.tags || []).join(", ") || "אין",
-      "הערות: " + (donor.notes || "אין"),
+      "תגיות: " + ((donor.tags || []).join(", ") || "אין"),
     ].join("\n");
   }
 
@@ -98,7 +128,8 @@ async function query({ question, donorId, history, pageContext }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-  const ctx          = donorId ? buildDonorContext(donorId) : buildGlobalContext();
+  const rawCtx       = donorId ? buildDonorContext(donorId) : buildGlobalContext();
+  const ctx          = sanitizeContextForOpenAI(rawCtx);
   const systemPrompt = buildSystemPrompt(ctx);
 
   const messages = [{ role: "system", content: systemPrompt }];
