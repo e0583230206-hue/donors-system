@@ -769,10 +769,12 @@ function campaignErrMsg(body) {
 
 // Helper: build phone list from donors with ivrApprovedPhones, filtered by recipientFilter.
 // Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>"
+// Returns { phones: string[], donorCount: number }
 function buildPhoneList(recipientFilter) {
   var donors = getAppState("donors") || [];
   var filter = String(recipientFilter || "all").trim();
   var phones = [];
+  var donorCount = 0;
   for (var i = 0; i < donors.length; i++) {
     var d        = donors[i];
     var approved = d.ivrApprovedPhones || [];
@@ -793,11 +795,12 @@ function buildPhoneList(recipientFilter) {
       include = true;
     }
     if (!include) continue;
+    donorCount++;
     for (var j = 0; j < approved.length; j++) {
       if (phones.indexOf(approved[j]) === -1) phones.push(approved[j]);
     }
   }
-  return phones;
+  return { phones: phones, donorCount: donorCount };
 }
 
 // GET /api/technoline/send/recipient-count?filter=<filter>
@@ -806,8 +809,8 @@ app.get(
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   function (req, res, next) {
     try {
-      var phones = buildPhoneList(req.query.filter || "all");
-      return res.json({ count: phones.length });
+      var result = buildPhoneList(req.query.filter || "all");
+      return res.json({ count: result.phones.length, donorCount: result.donorCount });
     } catch (err) { next(err); }
   }
 );
@@ -867,7 +870,8 @@ app.post(
       if (Array.isArray(phonesOverride) && phonesOverride.length > 0) {
         phones = phonesOverride;
       } else {
-        phones = buildPhoneList(recipientFilter);
+        var listResult = buildPhoneList(recipientFilter);
+        phones = listResult.phones;
       }
 
       if (phones.length === 0) {

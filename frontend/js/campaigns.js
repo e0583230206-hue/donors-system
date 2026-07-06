@@ -63,12 +63,15 @@ async function loadAudienceOptions() {
   await refreshCount();
 }
 
+var _lastDonorCount = 0;
+
 async function fetchCount(filter) {
   try {
     var res  = await apiFetch("/api/technoline/send/recipient-count?filter=" + encodeURIComponent(filter));
     var data = await res.json();
+    _lastDonorCount = data.donorCount || 0;
     return data.count || 0;
-  } catch (_) { return 0; }
+  } catch (_) { _lastDonorCount = 0; return 0; }
 }
 
 function getAudienceFilter() {
@@ -128,14 +131,14 @@ function searchDonors(query) {
   var donors = Database.get("donors") || [];
   query      = query.trim().toLowerCase();
   if (!query) return [];
+  var digits = query.replace(/\D/g, "");
   return donors.filter(function (d) {
-    var hasApproved = (d.ivrApprovedPhones || []).length > 0;
-    if (!hasApproved) return false;
     var nameMatch  = (d.fullName || "").toLowerCase().includes(query);
-    var phoneMatch = [d.phone, d.phone2, d.phone3, d.phone4].some(function (p) {
-      return p && String(p).replace(/\D/g, "").includes(query.replace(/\D/g, ""));
+    var phoneMatch = digits && [d.phone, d.phone2, d.phone3, d.phone4].some(function (p) {
+      return p && String(p).replace(/\D/g, "").includes(digits);
     });
-    return nameMatch || phoneMatch;
+    var idMatch    = digits && d.idNumber && String(d.idNumber).replace(/\D/g, "").includes(digits);
+    return nameMatch || phoneMatch || idMatch;
   }).slice(0, 8);
 }
 
@@ -143,7 +146,16 @@ function selectDonor(donor) {
   selectedDonorId   = donor.id;
   selectedDonorName = donor.fullName;
   if (donorInput) donorInput.value = donor.fullName;
-  if (donorInfo)  donorInfo.textContent = (donor.ivrApprovedPhones || []).join(" | ");
+  if (donorInfo) {
+    var approved = donor.ivrApprovedPhones || [];
+    if (approved.length > 0) {
+      donorInfo.style.color = "#1565c0";
+      donorInfo.textContent = "📞 " + approved.join(" | ");
+    } else {
+      donorInfo.style.color = "#c62828";
+      donorInfo.textContent = "⚠️ לתורם זה אין מספרים מאושרים ל-IVR";
+    }
+  }
   if (donorSuggestions) donorSuggestions.style.display = "none";
   refreshCount();
 }
@@ -198,6 +210,15 @@ function updateSendButton(count) {
   var textFilled = msgVal !== "text" || ((document.getElementById("msgTextInput") || {}).value || "").trim().length > 0;
 
   btn.disabled = (n === 0 || !textFilled);
+
+  // Update button label: "שלח ל-X מספרים (Y תורמים)" when counts differ
+  var countEl = document.getElementById("sendCount");
+  if (countEl) {
+    var suffix = (_lastDonorCount > 0 && _lastDonorCount !== n)
+      ? n + " מספרים (" + _lastDonorCount + " תורמים)"
+      : n + " מספרים";
+    countEl.textContent = suffix;
+  }
 }
 
 var msgTextInput = document.getElementById("msgTextInput");
@@ -260,8 +281,9 @@ document.getElementById("sendButton").addEventListener("click", async function (
   } catch (_) {
     showStatus("שגיאת תקשורת עם השרת", "error");
   } finally {
-    btn.disabled    = false;
-    btn.innerHTML   = "📣 שלח הודעה ל-<span id='sendCount'>" + count + "</span> מספרים";
+    btn.disabled  = false;
+    btn.innerHTML = "📣 שלח הודעה ל-<span id='sendCount'></span>";
+    updateSendButton(count);
   }
 });
 
