@@ -53,6 +53,7 @@ const {
   forceLogoutSession,
   getLastActionsByWorker,
   getAuditLogsByWorker,
+  countAuditLogsByWorker,
   getActiveSessions,
   getSessionHistory,
 } = require("./db");
@@ -339,7 +340,10 @@ app.get("/api/admin/workers/:workerId/audit-log", requireRole([ROLES.ADMIN]), fu
     var workerId = Number(req.params.workerId);
     if (!workerId) return res.status(400).json({ error: "workerId לא תקין" });
     var limit = Math.min(Number(req.query.limit) || 10, 50);
-    res.json(getAuditLogsByWorker(workerId, limit));
+    res.json({
+      logs:  getAuditLogsByWorker(workerId, limit),
+      total: countAuditLogsByWorker(workerId),
+    });
   } catch (err) {
     next(err);
   }

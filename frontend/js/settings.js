@@ -241,6 +241,7 @@ function renderWorkers() {
 
   workers.forEach(function (worker) {
     const row = document.createElement("tr");
+    row.dataset.workerId = worker.id;
 
     row.innerHTML = `
       <td>${escapeHTML(worker.name)}</td>
@@ -260,6 +261,20 @@ function renderWorkers() {
   });
 
   fillChangePasswordSelect();
+}
+
+// Called from the sessions screen's "פתח עובד" button — this app has no separate
+// worker-detail page, so the simplest honest option is to jump to the existing
+// worker row in the table above and flash it, rather than invent a new destination.
+function scrollToWorker(workerId) {
+  var row = document.querySelector('#workersTable tr[data-worker-id="' + workerId + '"]');
+  if (!row) {
+    if (typeof showToast === "function") showToast("העובד לא נמצא בטבלת העובדים (ייתכן שנמחק)");
+    return;
+  }
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("worker-row-highlight");
+  setTimeout(function () { row.classList.remove("worker-row-highlight"); }, 2000);
 }
 
 function getFullLocalStorageBackup() {
@@ -867,6 +882,27 @@ reloadWorkers().then(function () { renderWorkers(); });
     return isNaN(t) ? NaN : t;
   }
 
+  // Hebrew relative time — shown alongside (never instead of) the absolute date.
+  function relativeTimeHe(iso) {
+    var ms = Date.now() - toMs(iso);
+    if (!isFinite(ms)) return "";
+    if (ms < 0) ms = 0;
+    var sec = Math.floor(ms / 1000);
+    if (sec < 45) return "לפני רגע";
+    var min = Math.floor(sec / 60);
+    if (min < 60) return min === 1 ? "לפני דקה" : "לפני " + min + " דקות";
+    var hr = Math.floor(min / 60);
+    if (hr < 24) return hr === 1 ? "לפני שעה" : "לפני " + hr + " שעות";
+    var day = Math.floor(hr / 24);
+    return day === 1 ? "לפני יום" : "לפני " + day + " ימים";
+  }
+
+  function fmtDateWithRelative(iso) {
+    if (!iso) return "—";
+    var rel = relativeTimeHe(iso);
+    return fmtSessionDate(iso) + (rel ? "<br><small style='color:var(--muted)'>" + rel + "</small>" : "");
+  }
+
   function isToday(iso) {
     if (!iso) return false;
     var d = new Date(String(iso).replace(" ", "T"));
@@ -941,6 +977,16 @@ reloadWorkers().then(function () { renderWorkers(); });
   function statusText(status)  { return STATUS_TEXT[status] || (status || "—"); }
   function rowClass(status)    { return ROW_STATUS_CLASS[status] || ""; }
 
+  // Recognizes admin-initiated disconnects in the Audit Log regardless of exactly
+  // which action string was used ("force_logout" is what this app actually writes;
+  // the others are matched defensively in case older/other code paths used them).
+  var ADMIN_DISCONNECT_ACTIONS = ["force_logout", "forced_logout", "ended_by_admin"];
+  function isAdminDisconnectAction(action) {
+    if (!action) return false;
+    var a = String(action).toLowerCase();
+    return ADMIN_DISCONNECT_ACTIONS.indexOf(a) !== -1 || a.indexOf("force") !== -1;
+  }
+
   function lastActionText(row) {
     if (!row.lastAction || !row.lastAction.details) return "לא ידוע";
     return row.lastAction.details + " (" + fmtSessionDate(row.lastAction.createdAt) + ")";
@@ -955,7 +1001,7 @@ reloadWorkers().then(function () { renderWorkers(); });
 
   function buildActiveRow(s) {
     return {
-      sessionId: s.sessionId, workerId: s.workerId,
+      sessionId: s.sessionId, sessionIdShort: shortSessionId(s.sessionId), workerId: s.workerId,
       workerName: s.workerName || "—", role: s.workerRole || "—",
       loginAt: s.loginAt, lastHeartbeat: s.lastHeartbeat,
       durationMs: Date.now() - toMs(s.loginAt),
@@ -967,7 +1013,7 @@ reloadWorkers().then(function () { renderWorkers(); });
   function buildHistoryRow(s) {
     var endMs = s.logoutAt ? toMs(s.logoutAt) : toMs(s.lastHeartbeat);
     return {
-      sessionId: s.sessionId, workerId: s.workerId,
+      sessionId: s.sessionId, sessionIdShort: shortSessionId(s.sessionId), workerId: s.workerId,
       workerName: s.workerName || "—", role: s.workerRole || "—",
       loginAt: s.loginAt, logoutAt: s.logoutAt, durationMs: endMs - toMs(s.loginAt),
       ip: s.ip || "—", browser: parseBrowser(s.userAgent), os: parseOS(s.userAgent),
@@ -988,10 +1034,12 @@ reloadWorkers().then(function () { renderWorkers(); });
   function matchesSearch(row, q) {
     if (!q) return true;
     q = q.toLowerCase();
-    return (row.workerName || "").toLowerCase().indexOf(q) !== -1 ||
-           (row.ip         || "").toLowerCase().indexOf(q) !== -1 ||
-           (row.browser    || "").toLowerCase().indexOf(q) !== -1 ||
-           (row.os         || "").toLowerCase().indexOf(q) !== -1;
+    return (row.workerName     || "").toLowerCase().indexOf(q) !== -1 ||
+           (row.ip             || "").toLowerCase().indexOf(q) !== -1 ||
+           (row.browser        || "").toLowerCase().indexOf(q) !== -1 ||
+           (row.os             || "").toLowerCase().indexOf(q) !== -1 ||
+           // Only the 8-char id shown in the table is searchable — never the full sessionId.
+           (row.sessionIdShort || "").toLowerCase().indexOf(q) !== -1;
   }
 
   function applyControls(rows) {
@@ -1026,6 +1074,14 @@ reloadWorkers().then(function () { renderWorkers(); });
       '" data-worker-name="' + escapeHTML(workerName) + '" style="padding:4px 10px;font-size:.82em;">🕘 פעילות אחרונה</button>';
   }
 
+  // "פתח עובד" — no dedicated worker-detail page exists in this app, so this jumps
+  // to (and flashes) the worker's row in the "רשימת עובדים" table further up the page.
+  function workerNameCell(workerId, workerName) {
+    return escapeHTML(workerName) +
+      ' <button type="button" onclick="scrollToWorker(' + Number(workerId) + ')" class="secondary-btn" ' +
+      'style="padding:1px 7px;font-size:.75em;margin-right:4px;">פתח עובד</button>';
+  }
+
   function renderActive() {
     if (!activeTable) return;
     var rows = applyControls(_rawActive.map(buildActiveRow));
@@ -1041,10 +1097,10 @@ reloadWorkers().then(function () { renderWorkers(); });
           '" data-worker-name="' + escapeHTML(r.workerName) + '" style="padding:4px 10px;font-size:.82em;">נתק משתמש</button>';
       var connCount = countActiveConnections(r.workerId);
       return "<tr class='" + rowClass(r.status) + "'>" +
-        "<td>" + escapeHTML(r.workerName) + "</td>" +
+        "<td>" + workerNameCell(r.workerId, r.workerName) + "</td>" +
         "<td>" + escapeHTML(r.role) + "</td>" +
-        "<td>" + fmtSessionDate(r.loginAt) + "</td>" +
-        "<td>" + fmtSessionDate(r.lastHeartbeat) + "</td>" +
+        "<td>" + fmtDateWithRelative(r.loginAt) + "</td>" +
+        "<td>" + fmtDateWithRelative(r.lastHeartbeat) + "</td>" +
         "<td>" + fmtDuration(r.durationMs) + "</td>" +
         "<td>" + connCount + " חיבור" + (connCount === 1 ? "" : "ים") + "</td>" +
         "<td dir='ltr' style='font-family:monospace;font-size:.85em' title='מזהה חלקי — לא הטוקן המלא'>" + escapeHTML(shortSessionId(r.sessionId)) + "</td>" +
@@ -1067,10 +1123,10 @@ reloadWorkers().then(function () { renderWorkers(); });
     }
     historyTable.innerHTML = rows.map(function (r) {
       return "<tr class='" + rowClass(r.status) + "'>" +
-        "<td>" + escapeHTML(r.workerName) + "</td>" +
+        "<td>" + workerNameCell(r.workerId, r.workerName) + "</td>" +
         "<td>" + escapeHTML(r.role) + "</td>" +
-        "<td>" + fmtSessionDate(r.loginAt) + "</td>" +
-        "<td>" + fmtSessionDate(r.logoutAt) + "</td>" +
+        "<td>" + fmtDateWithRelative(r.loginAt) + "</td>" +
+        "<td>" + fmtDateWithRelative(r.logoutAt) + "</td>" +
         "<td>" + fmtDuration(r.durationMs) + "</td>" +
         "<td>" + escapeHTML(END_REASON_TEXT[r.status] || "—") + "</td>" +
         "<td dir='ltr' style='font-family:monospace;font-size:.85em' title='מזהה חלקי — לא הטוקן המלא'>" + escapeHTML(shortSessionId(r.sessionId)) + "</td>" +
@@ -1231,20 +1287,32 @@ reloadWorkers().then(function () { renderWorkers(); });
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (logs) {
-        if (!Array.isArray(logs) || logs.length === 0) {
+      .then(function (data) {
+        var logs  = (data && Array.isArray(data.logs)) ? data.logs : [];
+        var total = (data && typeof data.total === "number") ? data.total : null;
+
+        if (logs.length === 0) {
           body.innerHTML = '<p style="color:var(--muted);text-align:center;margin:10px 0;">לא נמצאו פעולות אחרונות</p>';
           return;
         }
-        body.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:.9em;">' +
+
+        var caption = total != null && total > logs.length
+          ? logs.length + " הפעולות האחרונות מתוך " + total
+          : logs.length + " הפעולות האחרונות";
+
+        body.innerHTML =
+          '<p style="color:var(--muted);font-size:.85em;margin:0 0 10px;">' + escapeHTML(caption) + '</p>' +
+          '<table style="width:100%;border-collapse:collapse;font-size:.9em;">' +
           '<thead><tr>' +
             '<th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);">תאריך ושעה</th>' +
             '<th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);">סוג פעולה</th>' +
             '<th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);">תיאור</th>' +
           '</tr></thead><tbody>' +
           logs.map(function (l) {
-            return "<tr>" +
-              "<td style='padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap'>" + fmtSessionDate(l.createdAt) + "</td>" +
+            var rowStyle = isAdminDisconnectAction(l.action) ? " style='background:var(--warning-soft)'" : "";
+            return "<tr" + rowStyle + ">" +
+              "<td style='padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap'>" +
+                fmtSessionDate(l.createdAt) + "<br><small style='color:var(--muted)'>" + relativeTimeHe(l.createdAt) + "</small></td>" +
               "<td style='padding:6px 8px;border-bottom:1px solid var(--border);font-family:monospace;font-size:.9em'>" + escapeHTML(l.action || "—") + "</td>" +
               "<td style='padding:6px 8px;border-bottom:1px solid var(--border);'>" + escapeHTML(l.details || "—") + "</td>" +
               "</tr>";

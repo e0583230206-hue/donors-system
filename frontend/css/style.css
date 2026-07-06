@@ -2372,3 +2372,10 @@ tbody tr.row-status-forced_logout { background: var(--warning-soft); }
 }
 .mini-modal-body { padding: 14px 20px 20px; }
 .mini-modal-body table { min-width: 0; }
+
+/* ---- Highlight flash when jumping to a worker row from the sessions screen ---- */
+.worker-row-highlight { animation: worker-row-flash 2s ease-out; }
+@keyframes worker-row-flash {
+  0%, 40%  { background: var(--gold-soft); }
+  100%     { background: transparent; }
+}

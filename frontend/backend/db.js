@@ -1060,6 +1060,14 @@ function getAuditLogsByWorker(workerId, limit) {
   `).all(Number(workerId), Math.min(Number(limit) || 10, 50));
 }
 
+// Cheap total count for the same worker — lets the modal show "X מתוך Y" without
+// pulling every row. Single indexed-column COUNT, negligible cost either way.
+function countAuditLogsByWorker(workerId) {
+  if (!workerId) return 0;
+  var row = db.prepare("SELECT COUNT(*) AS c FROM server_audit_log WHERE workerId = ?").get(Number(workerId));
+  return row ? row.c : 0;
+}
+
 function getActiveSessions() {
   // Auto-expire sessions silent for more than SESSION_TIMEOUT_HOURS
   var cutoff = new Date(Date.now() - SESSION_TIMEOUT_HOURS * 3600 * 1000).toISOString();
@@ -1243,6 +1251,7 @@ module.exports = {
   forceLogoutSession,
   getLastActionsByWorker,
   getAuditLogsByWorker,
+  countAuditLogsByWorker,
   getActiveSessions,
   getSessionHistory,
   // Phone normalization (shared with sync service)
