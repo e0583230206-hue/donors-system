@@ -48,6 +48,8 @@
       }
       .aud-row:has(input:checked),
       .aud-row.selected { border-color: #1565c0; background: #f0f4ff; }
+      #rowManual:has(input:checked),
+      #rowManual.selected { border-color: #e8a000; background: #fff8e8; }
       .aud-row input[type=radio] { flex-shrink: 0; }
       .aud-label { font-weight: 600; font-size: .93em; flex: 1; }
       .aud-badge {
@@ -213,6 +215,19 @@
                     <div id="donorSuggestions"></div>
                   </div>
                   <div id="selectedDonorInfo" style="margin-top:6px;font-size:.85em;color:#1565c0;"></div>
+                </div>
+              </label>
+
+              <!-- manual phone — admin test mode -->
+              <label class="aud-row" data-value="manual" id="rowManual" style="display:none;border-color:#e8a000;">
+                <input type="radio" name="audience" value="manual" />
+                <span class="aud-label" style="color:#b35c00;">🧪 מספר ידני (בדיקה)</span>
+                <span class="aud-badge" style="background:#e8a000;" id="badgeManual">1</span>
+                <div class="aud-sub">
+                  <input id="manualPhoneInput" type="tel" dir="ltr"
+                    placeholder="05X-XXXXXXX"
+                    style="width:100%;padding:8px 12px;border:1px solid #ccc;border-radius:6px;font-size:14px;box-sizing:border-box;" />
+                  <div id="manualPhoneInfo" style="margin-top:5px;font-size:.83em;color:#b35c00;"></div>
                 </div>
               </label>
 

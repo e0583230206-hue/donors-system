@@ -19,11 +19,11 @@ function _injectFallbackSection() {
     '<div class="send-card-body">' +
       '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">' +
         '<input type="checkbox" id="fallbackCheckbox" style="margin-top:3px;flex-shrink:0" />' +
-        '<span style="font-size:.92em">כלול גם <strong>טלפון ראשי</strong> של תורמים שלא אושרו ל-IVR<br>' +
-        '<span style="color:#888;font-size:.88em">ברירת מחדל: כבוי. משתמש ב-phone בלבד, לא ב-phone2/phone3/phone4.</span></span>' +
+        '<span style="font-size:.92em">כלול גם <strong>טלפון ראשי</strong> של תורמים שנוקה להם ivrApprovedPhones ידנית<br>' +
+        '<span style="color:#888;font-size:.88em">ברירת מחדל: כבוי. תורמים ללא הגדרה כלל כבר כלולים אוטומטית.</span></span>' +
       '</label>' +
       '<div id="fallbackWarning" style="display:none;margin-top:10px;padding:10px 12px;background:#ffebee;border-radius:6px;font-size:.86em;color:#c62828;line-height:1.6">' +
-        '⚠️ <strong>אזהרה:</strong> מצב זה שולח לתורמים שלא אישרו קבלת שיחות IVR. יש לוודא שיש אישור חוקי לפני שליחה.' +
+        '⚠️ <strong>אזהרה:</strong> מצב זה שולח לתורמים שנוקה להם אישור IVR ידנית. יש לוודא שיש אישור חוקי לפני שליחה.' +
       '</div>' +
     '</div>';
 
@@ -96,6 +96,20 @@ async function loadAudienceOptions() {
     }
   } catch (_) {}
 
+  // Manual test mode — admin only
+  if (isAdmin()) {
+    var rowManual = document.getElementById("rowManual");
+    if (rowManual) {
+      rowManual.style.display = "";
+      var manualInput = document.getElementById("manualPhoneInput");
+      if (manualInput) {
+        manualInput.addEventListener("input", function () {
+          refreshCount();
+        });
+      }
+    }
+  }
+
   await refreshCount();
 }
 
@@ -134,10 +148,31 @@ function getAudienceFilter() {
   if (val === "donor") {
     return selectedDonorId ? "donor:" + selectedDonorId : null;
   }
+  if (val === "manual") return "manual";
   return val; // "debt" | "all"
 }
 
 async function refreshCount() {
+  var audVal = (document.querySelector("input[name=audience]:checked") || {}).value;
+
+  // Manual mode: count is 1 if a valid phone is typed, 0 otherwise
+  if (audVal === "manual") {
+    var rawPhone = ((document.getElementById("manualPhoneInput") || {}).value || "").trim();
+    var digits   = rawPhone.replace(/\D/g, "");
+    var count    = (digits.length >= 9 && digits.length <= 15) ? 1 : 0;
+    var countEl  = document.getElementById("sendCount");
+    if (countEl) countEl.textContent = count;
+    var info = document.getElementById("manualPhoneInfo");
+    if (info) {
+      if (!rawPhone)            info.textContent = "";
+      else if (digits.length < 9) info.textContent = "⚠️ מספר קצר מדי";
+      else                        info.textContent = "✓ ישולח ל: " + digits;
+    }
+    _lastDonorCount = _lastIvrPhones = _lastFallbackPhones = _lastFallbackDonors = 0;
+    updateSendButton(count);
+    return;
+  }
+
   var filter = getAudienceFilter();
   var count  = filter ? await fetchCount(filter) : 0;
 
@@ -146,7 +181,6 @@ async function refreshCount() {
   updateSendButton(count);
 
   // Update per-row badge for sub-selectors
-  var audVal = (document.querySelector("input[name=audience]:checked") || {}).value;
   if (audVal === "tag")    updateBadge("badgeTag",    count);
   if (audVal === "city")   updateBadge("badgeCity",   count);
   if (audVal === "donor")  updateBadge("badgeDonor",  count);
@@ -194,13 +228,22 @@ function selectDonor(donor) {
   selectedDonorName = donor.fullName;
   if (donorInput) donorInput.value = donor.fullName;
   if (donorInfo) {
-    var approved = donor.ivrApprovedPhones || [];
-    if (approved.length > 0) {
+    var approved = donor.ivrApprovedPhones;
+    if (Array.isArray(approved) && approved.length > 0) {
+      // Explicit IVR-approved phones
       donorInfo.style.color = "#1565c0";
-      donorInfo.textContent = "📞 " + approved.join(" | ");
+      donorInfo.innerHTML   = "📞 <strong>מספרים מאושרים:</strong> " + escapeHTML(approved.join(" | "));
+    } else if (approved == null && donor.phone) {
+      // Never configured → auto-use primary phone (same logic as buildPhoneList)
+      donorInfo.style.color = "#2e7d32";
+      donorInfo.innerHTML   = "📞 <strong>מספר ראשי:</strong> " + escapeHTML(String(donor.phone)) + ' <span style="color:#888;font-size:.88em">(יוזמן אוטומטית)</span>';
+    } else if (Array.isArray(approved) && approved.length === 0) {
+      // Explicitly cleared
+      donorInfo.style.color = "#c62828";
+      donorInfo.innerHTML   = "⚠️ ivrApprovedPhones נוקה ידנית — לא ישלח" + (donor.phone ? '. הפעל Fallback לשלוח ל-' + escapeHTML(String(donor.phone)) : '');
     } else {
       donorInfo.style.color = "#c62828";
-      donorInfo.textContent = "⚠️ לתורם זה אין מספרים מאושרים ל-IVR";
+      donorInfo.textContent = "⚠️ לתורם זה אין מספר טלפון כלל";
     }
   }
   if (donorSuggestions) donorSuggestions.style.display = "none";
@@ -222,9 +265,12 @@ if (donorInput) {
       return;
     }
     donorSuggestions.innerHTML = results.map(function (d) {
-      var phones = (d.ivrApprovedPhones || []).slice(0, 2).join(", ");
+      // Show effective phones: ivrApprovedPhones if set, else primary phone
+      var effectivePhones = Array.isArray(d.ivrApprovedPhones) ? d.ivrApprovedPhones : (d.phone ? [d.phone] : []);
+      var phones = effectivePhones.slice(0, 2).join(", ");
+      var sourceNote = (d.ivrApprovedPhones == null && d.phone) ? " 📞" : (Array.isArray(d.ivrApprovedPhones) && d.ivrApprovedPhones.length > 0 ? " ✅" : " ⚠️");
       return '<div class="donor-suggestion" data-id="' + d.id + '">' +
-        escapeHTML(d.fullName) +
+        escapeHTML(d.fullName) + sourceNote +
         (phones ? '<span style="color:#888;font-size:.85em;margin-right:6px"> ' + escapeHTML(phones) + '</span>' : "") +
         '</div>';
     }).join("");
@@ -258,11 +304,13 @@ function updateSendButton(count) {
 
   btn.disabled = (n === 0 || !textFilled);
 
-  // Rule 7: show split counts in button
+  var audVal  = (document.querySelector("input[name=audience]:checked") || {}).value;
   var countEl = document.getElementById("sendCount");
   if (countEl) {
     var label;
-    if (_lastFallbackPhones > 0) {
+    if (audVal === "manual") {
+      label = n === 1 ? "1 מספר (בדיקה)" : "0 מספרים";
+    } else if (_lastFallbackPhones > 0) {
       label = n + " מספרים (" + _lastIvrPhones + " IVR + " + _lastFallbackPhones + " fallback)";
     } else if (_lastDonorCount > 0 && _lastDonorCount !== n) {
       label = n + " מספרים (" + _lastDonorCount + " תורמים)";
@@ -283,30 +331,69 @@ function showStatus(text, type) {
   if (!el) return;
   el.innerText = text;
   el.className = "message show " + (type || "success");
-  if (type !== "error") setTimeout(function () { el.className = "message"; el.innerText = ""; }, 7000);
+  if (type !== "error") setTimeout(function () { el.className = "message"; el.innerText = ""; }, 10000);
 }
 
 document.getElementById("sendButton").addEventListener("click", async function () {
   var btn      = this;
-  var count    = Number((document.getElementById("sendCount") || {}).textContent) || 0;
-  var filter   = getAudienceFilter();
+  var audVal   = (document.querySelector("input[name=audience]:checked") || {}).value;
   var msgVal   = (document.querySelector("input[name=message]:checked") || {}).value || "ivr";
   var msgText  = ((document.getElementById("msgTextInput") || {}).value || "").trim();
 
-  if (!filter || count === 0) {
-    showStatus("אין מספרים תואמים לשליחה", "error");
-    return;
-  }
   if (msgVal === "text" && !msgText) {
     showStatus("יש להזין הודעה", "error");
     return;
   }
 
-  // Rule 3: clear warning before send if fallback enabled
-  var audLabel = getAudienceLabel();
-  var confirmMsg = "לשלוח הודעה ל-" + count + " מספרים" + (audLabel ? " (" + audLabel + ")" : "") + "?";
+  // ── Manual single-phone mode ──────────────────────────────────────────────
+  if (audVal === "manual") {
+    var rawPhone = ((document.getElementById("manualPhoneInput") || {}).value || "").trim();
+    var phone    = rawPhone.replace(/\D/g, "");
+    if (!phone || phone.length < 9) {
+      showStatus("יש להזין מספר טלפון תקין", "error");
+      return;
+    }
+    if (!confirm("🧪 בדיקה ידנית\n\nלשלוח הודעה מסוג " + msgVal + " למספר: " + phone + "?\n\nשים לב: שיחה תצא בפועל.")) return;
+    btn.disabled    = true;
+    btn.textContent = "שולח...";
+    try {
+      var res  = await apiFetch("/api/technoline/send/manual", {
+        method: "POST",
+        body:   JSON.stringify({ phone: phone, messageKind: msgVal, messageText: msgText }),
+      });
+      var data = await res.json();
+      if (!res.ok) {
+        var errDetail = data.error || "שגיאה בשיגור";
+        if (data.errorCode) errDetail += " (קוד: " + data.errorCode + ")";
+        if (data.techBody)  errDetail += " | " + JSON.stringify(data.techBody);
+        showStatus(errDetail, "error");
+      } else {
+        showStatus("✅ שוגר! מזהה קמפיין: " + (data.campaignId || "—") + " | מספר: " + data.phone, "success");
+        showToast("שיגור בדיקה הושלם");
+        loadRecentLog();
+      }
+    } catch (_) {
+      showStatus("שגיאת תקשורת עם השרת", "error");
+    } finally {
+      btn.disabled  = false;
+      btn.innerHTML = "📣 שלח הודעה ל-<span id='sendCount'></span>";
+      refreshCount();
+    }
+    return;
+  }
+
+  // ── Normal audience mode ──────────────────────────────────────────────────
+  var filter = getAudienceFilter();
+  var count  = Number((document.getElementById("sendCount") || {}).textContent) || 0;
+  if (!filter || count === 0) {
+    showStatus("אין מספרים תואמים לשליחה", "error");
+    return;
+  }
+
+  var audLabel   = getAudienceLabel();
+  var confirmMsg = "לשלוח הודעה ל-" + count + (audLabel ? " (" + audLabel + ")" : "") + "?";
   if (_fallbackEnabled && _lastFallbackPhones > 0) {
-    confirmMsg += "\n\n⚠️ אזהרה: " + _lastFallbackPhones + " מספרים הם phone fallback (לא אושרו ל-IVR).\nיש לך אישור חוקי לשלוח אליהם?";
+    confirmMsg += "\n\n⚠️ אזהרה: " + _lastFallbackPhones + " מספרים הם phone fallback (נוקו ידנית).\nיש לך אישור חוקי לשלוח אליהם?";
   }
   if (!confirm(confirmMsg)) return;
 
@@ -315,10 +402,10 @@ document.getElementById("sendButton").addEventListener("click", async function (
 
   try {
     var payload = {
-      recipientFilter:  filter,
-      messageKind:      msgVal,
-      messageText:      msgText,
-      quietHours:       true,
+      recipientFilter:   filter,
+      messageKind:       msgVal,
+      messageText:       msgText,
+      quietHours:        true,
       fallbackToPrimary: _fallbackEnabled,
     };
 
@@ -326,9 +413,13 @@ document.getElementById("sendButton").addEventListener("click", async function (
     var data = await res.json();
 
     if (!res.ok) {
-      showStatus(data.error || "שגיאה בשיגור", "error");
+      var errDetail = data.error || "שגיאה בשיגור";
+      if (data.errorCode) errDetail += " (קוד: " + data.errorCode + ")";
+      showStatus(errDetail, "error");
     } else {
-      var summary = "ההודעות נשוגרו ל-" + (data.phones || count) + " מספרים";
+      var summary = "✅ שוגר!";
+      if (data.campaignId) summary += " מזהה: " + data.campaignId + " |";
+      summary += " " + (data.phones || count) + " מספרים";
       if (data.ivrPhoneCount > 0 || data.fallbackPhoneCount > 0) {
         summary += " (" + data.ivrPhoneCount + " IVR";
         if (data.fallbackPhoneCount > 0) summary += " + " + data.fallbackPhoneCount + " fallback ⚠️";
@@ -336,7 +427,7 @@ document.getElementById("sendButton").addEventListener("click", async function (
       }
       if (data.errorPhones)   summary += " | " + data.errorPhones   + " שגיאות פורמט";
       if (data.blockedPhones) summary += " | " + data.blockedPhones + " חסומים";
-      showStatus("✅ " + summary, "success");
+      showStatus(summary, "success");
       showToast("שיגור הושלם");
       loadRecentLog();
     }
@@ -345,23 +436,25 @@ document.getElementById("sendButton").addEventListener("click", async function (
   } finally {
     btn.disabled  = false;
     btn.innerHTML = "📣 שלח הודעה ל-<span id='sendCount'></span>";
-    updateSendButton(count);
+    refreshCount();
   }
 });
 
 function getAudienceLabel() {
   var val = (document.querySelector("input[name=audience]:checked") || {}).value || "";
-  if (val === "debt") return "בעלי חוב";
-  if (val === "tag")  return "תגית: " + ((document.getElementById("tagSelect")  || {}).value || "");
-  if (val === "city") return "עיר: "  + ((document.getElementById("citySelect") || {}).value || "");
+  if (val === "debt")   return "בעלי חוב";
+  if (val === "tag")    return "תגית: " + ((document.getElementById("tagSelect")  || {}).value || "");
+  if (val === "city")   return "עיר: "  + ((document.getElementById("citySelect") || {}).value || "");
   if (val === "donor" && selectedDonorName) return selectedDonorName;
+  if (val === "manual") return "בדיקה ידנית";
   return "";
 }
 
 // ── Debug diagnostic ──────────────────────────────────────────────────────────
 
 async function runDebug() {
-  var filter  = getAudienceFilter() || "debt";
+  var filter  = getAudienceFilter();
+  if (filter === "manual" || !filter) filter = "debt";
   var panel   = document.getElementById("debugPanel");
   var content = document.getElementById("debugContent");
   if (!panel || !content) return;
@@ -389,8 +482,9 @@ async function runDebug() {
       });
 
       var reasonLabels = {
-        no_ivr_approved_phones: "❌ אין ivrApprovedPhones (השדה ריק)",
-        filter_mismatch:        "⚪ לא תואם פילטר",
+        ivr_phones_cleared: "🔴 ivrApprovedPhones נוקה ידנית",
+        no_phone_at_all:    "⚫ אין מספר טלפון כלל",
+        filter_mismatch:    "⚪ לא תואם פילטר",
       };
 
       Object.keys(byReason).forEach(function (reason) {
@@ -409,7 +503,8 @@ async function runDebug() {
     if (data.includedCount > 0) {
       html += "<details style='margin-top:10px'><summary style='cursor:pointer;font-weight:600;color:#1565c0'>✅ תורמים שיקבלו שיחה (" + data.includedCount + ")</summary><ul style='margin:6px 0 0 16px;font-size:.87em;color:#444'>" +
         data.included.slice(0, 30).map(function (e) {
-          return "<li>" + escapeHTML(e.name) + " — " + escapeHTML((e.phones || []).join(", ")) + "</li>";
+          var src = e.source === "primary_phone_auto" ? " 📞" : e.source === "phone_fallback" ? " ⚠️" : " ✅";
+          return "<li>" + escapeHTML(e.name) + src + " — " + escapeHTML((e.phones || []).join(", ")) + "</li>";
         }).join("") +
         (data.included.length > 30 ? "<li>...ועוד " + (data.included.length - 30) + "</li>" : "") +
         "</ul></details>";
@@ -452,6 +547,7 @@ async function loadRecentLog() {
 
     container.innerHTML = '<table style="width:100%;font-size:.88em;border-collapse:collapse;">' +
       '<thead><tr>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">מזהה</th>' +
       '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">תאריך</th>' +
       '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">נשלח</th>' +
       '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">נענו</th>' +
@@ -463,6 +559,7 @@ async function loadRecentLog() {
           : "—";
         var status = statusMap[(c.active || "").toLowerCase()] || escapeHTML(c.active || "—");
         return "<tr>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5;color:#888;font-size:.85em'>" + escapeHTML(String(c.id || "—")) + "</td>" +
           "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + escapeHTML(dateStr) + "</td>" +
           "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + escapeHTML(String(c.total_sent || "—")) + "</td>" +
           "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + escapeHTML(String(c.answerd_calls || "—")) + "</td>" +

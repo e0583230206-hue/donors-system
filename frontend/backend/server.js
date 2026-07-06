@@ -767,22 +767,29 @@ function campaignErrMsg(body) {
   return body.note || body.error || ("שגיאה " + (body.errorCode || ""));
 }
 
-// Helper: build phone list from donors with ivrApprovedPhones, filtered by recipientFilter.
+// Helper: build phone list from donors, filtered by recipientFilter.
 // Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>"
-// opts.fallbackToPrimary — if true, donors with no ivrApprovedPhones use d.phone as fallback.
+// Phone resolution order:
+//   1. d.ivrApprovedPhones (explicitly approved)
+//   2. d.phone auto-included when ivrApprovedPhones was never configured (null/undefined)
+//   3. d.phone as fallback when opts.fallbackToPrimary=true and ivrApprovedPhones is []
 // Returns { phones, donorCount, ivrDonorCount, fallbackDonorCount, ivrPhoneCount, fallbackPhoneCount }
 function buildPhoneList(recipientFilter, opts) {
   var fallbackToPrimary = !!(opts && opts.fallbackToPrimary);
   var donors = getAppState("donors") || [];
   var filter = String(recipientFilter || "all").trim();
-  var ivrPhones      = [];   // from ivrApprovedPhones
-  var fallbackPhones = [];   // from d.phone (fallback only)
+  var ivrPhones      = [];
+  var fallbackPhones = [];
   var donorCount = 0, ivrDonorCount = 0, fallbackDonorCount = 0;
 
   for (var i = 0; i < donors.length; i++) {
-    var d        = donors[i];
-    var approved = d.ivrApprovedPhones || [];
-    var primary  = d.phone ? String(d.phone).trim() : "";
+    var d       = donors[i];
+    var primary = d.phone ? String(d.phone).trim() : "";
+    // null/undefined ivrApprovedPhones → never configured → auto-include primary phone.
+    // An explicit [] means admin cleared all approvals intentionally.
+    var approved = (d.ivrApprovedPhones != null)
+      ? d.ivrApprovedPhones
+      : (primary ? [primary] : []);
 
     // Must have at least one phone source
     if (approved.length === 0 && !(fallbackToPrimary && primary)) continue;
@@ -864,21 +871,28 @@ app.get(
 
       for (var i = 0; i < donors.length; i++) {
         var d        = donors[i];
-        var approved = d.ivrApprovedPhones || [];
+        var primary  = d.phone ? String(d.phone).trim() : "";
+        // Match buildPhoneList: null/undefined → auto-include primary; explicit [] → respect it
+        var approved = (d.ivrApprovedPhones != null)
+          ? d.ivrApprovedPhones
+          : (primary ? [primary] : []);
         var hasDebt  = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
         var name     = d.fullName || ("תורם #" + d.id);
 
-        // Gate 1: must have ivrApprovedPhones (or fallback phone if fallback mode on)
+        // Gate 1: approved is [] only when ivrApprovedPhones was explicitly cleared or donor has no primary phone
         if (approved.length === 0) {
-          var anyPhone = !!(d.phone || d.phone2 || d.phone3 || d.phone4 || (d.phones || []).length);
-          if (fallback && d.phone) {
-            // Will be handled as fallback — don't exclude yet, fall through to filter check
+          var wasCleared = d.ivrApprovedPhones != null;
+          if (wasCleared && fallback && primary) {
+            // cleared + fallback=on → use primary, fall through
           } else {
+            var anyPhone = !!(d.phone2 || d.phone3 || d.phone4 || (d.phones || []).length);
             excluded.push({
               id: d.id, name: name,
-              reason: "no_ivr_approved_phones",
-              detail: anyPhone ? "יש מספרי טלפון רגילים אבל אין ivrApprovedPhones" + (fallback && !d.phone ? " (ואין phone ראשי לfallback)" : "") : "אין מספרי טלפון כלל",
-              hasPhone: anyPhone, hasDebt: hasDebt,
+              reason: wasCleared ? "ivr_phones_cleared" : "no_phone_at_all",
+              detail: wasCleared
+                ? "ivrApprovedPhones נוקה ידנית" + (primary ? " — הפעל fallback לכלול phone ראשי" : " — אין phone ראשי")
+                : (anyPhone ? "אין מספר ראשי (phone ריק), יש phone2/3/4" : "אין מספר טלפון כלל"),
+              hasPhone: !!(primary || anyPhone), hasDebt: hasDebt,
             });
             continue;
           }
@@ -907,11 +921,13 @@ app.get(
         }
 
         if (include) {
-          var useFallback = approved.length === 0 && fallback && d.phone;
+          var wasCleared  = d.ivrApprovedPhones != null;
+          var useFallback = wasCleared && approved.length === 0 && fallback && !!primary;
           included.push({
             id: d.id, name: name,
-            phones:   useFallback ? [d.phone] : approved,
-            source:   useFallback ? "phone_fallback" : "ivr_approved",
+            phones: useFallback ? [primary] : approved,
+            source: useFallback ? "phone_fallback"
+                  : (d.ivrApprovedPhones != null ? "ivr_approved" : "primary_phone_auto"),
           });
         } else {
           excluded.push({
@@ -932,8 +948,8 @@ app.get(
         phoneCount:     included.reduce(function (s, d) { return s + d.phones.length; }, 0),
         included:       included,
         excluded:       excluded,
-        tip: included.length === 0 && excluded.some(function (e) { return e.reason === "no_ivr_approved_phones"; })
-          ? "רוב התורמים אין להם ivrApprovedPhones. שדה זה מתמלא אוטומטית כשהתורם מתקשר ל-IVR, או ניתן להוסיף מספרים ידנית בכרטיס תורם."
+        tip: included.length === 0 && excluded.some(function (e) { return e.reason === "ivr_phones_cleared"; })
+          ? "חלק מהתורמים נוקה להם ivrApprovedPhones ידנית. הפעל fallback לשלוח לmain phone."
           : null,
       });
     } catch (err) { next(err); }
@@ -950,16 +966,87 @@ app.get(
       var cities  = {}, tags = {};
       var debtCount = 0;
       donors.forEach(function (d) {
-        var hasApproved = (d.ivrApprovedPhones || []).length > 0;
-        var hasDebt     = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
-        if (hasApproved && hasDebt)                debtCount++;
-        if (hasApproved && d.city)                 cities[d.city.trim()] = true;
-        if (hasApproved && Array.isArray(d.tags))  d.tags.forEach(function (t) { if (t) tags[t.trim()] = true; });
+        var effectivePhones = (d.ivrApprovedPhones != null) ? d.ivrApprovedPhones : (d.phone ? [d.phone] : []);
+        var hasPhone = effectivePhones.length > 0;
+        var hasDebt  = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
+        if (hasPhone && hasDebt)                debtCount++;
+        if (hasPhone && d.city)                 cities[d.city.trim()] = true;
+        if (hasPhone && Array.isArray(d.tags))  d.tags.forEach(function (t) { if (t) tags[t.trim()] = true; });
       });
       return res.json({
         debtCount: debtCount,
         cities:    Object.keys(cities).sort(),
         tags:      Object.keys(tags).sort(),
+      });
+    } catch (err) { next(err); }
+  }
+);
+
+// POST /api/technoline/send/manual — admin-only single-phone test (no donor, no ivrApprovedPhones)
+app.post(
+  "/api/technoline/send/manual",
+  apiLimiter,
+  requireRole([ROLES.ADMIN]),
+  async function (req, res, next) {
+    try {
+      var apiKey = process.env.TECHNOLINE_API_KEY || "";
+      if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
+
+      var body        = req.body || {};
+      var rawPhone    = String(body.phone || "").trim();
+      var phone       = rawPhone.replace(/\D/g, "");
+      var messageKind = String(body.messageKind || "ivr").trim();
+      var messageText = String(body.messageText || "").trim();
+
+      if (!phone) return res.status(400).json({ error: "יש לציין מספר טלפון" });
+      if (phone.length < 9 || phone.length > 15) return res.status(400).json({ error: "מספר טלפון לא תקין: " + rawPhone });
+
+      var ivrExtension = String(process.env.TECHNOLINE_IVR_EXTENSION || body.extension || "").trim();
+      if (messageKind === "ivr" && !ivrExtension) {
+        return res.status(503).json({ error: "TECHNOLINE_IVR_EXTENSION לא מוגדר בשרת" });
+      }
+      if (messageKind === "text" && !messageText) {
+        return res.status(400).json({ error: "יש להזין טקסט להודעה" });
+      }
+
+      var params = {
+        action:          "campaignRun",
+        apiKey:          apiKey,
+        phones:          JSON.stringify([phone]),
+        betweenRetries:  30,
+        callLength:      25,
+        dialRetries:     2,
+        reasonableHours: "no",
+        title:           "בדיקה ידנית - " + phone,
+      };
+      if (messageKind === "ivr") {
+        params.messagesType        = "extensionActivation";
+        params.extensionActivation = ivrExtension;
+      } else {
+        params.audioText = messageText;
+      }
+
+      var urlParams = new URLSearchParams(params);
+      console.log("[Campaign/Manual] sending to", phone, "| kind:", messageKind);
+
+      var techRes  = await fetch("https://app.ipsales.co.il/campaignApi.php", {
+        method:  "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body:    urlParams.toString(),
+        signal:  AbortSignal.timeout(30000),
+      });
+      var techBody = await techRes.json();
+      console.log("[Campaign/Manual] response:", JSON.stringify(techBody));
+
+      if (String(techBody.status).toUpperCase() !== "OK") {
+        return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode, techBody: techBody });
+      }
+
+      return res.json({
+        ok:         true,
+        campaignId: techBody.campaignId,
+        phone:      phone,
+        techBody:   techBody,
       });
     } catch (err) { next(err); }
   }

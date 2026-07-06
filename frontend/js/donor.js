@@ -1265,6 +1265,46 @@ Database.whenReady(function () {
       confirmCallButton.textContent = "חייג";
     }
   });
+
+  // ── שלח צינתוק (admin only) ─────────────────────────────────────────────────
+  var sendCampaignButton = document.getElementById("sendCampaignButton");
+  if (sendCampaignButton && isAdmin()) {
+    sendCampaignButton.style.display = "";
+    sendCampaignButton.addEventListener("click", async function () {
+      // Use ivrApprovedPhones[0] if set, otherwise primary phone
+      var phones   = donor.ivrApprovedPhones || [];
+      var phone    = phones.length > 0 ? phones[0] : (donor.phone ? String(donor.phone).trim() : "");
+      var phoneLabel = phones.length > 0 ? phone + " (מאושר IVR)" : phone + " (מספר ראשי)";
+
+      if (!phone) {
+        alert("לתורם " + donor.fullName + " אין מספר טלפון.");
+        return;
+      }
+      if (!confirm("📣 שלח צינתוק IVR\n\nתורם: " + donor.fullName + "\nמספר: " + phoneLabel + "\n\nהמשך?")) return;
+
+      sendCampaignButton.disabled = true;
+      sendCampaignButton.textContent = "שולח...";
+      try {
+        var res  = await apiFetch("/api/technoline/send/manual", {
+          method: "POST",
+          body:   JSON.stringify({ phone: phone, messageKind: "ivr" }),
+        });
+        var data = await res.json();
+        if (!res.ok) {
+          var msg = data.error || "שגיאה בשיגור";
+          if (data.errorCode) msg += " (קוד: " + data.errorCode + ")";
+          showToast("❌ " + msg);
+        } else {
+          showToast("✅ צינתוק שוגר ל-" + phone + (data.campaignId ? " | מזהה: " + data.campaignId : ""));
+        }
+      } catch (_) {
+        showToast("❌ שגיאת תקשורת עם השרת");
+      } finally {
+        sendCampaignButton.disabled = false;
+        sendCampaignButton.textContent = "📣 שלח צינתוק";
+      }
+    });
+  }
 });
 
 // ── IVR payment history for this donor ───────────────────────────────────────
