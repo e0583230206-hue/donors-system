@@ -45,6 +45,11 @@ const {
   getAlfonPendingById,
   updateAlfonPendingStatus,
   normalizePhoneForDb,
+  createWorkerSession,
+  heartbeatSession,
+  closeWorkerSession,
+  getActiveSessions,
+  getSessionHistory,
 } = require("./db");
 
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
@@ -239,8 +244,42 @@ app.post("/api/login", loginLimiter, async function (req, res, next) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    try { insertAuditLog({ action: "login", entityType: "worker", entityId: String(result.id), entityName: result.name, details: "כניסה למערכת", workerId: result.id, workerName: result.name, ip: req.ip }); } catch (_) {}
-    res.json(result);
+    try { insertAuditLog({ action: "login", entityType: "worker", entityId: String(result.user.id), entityName: result.user.name, details: "כניסה למערכת", workerId: result.user.id, workerName: result.user.name, ip: req.ip }); } catch (_) {}
+    var sessionId = null;
+    try { sessionId = createWorkerSession(result.user.id, result.user.name, req.ip, req.headers["user-agent"]); } catch (_) {}
+    res.json(Object.assign({}, result, { sessionId }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/api/logout", requireAuth, function (req, res, next) {
+  try {
+    var sessionId = (req.body || {}).sessionId;
+    if (sessionId) closeWorkerSession(String(sessionId), "logout");
+    try { insertAuditLog({ action: "logout", entityType: "worker", entityId: String(req.user.id), entityName: req.user.name, details: "יציאה מהמערכת", workerId: req.user.id, workerName: req.user.name, ip: req.ip }); } catch (_) {}
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/api/sessions/heartbeat", requireAuth, function (req, res, next) {
+  try {
+    var sessionId = (req.body || {}).sessionId;
+    if (sessionId) heartbeatSession(String(sessionId));
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/admin/sessions", requireRole([ROLES.ADMIN]), function (req, res, next) {
+  try {
+    res.json({
+      active:  getActiveSessions(),
+      history: getSessionHistory(200),
+    });
   } catch (err) {
     next(err);
   }

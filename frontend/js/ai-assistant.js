@@ -81,7 +81,7 @@ console.log("[AI] ai-assistant.js v3 loaded");
       '<div class="ai-panel-header">',
         '<div class="ai-panel-title">',
           '<span class="ai-panel-icon">🤖</span>',
-          '<span>עוזר AI</span>',
+          '<span>איציקנט העוזר</span>',
           '<span class="ai-read-only-badge">Read Only</span>',
           (_debugMode ? '<span class="ai-debug-badge">DEBUG</span>' : ""),
         '</div>',
@@ -109,8 +109,8 @@ console.log("[AI] ai-assistant.js v3 loaded");
     var fab = document.createElement("button");
     fab.id = "aiFab";
     fab.className = "ai-fab";
-    fab.title = "עוזר AI";
-    fab.innerHTML = '<span class="ai-fab-icon">🤖</span><span class="ai-fab-label">AI</span>';
+    fab.title = "איציקנט העוזר";
+    fab.innerHTML = '<span class="ai-fab-icon">🤖</span><span class="ai-fab-label">איציקנט</span>';
     return fab;
   }
 

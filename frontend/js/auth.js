@@ -1,6 +1,9 @@
-/* auth.js v2 — redirect-aware */
+/* auth.js v3 — redirect-aware, with server-side session tracking */
 const SESSION_TIMEOUT_HOURS = 8;
 const SESSION_TIMEOUT_MS    = SESSION_TIMEOUT_HOURS * 60 * 60 * 1000;
+const HEARTBEAT_INTERVAL_MS = 60 * 1000;
+
+var _heartbeatTimer = null;
 const ROLE_ADMIN      = "ADMIN";
 const ROLE_SECRETARY  = "SECRETARY";
 const ROLE_IVR_SYSTEM = "IVR_SYSTEM";
@@ -59,6 +62,8 @@ function requireLogin() {
       return;
     }
   }
+
+  startHeartbeat();
 }
 
 // ── Role helpers ──────────────────────────────────────────────────────────────
@@ -109,11 +114,46 @@ function requireAdminAction(message) {
   return false;
 }
 
+// ── Session heartbeat ─────────────────────────────────────────────────────────
+
+function _sendHeartbeat() {
+  var token     = getAuthToken();
+  var sessionId = sessionStorage.getItem("sessionId") || "";
+  if (!token || !sessionId) return;
+  fetch("/api/sessions/heartbeat", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+    body:    JSON.stringify({ sessionId: sessionId }),
+  }).catch(function () { /* silent — heartbeat failures do not affect UX */ });
+}
+
+function startHeartbeat() {
+  if (_heartbeatTimer) return;
+  _sendHeartbeat();
+  _heartbeatTimer = setInterval(_sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+}
+
 // ── Logout ────────────────────────────────────────────────────────────────────
 
 function logout() {
+  if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+
+  // Notify server (fire-and-forget)
+  var token     = getAuthToken();
+  var sessionId = sessionStorage.getItem("sessionId") || "";
+  if (token && sessionId) {
+    try {
+      fetch("/api/logout", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body:    JSON.stringify({ sessionId: sessionId }),
+      });
+    } catch (_) {}
+  }
+
   sessionStorage.removeItem("authToken");
   sessionStorage.removeItem("currentUser");
+  sessionStorage.removeItem("sessionId");
   // Clear cached app data from localStorage on logout
   ["donors", "tasks", "logs", "settings", "approvals", "workers"].forEach(function (k) {
     localStorage.removeItem(k);

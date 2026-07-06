@@ -90,8 +90,9 @@ async function login() {
 
     const data = await res.json();
 
-    // Store JWT and user info for the session
-    sessionStorage.setItem("authToken", data.token);
+    // Store JWT, session ID, and user info
+    sessionStorage.setItem("authToken",  data.token);
+    sessionStorage.setItem("sessionId",  data.sessionId || "");
     sessionStorage.setItem("currentUser", JSON.stringify({
       id:        data.user.id,
       name:      data.user.name,

@@ -1,7 +1,10 @@
 require("dotenv").config({ path: require("path").join(__dirname, ".env") });
-const path = require("path");
+const path   = require("path");
+const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const bcrypt = require("bcryptjs");
+
+const SESSION_TIMEOUT_HOURS = Number(process.env.SESSION_TIMEOUT_HOURS || 8);
 
 const DB_PATH = process.env.DB_PATH
   ? path.resolve(__dirname, process.env.DB_PATH)
@@ -150,6 +153,23 @@ function initDatabase() {
     )
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_phone_lookup_donorId ON donor_phone_lookup(donorId)");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_sessions (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      sessionId     TEXT    NOT NULL UNIQUE,
+      workerId      INTEGER NOT NULL,
+      workerName    TEXT    NOT NULL,
+      loginAt       TEXT    NOT NULL,
+      lastHeartbeat TEXT    NOT NULL,
+      logoutAt      TEXT,
+      userAgent     TEXT,
+      ip            TEXT,
+      status        TEXT    NOT NULL DEFAULT 'active'
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_worker_sessions_status ON worker_sessions(status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_worker_sessions_loginAt ON worker_sessions(loginAt)");
 
   // ── Migrations ──────────────────────────────────────────────────
   try { db.exec("ALTER TABLE workers ADD COLUMN passwordHash TEXT"); } catch (_) {}
@@ -957,6 +977,53 @@ function getAuditLogs(limit) {
   `).all(Math.min(Number(limit) || 200, 1000));
 }
 
+// ── Worker Sessions ───────────────────────────────────────────────────────────
+
+function createWorkerSession(workerId, workerName, ip, userAgent) {
+  var sessionId = crypto.randomBytes(16).toString("hex");
+  var now = nowIso();
+  db.prepare(`
+    INSERT INTO worker_sessions (sessionId, workerId, workerName, loginAt, lastHeartbeat, ip, userAgent, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+  `).run(sessionId, Number(workerId), String(workerName), now, now, ip || null, userAgent ? String(userAgent).slice(0, 300) : null);
+  return sessionId;
+}
+
+function heartbeatSession(sessionId) {
+  if (!sessionId) return;
+  db.prepare("UPDATE worker_sessions SET lastHeartbeat = ? WHERE sessionId = ? AND status = 'active'")
+    .run(nowIso(), String(sessionId));
+}
+
+function closeWorkerSession(sessionId, reason) {
+  if (!sessionId) return;
+  var status = reason === "logout" ? "logout" : "timeout";
+  db.prepare("UPDATE worker_sessions SET logoutAt = ?, status = ? WHERE sessionId = ? AND status = 'active'")
+    .run(nowIso(), status, String(sessionId));
+}
+
+function getActiveSessions() {
+  // Auto-expire sessions silent for more than SESSION_TIMEOUT_HOURS
+  var cutoff = new Date(Date.now() - SESSION_TIMEOUT_HOURS * 3600 * 1000).toISOString();
+  db.prepare("UPDATE worker_sessions SET logoutAt = ?, status = 'timeout' WHERE status = 'active' AND lastHeartbeat < ?")
+    .run(nowIso(), cutoff);
+  return db.prepare(`
+    SELECT id, sessionId, workerId, workerName, loginAt, lastHeartbeat, ip, userAgent
+    FROM worker_sessions
+    WHERE status = 'active'
+    ORDER BY loginAt DESC
+  `).all();
+}
+
+function getSessionHistory(limit) {
+  return db.prepare(`
+    SELECT id, sessionId, workerId, workerName, loginAt, lastHeartbeat, logoutAt, ip, userAgent, status
+    FROM worker_sessions
+    ORDER BY loginAt DESC
+    LIMIT ?
+  `).all(Number(limit) || 200);
+}
+
 // ── Health check ─────────────────────────────────────────────────────────────
 
 function dbHealthCheck() {
@@ -1086,6 +1153,12 @@ module.exports = {
   getAlfonPending,
   getAlfonPendingById,
   updateAlfonPendingStatus,
+  // Worker sessions
+  createWorkerSession,
+  heartbeatSession,
+  closeWorkerSession,
+  getActiveSessions,
+  getSessionHistory,
   // Phone normalization (shared with sync service)
   normalizePhoneForDb,
 };
