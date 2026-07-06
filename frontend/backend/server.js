@@ -1007,7 +1007,7 @@ app.post(
       if (!phone) return res.status(400).json({ error: "יש לציין מספר טלפון" });
       if (phone.length < 9 || phone.length > 15) return res.status(400).json({ error: "מספר טלפון לא תקין: " + rawPhone });
 
-      var ivrExtension = String(process.env.TECHNOLINE_IVR_EXTENSION || body.extension || "").trim();
+      var ivrExtension = String(process.env.TECHNOLINE_IVR_EXTENSION || body.extension || "9263").trim();
       if (messageKind === "ivr" && !ivrExtension) {
         return res.status(503).json({ error: "TECHNOLINE_IVR_EXTENSION לא מוגדר בשרת" });
       }
@@ -1089,7 +1089,7 @@ app.post(
 
       // Resolve IVR extension: use env, fallback to body.extension for advanced callers
       var ivrExtension = String(
-        process.env.TECHNOLINE_IVR_EXTENSION || body.extension || ""
+        process.env.TECHNOLINE_IVR_EXTENSION || body.extension || "9263"
       ).trim();
 
       // Build phone list using filter
