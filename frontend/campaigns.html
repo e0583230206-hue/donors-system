@@ -257,6 +257,18 @@
         </button>
         <p id="sendStatus" class="message"></p>
 
+        <!-- Debug panel -->
+        <div style="margin-top:8px;text-align:left">
+          <button onclick="runDebug()" style="background:none;border:none;color:#888;font-size:.82em;cursor:pointer;padding:0;text-decoration:underline">🔍 Debug — למה נפסלו תורמים?</button>
+        </div>
+        <div id="debugPanel" style="display:none;margin-top:10px;background:#f9f9f9;border:1px solid #ddd;border-radius:8px;padding:14px 16px;font-size:.88em;line-height:1.7">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <strong style="color:#333">🔍 Debug — ניתוח קהל</strong>
+            <button onclick="document.getElementById('debugPanel').style.display='none'" style="background:none;border:none;cursor:pointer;color:#aaa;font-size:1.1em">✕</button>
+          </div>
+          <div id="debugContent"></div>
+        </div>
+
         <!-- Recent sends log -->
         <div class="recent-log">
           <h3>שיגורים אחרונים</h3>

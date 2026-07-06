@@ -815,6 +815,85 @@ app.get(
   }
 );
 
+// GET /api/technoline/send/recipient-debug?filter=<filter>  — admin-only diagnostic
+app.get(
+  "/api/technoline/send/recipient-debug",
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      var donors = getAppState("donors") || [];
+      var filter = String(req.query.filter || "debt").trim();
+      var included = [], excluded = [];
+
+      for (var i = 0; i < donors.length; i++) {
+        var d        = donors[i];
+        var approved = d.ivrApprovedPhones || [];
+        var hasDebt  = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
+        var name     = d.fullName || ("תורם #" + d.id);
+
+        // Gate 1: must have ivrApprovedPhones
+        if (approved.length === 0) {
+          var anyPhone = !!(d.phone || d.phone2 || d.phone3 || d.phone4 || (d.phones || []).length);
+          excluded.push({
+            id: d.id, name: name,
+            reason: "no_ivr_approved_phones",
+            detail: anyPhone ? "יש מספרי טלפון רגילים אבל אין ivrApprovedPhones" : "אין מספרי טלפון כלל",
+            hasPhone: anyPhone, hasDebt: hasDebt,
+          });
+          continue;
+        }
+
+        // Gate 2: filter-specific
+        var include = false;
+        var filterFail = null;
+        if (filter === "all") {
+          include = true;
+        } else if (filter === "debt") {
+          include = hasDebt;
+          if (!include) filterFail = "אין חוב פתוח";
+        } else if (filter.startsWith("city:")) {
+          include = (d.city || "").trim() === filter.slice(5).trim();
+          if (!include) filterFail = "עיר לא תואמת (" + (d.city || "—") + ")";
+        } else if (filter.startsWith("tag:")) {
+          var tag = filter.slice(4).trim();
+          include = (d.tags || []).indexOf(tag) !== -1;
+          if (!include) filterFail = "תגית לא תואמת";
+        } else if (filter.startsWith("donor:")) {
+          include = d.id === Number(filter.slice(6));
+          if (!include) filterFail = "תורם אחר";
+        } else {
+          include = true;
+        }
+
+        if (include) {
+          included.push({ id: d.id, name: name, phones: approved });
+        } else {
+          excluded.push({
+            id: d.id, name: name,
+            reason: "filter_mismatch",
+            detail: filterFail || "לא תואם לפילטר",
+            hasPhone: true, hasDebt: hasDebt,
+            ivrApprovedPhones: approved,
+          });
+        }
+      }
+
+      return res.json({
+        filter:         filter,
+        totalDonors:    donors.length,
+        includedCount:  included.length,
+        excludedCount:  excluded.length,
+        phoneCount:     included.reduce(function (s, d) { return s + d.phones.length; }, 0),
+        included:       included,
+        excluded:       excluded,
+        tip: included.length === 0 && excluded.some(function (e) { return e.reason === "no_ivr_approved_phones"; })
+          ? "רוב התורמים אין להם ivrApprovedPhones. שדה זה מתמלא אוטומטית כשהתורם מתקשר ל-IVR, או ניתן להוסיף מספרים ידנית בכרטיס תורם."
+          : null,
+      });
+    } catch (err) { next(err); }
+  }
+);
+
 // GET /api/technoline/send/audience-options — tags, cities, debt count for the send screen
 app.get(
   "/api/technoline/send/audience-options",

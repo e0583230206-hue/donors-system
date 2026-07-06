@@ -296,6 +296,67 @@ function getAudienceLabel() {
   return "";
 }
 
+// ── Debug diagnostic ──────────────────────────────────────────────────────────
+
+async function runDebug() {
+  var filter  = getAudienceFilter() || "debt";
+  var panel   = document.getElementById("debugPanel");
+  var content = document.getElementById("debugContent");
+  if (!panel || !content) return;
+  panel.style.display = "block";
+  content.innerHTML   = "<em>טוען...</em>";
+
+  try {
+    var res  = await apiFetch("/api/technoline/send/recipient-debug?filter=" + encodeURIComponent(filter));
+    var data = await res.json();
+
+    if (!res.ok) { content.innerHTML = escapeHTML(data.error || "שגיאה"); return; }
+
+    var html = "<strong>סה\"כ תורמים במערכת: " + data.totalDonors + "</strong><br>" +
+      "✅ עוברים לשליחה: <strong>" + data.includedCount + " תורמים / " + data.phoneCount + " מספרים</strong><br>" +
+      "❌ נפסלו: <strong>" + data.excludedCount + "</strong>" +
+      (data.tip ? "<br><div style='margin-top:8px;padding:8px 10px;background:#fff3e0;border-radius:6px;font-size:.88em;color:#e65100'>" + escapeHTML(data.tip) + "</div>" : "");
+
+    if (data.excludedCount > 0) {
+      var byReason = {};
+      data.excluded.forEach(function (e) {
+        if (!byReason[e.reason]) byReason[e.reason] = [];
+        byReason[e.reason].push(e);
+      });
+
+      var reasonLabels = {
+        no_ivr_approved_phones: "❌ אין ivrApprovedPhones (השדה ריק)",
+        filter_mismatch:        "⚪ לא תואם פילטר",
+      };
+
+      Object.keys(byReason).forEach(function (reason) {
+        var group = byReason[reason];
+        html += "<details style='margin-top:10px'><summary style='cursor:pointer;font-weight:600;color:#555'>" +
+          (reasonLabels[reason] || reason) + " — " + group.length + " תורמים" +
+          "</summary><ul style='margin:6px 0 0 16px;font-size:.87em;color:#444'>" +
+          group.slice(0, 20).map(function (e) {
+            return "<li>" + escapeHTML(e.name) + " — " + escapeHTML(e.detail) + "</li>";
+          }).join("") +
+          (group.length > 20 ? "<li>...ועוד " + (group.length - 20) + "</li>" : "") +
+          "</ul></details>";
+      });
+    }
+
+    if (data.includedCount > 0) {
+      html += "<details style='margin-top:10px'><summary style='cursor:pointer;font-weight:600;color:#1565c0'>✅ תורמים שיקבלו שיחה (" + data.includedCount + ")</summary><ul style='margin:6px 0 0 16px;font-size:.87em;color:#444'>" +
+        data.included.slice(0, 30).map(function (e) {
+          return "<li>" + escapeHTML(e.name) + " — " + escapeHTML((e.phones || []).join(", ")) + "</li>";
+        }).join("") +
+        (data.included.length > 30 ? "<li>...ועוד " + (data.included.length - 30) + "</li>" : "") +
+        "</ul></details>";
+    }
+
+    content.innerHTML = html;
+  } catch (_) {
+    content.innerHTML = "<span style='color:red'>שגיאת תקשורת עם השרת</span>";
+  }
+}
+
 // ── Recent log (read-only) ────────────────────────────────────────────────────
 
 async function loadRecentLog() {
