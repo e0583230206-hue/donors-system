@@ -150,6 +150,55 @@
         <p id="changePasswordMessage" class="message"></p>
       </section>
 
+      <section class="panel" id="sessionsPanel" style="display:none;">
+        <h2>🔐 ניהול כניסות ויציאות</h2>
+        <p style="color:var(--muted);margin-bottom:14px;font-size:14px">מעקב אחר כניסות ויציאות של עובדים למערכת — גלוי למנהלים בלבד.</p>
+
+        <div class="form-grid">
+          <button id="refreshSessionsBtn" class="secondary-btn">🔄 רענון</button>
+        </div>
+
+        <h3 style="margin:20px 0 10px;font-size:1em;color:var(--text);">🟢 מחוברים עכשיו</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>עובד</th>
+                <th>זמן כניסה</th>
+                <th>פעילות אחרונה</th>
+                <th>משך התחברות</th>
+                <th>דפדפן / מכשיר</th>
+                <th>כתובת IP</th>
+                <th>סטטוס</th>
+              </tr>
+            </thead>
+            <tbody id="activeSessionsTable">
+              <tr><td colspan="7" style="text-align:center;color:var(--muted)">טוען...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin:22px 0 10px;font-size:1em;color:var(--text);">📜 היסטוריית כניסות ויציאות</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>עובד</th>
+                <th>כניסה</th>
+                <th>יציאה</th>
+                <th>משך חיבור</th>
+                <th>דפדפן / מכשיר</th>
+                <th>כתובת IP</th>
+                <th>סטטוס</th>
+              </tr>
+            </thead>
+            <tbody id="sessionsHistoryTable">
+              <tr><td colspan="7" style="text-align:center;color:var(--muted)">טוען...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="panel">
         <h2>💾 גיבוי ושחזור</h2>
 

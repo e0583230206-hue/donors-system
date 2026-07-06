@@ -1017,10 +1017,29 @@ function closeWorkerSession(sessionId, reason) {
 function getActiveSessions() {
   // Auto-expire sessions silent for more than SESSION_TIMEOUT_HOURS
   var cutoff = new Date(Date.now() - SESSION_TIMEOUT_HOURS * 3600 * 1000).toISOString();
-  db.prepare("UPDATE worker_sessions SET logoutAt = ?, status = 'timeout' WHERE status = 'active' AND lastHeartbeat < ?")
-    .run(nowIso(), cutoff);
+  var stale = db.prepare("SELECT sessionId, workerId, workerName FROM worker_sessions WHERE status = 'active' AND lastHeartbeat < ?")
+    .all(cutoff);
+
+  if (stale.length > 0) {
+    db.prepare("UPDATE worker_sessions SET logoutAt = ?, status = 'timeout' WHERE status = 'active' AND lastHeartbeat < ?")
+      .run(nowIso(), cutoff);
+    stale.forEach(function (s) {
+      try {
+        insertAuditLog({
+          action:     "session_timeout",
+          entityType: "worker",
+          entityId:   s.workerId,
+          entityName: s.workerName,
+          details:    "פג תוקף session — אין פעילות מעל " + SESSION_TIMEOUT_HOURS + " שעות",
+          workerId:   s.workerId,
+          workerName: s.workerName,
+        });
+      } catch (_) {}
+    });
+  }
+
   return db.prepare(`
-    SELECT id, sessionId, workerId, workerName, loginAt, lastHeartbeat, ip, userAgent
+    SELECT id, sessionId, workerId, workerName, loginAt, lastHeartbeat, ip, userAgent, status
     FROM worker_sessions
     WHERE status = 'active'
     ORDER BY loginAt DESC

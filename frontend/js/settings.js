@@ -819,3 +819,129 @@ reloadWorkers().then(function () { renderWorkers(); });
     });
   }
 }());
+
+// ── ניהול כניסות ויציאות (Sessions) — גלוי למנהלים בלבד ───────────────────────
+(function () {
+  var panel = document.getElementById("sessionsPanel");
+  if (!panel || !isAdmin()) return; // מזכיר לא רואה את האזור הזה כלל
+
+  panel.style.display = "";
+
+  var refreshBtn   = document.getElementById("refreshSessionsBtn");
+  var activeTable  = document.getElementById("activeSessionsTable");
+  var historyTable = document.getElementById("sessionsHistoryTable");
+
+  function fmtSessionDate(iso) {
+    if (!iso) return "—";
+    try {
+      return new Date(String(iso).replace(" ", "T")).toLocaleString("he-IL", {
+        timeZone: "Asia/Jerusalem", hour12: false, dateStyle: "short", timeStyle: "short",
+      });
+    } catch (_) { return iso; }
+  }
+
+  function toMs(iso) {
+    if (!iso) return NaN;
+    var t = new Date(String(iso).replace(" ", "T")).getTime();
+    return isNaN(t) ? NaN : t;
+  }
+
+  function fmtDuration(ms) {
+    if (!isFinite(ms) || ms < 0) return "—";
+    var totalMinutes = Math.floor(ms / 60000);
+    var days    = Math.floor(totalMinutes / 1440);
+    var hours   = Math.floor((totalMinutes % 1440) / 60);
+    var minutes = totalMinutes % 60;
+    var parts = [];
+    if (days)    parts.push(days + " ימים");
+    if (hours)   parts.push(hours + " שעות");
+    if (minutes || parts.length === 0) parts.push(minutes + " דקות");
+    return parts.join(" ו-");
+  }
+
+  function parseUserAgent(ua) {
+    if (!ua) return "לא ידוע";
+    var browser = "דפדפן לא מזוהה";
+    if (/Edg\//.test(ua))                                   browser = "Edge";
+    else if (/OPR\//.test(ua) || /Opera/i.test(ua))         browser = "Opera";
+    else if (/Chrome\//.test(ua) && !/Chromium/.test(ua))   browser = "Chrome";
+    else if (/Firefox\//.test(ua))                          browser = "Firefox";
+    else if (/Safari\//.test(ua) && !/Chrome\//.test(ua))   browser = "Safari";
+
+    var os = "";
+    if (/Android/.test(ua))              os = "Android";
+    else if (/iPhone|iPad|iOS/.test(ua)) os = "iOS";
+    else if (/Windows/.test(ua))         os = "Windows";
+    else if (/Mac OS X/.test(ua))        os = "Mac";
+    else if (/Linux/.test(ua))           os = "Linux";
+
+    return os ? browser + " · " + os : browser;
+  }
+
+  function statusLabel(status) {
+    if (status === "active")  return '<span style="color:#1a7a1a;font-weight:600">🟢 מחובר</span>';
+    if (status === "logout")  return '<span style="color:#777;font-weight:600">⚪ מנותק</span>';
+    if (status === "timeout") return '<span style="color:#b00;font-weight:600">🔴 פג תוקף</span>';
+    return escapeHTML(status || "—");
+  }
+
+  function renderActiveSessions(rows) {
+    if (!activeTable) return;
+    if (!rows.length) {
+      activeTable.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">אין משתמשים מחוברים כרגע</td></tr>';
+      return;
+    }
+    var now = Date.now();
+    activeTable.innerHTML = rows.map(function (r) {
+      return "<tr>" +
+        "<td>" + escapeHTML(r.workerName || "—") + "</td>" +
+        "<td>" + fmtSessionDate(r.loginAt) + "</td>" +
+        "<td>" + fmtSessionDate(r.lastHeartbeat) + "</td>" +
+        "<td>" + fmtDuration(now - toMs(r.loginAt)) + "</td>" +
+        "<td>" + escapeHTML(parseUserAgent(r.userAgent)) + "</td>" +
+        "<td dir='ltr'>" + escapeHTML(r.ip || "—") + "</td>" +
+        "<td>" + statusLabel(r.status || "active") + "</td>" +
+        "</tr>";
+    }).join("");
+  }
+
+  function renderSessionsHistory(rows) {
+    if (!historyTable) return;
+    if (!rows.length) {
+      historyTable.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">אין היסטוריה עדיין</td></tr>';
+      return;
+    }
+    historyTable.innerHTML = rows.slice(0, 50).map(function (r) {
+      var endMs = r.logoutAt ? toMs(r.logoutAt) : toMs(r.lastHeartbeat);
+      return "<tr>" +
+        "<td>" + escapeHTML(r.workerName || "—") + "</td>" +
+        "<td>" + fmtSessionDate(r.loginAt) + "</td>" +
+        "<td>" + fmtSessionDate(r.logoutAt) + "</td>" +
+        "<td>" + fmtDuration(endMs - toMs(r.loginAt)) + "</td>" +
+        "<td>" + escapeHTML(parseUserAgent(r.userAgent)) + "</td>" +
+        "<td dir='ltr'>" + escapeHTML(r.ip || "—") + "</td>" +
+        "<td>" + statusLabel(r.status) + "</td>" +
+        "</tr>";
+    }).join("");
+  }
+
+  function loadSessionsPanel() {
+    apiFetch("/api/admin/sessions")
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        renderActiveSessions(data.active || []);
+        renderSessionsHistory(data.history || []);
+      })
+      .catch(function () {
+        var msg = '<tr><td colspan="7" style="text-align:center;color:#b00">שגיאה בטעינת נתונים</td></tr>';
+        if (activeTable)  activeTable.innerHTML  = msg;
+        if (historyTable) historyTable.innerHTML = msg;
+      });
+  }
+
+  if (refreshBtn) refreshBtn.addEventListener("click", loadSessionsPanel);
+  loadSessionsPanel();
+}());
