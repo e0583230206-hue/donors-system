@@ -823,13 +823,34 @@ reloadWorkers().then(function () { renderWorkers(); });
 // ── ניהול כניסות ויציאות (Sessions) — גלוי למנהלים בלבד ───────────────────────
 (function () {
   var panel = document.getElementById("sessionsPanel");
-  if (!panel || !isAdmin()) return; // מזכיר לא רואה את האזור הזה כלל
+  if (!panel || !isAdmin()) return; // מזכיר לא רואה את האזור הזה כלל, גם לא ה-JS שלו
 
   panel.style.display = "";
 
-  var refreshBtn   = document.getElementById("refreshSessionsBtn");
-  var activeTable  = document.getElementById("activeSessionsTable");
-  var historyTable = document.getElementById("sessionsHistoryTable");
+  var currentUser     = getCurrentUser();
+  var currentWorkerId = currentUser ? Number(currentUser.id) : null;
+
+  var searchInput      = document.getElementById("sessionsSearchInput");
+  var statusFilter     = document.getElementById("sessionsStatusFilter");
+  var sortSelect       = document.getElementById("sessionsSortSelect");
+  var refreshBtn       = document.getElementById("refreshSessionsBtn");
+  var exportBtn        = document.getElementById("exportSessionsBtn");
+  var clearBtn         = document.getElementById("clearSessionsFiltersBtn");
+  var autoRefreshCheck = document.getElementById("sessionsAutoRefresh");
+  var activeTable      = document.getElementById("activeSessionsTable");
+  var historyTable     = document.getElementById("sessionsHistoryTable");
+
+  var statActiveNow     = document.getElementById("statActiveNow");
+  var statLoginsToday   = document.getElementById("statLoginsToday");
+  var statLogoutsToday  = document.getElementById("statLogoutsToday");
+  var statTimeoutsToday = document.getElementById("statTimeoutsToday");
+
+  var _rawActive       = [];
+  var _rawHistory      = [];
+  var _prevActiveBySid = null; // null = first load, don't toast yet
+  var _autoRefreshTimer = null;
+
+  // ── Formatting helpers ───────────────────────────────────────────────────────
 
   function fmtSessionDate(iso) {
     if (!iso) return "—";
@@ -846,6 +867,14 @@ reloadWorkers().then(function () { renderWorkers(); });
     return isNaN(t) ? NaN : t;
   }
 
+  function isToday(iso) {
+    if (!iso) return false;
+    var d = new Date(String(iso).replace(" ", "T"));
+    if (isNaN(d.getTime())) return false;
+    var fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem" });
+    return fmt.format(d) === fmt.format(new Date());
+  }
+
   function fmtDuration(ms) {
     if (!isFinite(ms) || ms < 0) return "—";
     var totalMinutes = Math.floor(ms / 60000);
@@ -859,71 +888,235 @@ reloadWorkers().then(function () { renderWorkers(); });
     return parts.join(" ו-");
   }
 
-  function parseUserAgent(ua) {
+  // Browser + OS parsing. Note: modern Chrome/Edge freeze the Windows UA token at
+  // "Windows NT 10.0" for both Windows 10 AND 11 — there is no reliable way to tell
+  // them apart from the User-Agent string alone (would need Client Hints + a schema
+  // change to persist them), so we show "Windows 10 / 11" rather than guess.
+  function parseBrowser(ua) {
     if (!ua) return "לא ידוע";
-    var browser = "דפדפן לא מזוהה";
-    if (/Edg\//.test(ua))                                   browser = "Edge";
-    else if (/OPR\//.test(ua) || /Opera/i.test(ua))         browser = "Opera";
-    else if (/Chrome\//.test(ua) && !/Chromium/.test(ua))   browser = "Chrome";
-    else if (/Firefox\//.test(ua))                          browser = "Firefox";
-    else if (/Safari\//.test(ua) && !/Chrome\//.test(ua))   browser = "Safari";
-
-    var os = "";
-    if (/Android/.test(ua))              os = "Android";
-    else if (/iPhone|iPad|iOS/.test(ua)) os = "iOS";
-    else if (/Windows/.test(ua))         os = "Windows";
-    else if (/Mac OS X/.test(ua))        os = "Mac";
-    else if (/Linux/.test(ua))           os = "Linux";
-
-    return os ? browser + " · " + os : browser;
+    if (/Edg\//.test(ua))                                 return "Edge";
+    if (/OPR\//.test(ua) || /Opera/i.test(ua))            return "Opera";
+    if (/Chrome\//.test(ua) && !/Chromium/.test(ua))      return "Chrome";
+    if (/Firefox\//.test(ua))                             return "Firefox";
+    if (/Safari\//.test(ua) && !/Chrome\//.test(ua))      return "Safari";
+    return "לא ידוע";
   }
 
-  function statusLabel(status) {
-    if (status === "active")  return '<span style="color:#1a7a1a;font-weight:600">🟢 מחובר</span>';
-    if (status === "logout")  return '<span style="color:#777;font-weight:600">⚪ מנותק</span>';
-    if (status === "timeout") return '<span style="color:#b00;font-weight:600">🔴 פג תוקף</span>';
-    return escapeHTML(status || "—");
+  function parseOS(ua) {
+    if (!ua) return "לא ידוע";
+    var winMatch = ua.match(/Windows NT ([\d.]+)/);
+    if (winMatch) {
+      if (winMatch[1] === "10.0") return "Windows 10 / 11";
+      if (winMatch[1] === "6.3")  return "Windows 8.1";
+      if (winMatch[1] === "6.2")  return "Windows 8";
+      if (winMatch[1] === "6.1")  return "Windows 7";
+      return "Windows";
+    }
+    var androidMatch = ua.match(/Android ([\d.]+)/);
+    if (androidMatch) return "Android " + androidMatch[1];
+    if (/iPhone|iPad|iOS/.test(ua)) return "iOS";
+    if (/Mac OS X/.test(ua))        return "Mac";
+    if (/Linux/.test(ua))           return "Linux";
+    return "לא ידוע";
   }
 
-  function renderActiveSessions(rows) {
+  var STATUS_HTML = {
+    active:        '<span style="color:#1a7a1a;font-weight:600">🟢 מחובר</span>',
+    logout:        '<span style="color:#777;font-weight:600">⚪ מנותק</span>',
+    timeout:       '<span style="color:#b00;font-weight:600">🔴 פג תוקף</span>',
+    forced_logout: '<span style="color:#e07b00;font-weight:600">🟠 נותק ע"י מנהל</span>',
+  };
+  var STATUS_TEXT = {
+    active: "מחובר", logout: "מנותק", timeout: "פג תוקף", forced_logout: 'נותק ע"י מנהל',
+  };
+  var END_REASON_TEXT = {
+    active: "עדיין מחובר", logout: "יציאה רגילה", timeout: "פג תוקף", forced_logout: 'נותק ע"י מנהל',
+  };
+  var ROW_STATUS_CLASS = {
+    active: "row-status-active", logout: "row-status-logout",
+    timeout: "row-status-timeout", forced_logout: "row-status-forced_logout",
+  };
+
+  function statusHtml(status)  { return STATUS_HTML[status] || escapeHTML(status || "—"); }
+  function statusText(status)  { return STATUS_TEXT[status] || (status || "—"); }
+  function rowClass(status)    { return ROW_STATUS_CLASS[status] || ""; }
+
+  function lastActionText(row) {
+    if (!row.lastAction || !row.lastAction.details) return "לא ידוע";
+    return row.lastAction.details + " (" + fmtSessionDate(row.lastAction.createdAt) + ")";
+  }
+
+  function shortSessionId(sessionId) {
+    if (!sessionId) return "—";
+    return String(sessionId).slice(0, 8);
+  }
+
+  // ── Row model builders ───────────────────────────────────────────────────────
+
+  function buildActiveRow(s) {
+    return {
+      sessionId: s.sessionId, workerId: s.workerId,
+      workerName: s.workerName || "—", role: s.workerRole || "—",
+      loginAt: s.loginAt, lastHeartbeat: s.lastHeartbeat,
+      durationMs: Date.now() - toMs(s.loginAt),
+      ip: s.ip || "—", browser: parseBrowser(s.userAgent), os: parseOS(s.userAgent),
+      status: s.status || "active", lastAction: s.lastAction,
+    };
+  }
+
+  function buildHistoryRow(s) {
+    var endMs = s.logoutAt ? toMs(s.logoutAt) : toMs(s.lastHeartbeat);
+    return {
+      sessionId: s.sessionId, workerId: s.workerId,
+      workerName: s.workerName || "—", role: s.workerRole || "—",
+      loginAt: s.loginAt, logoutAt: s.logoutAt, durationMs: endMs - toMs(s.loginAt),
+      ip: s.ip || "—", browser: parseBrowser(s.userAgent), os: parseOS(s.userAgent),
+      status: s.status || "active", lastAction: s.lastAction,
+    };
+  }
+
+  // Count of *currently active* sessions sharing the same workerId — recomputed
+  // from _rawActive on every render so it always reflects live data, not stale.
+  function countActiveConnections(workerId) {
+    var n = 0;
+    _rawActive.forEach(function (s) { if (Number(s.workerId) === Number(workerId)) n++; });
+    return n;
+  }
+
+  // ── Search / filter / sort (shared toolbar, applied to both tables) ──────────
+
+  function matchesSearch(row, q) {
+    if (!q) return true;
+    q = q.toLowerCase();
+    return (row.workerName || "").toLowerCase().indexOf(q) !== -1 ||
+           (row.ip         || "").toLowerCase().indexOf(q) !== -1 ||
+           (row.browser    || "").toLowerCase().indexOf(q) !== -1 ||
+           (row.os         || "").toLowerCase().indexOf(q) !== -1;
+  }
+
+  function applyControls(rows) {
+    var q      = (searchInput  && searchInput.value.trim()) || "";
+    var status = (statusFilter && statusFilter.value)       || "";
+    var sortBy = (sortSelect   && sortSelect.value)          || "lastHeartbeat-desc";
+
+    var filtered = rows.filter(function (r) {
+      return matchesSearch(r, q) && (!status || r.status === status);
+    });
+
+    var parts = sortBy.split("-");
+    var field = parts[0], dir = parts[1] === "asc" ? 1 : -1;
+
+    filtered.sort(function (a, b) {
+      if (field === "workerName") return dir * (a.workerName || "").localeCompare(b.workerName || "", "he");
+      var av, bv;
+      if (field === "duration")       { av = a.durationMs || 0;          bv = b.durationMs || 0; }
+      else if (field === "loginAt")   { av = toMs(a.loginAt)  || 0;      bv = toMs(b.loginAt)  || 0; }
+      else if (field === "logoutAt")  { av = toMs(a.logoutAt) || 0;      bv = toMs(b.logoutAt) || 0; }
+      else                            { av = toMs(a.lastHeartbeat) || 0; bv = toMs(b.lastHeartbeat) || 0; }
+      return dir * (av - bv);
+    });
+
+    return filtered;
+  }
+
+  // ── Rendering ──────────────────────────────────────────────────────────────
+
+  function activityBtn(workerId, workerName) {
+    return '<button class="secondary-btn session-activity-btn" data-worker-id="' + escapeHTML(workerId) +
+      '" data-worker-name="' + escapeHTML(workerName) + '" style="padding:4px 10px;font-size:.82em;">🕘 פעילות אחרונה</button>';
+  }
+
+  function renderActive() {
     if (!activeTable) return;
-    if (!rows.length) {
-      activeTable.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">אין משתמשים מחוברים כרגע</td></tr>';
+    var rows = applyControls(_rawActive.map(buildActiveRow));
+    if (rows.length === 0) {
+      activeTable.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--muted)">אין משתמשים מחוברים כרגע</td></tr>';
       return;
     }
-    var now = Date.now();
     activeTable.innerHTML = rows.map(function (r) {
-      return "<tr>" +
-        "<td>" + escapeHTML(r.workerName || "—") + "</td>" +
+      var isSelf = currentWorkerId != null && Number(r.workerId) === currentWorkerId;
+      var disconnectCell = isSelf
+        ? '<span style="color:var(--muted);font-size:.85em;">המשתמש שלך</span>'
+        : '<button class="danger-btn session-disconnect-btn" data-session-id="' + escapeHTML(r.sessionId) +
+          '" data-worker-name="' + escapeHTML(r.workerName) + '" style="padding:4px 10px;font-size:.82em;">נתק משתמש</button>';
+      var connCount = countActiveConnections(r.workerId);
+      return "<tr class='" + rowClass(r.status) + "'>" +
+        "<td>" + escapeHTML(r.workerName) + "</td>" +
+        "<td>" + escapeHTML(r.role) + "</td>" +
         "<td>" + fmtSessionDate(r.loginAt) + "</td>" +
         "<td>" + fmtSessionDate(r.lastHeartbeat) + "</td>" +
-        "<td>" + fmtDuration(now - toMs(r.loginAt)) + "</td>" +
-        "<td>" + escapeHTML(parseUserAgent(r.userAgent)) + "</td>" +
-        "<td dir='ltr'>" + escapeHTML(r.ip || "—") + "</td>" +
-        "<td>" + statusLabel(r.status || "active") + "</td>" +
+        "<td>" + fmtDuration(r.durationMs) + "</td>" +
+        "<td>" + connCount + " חיבור" + (connCount === 1 ? "" : "ים") + "</td>" +
+        "<td dir='ltr' style='font-family:monospace;font-size:.85em' title='מזהה חלקי — לא הטוקן המלא'>" + escapeHTML(shortSessionId(r.sessionId)) + "</td>" +
+        "<td dir='ltr'>" + escapeHTML(r.ip) + "</td>" +
+        "<td>" + escapeHTML(r.browser) + "</td>" +
+        "<td>" + escapeHTML(r.os) + "</td>" +
+        "<td>" + statusHtml(r.status) + "</td>" +
+        "<td>" + activityBtn(r.workerId, r.workerName) + "</td>" +
+        "<td>" + disconnectCell + "</td>" +
         "</tr>";
     }).join("");
   }
 
-  function renderSessionsHistory(rows) {
+  function renderHistory() {
     if (!historyTable) return;
-    if (!rows.length) {
-      historyTable.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">אין היסטוריה עדיין</td></tr>';
+    var rows = applyControls(_rawHistory.map(buildHistoryRow)).slice(0, 100);
+    if (rows.length === 0) {
+      historyTable.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--muted)">אין היסטוריה עדיין</td></tr>';
       return;
     }
-    historyTable.innerHTML = rows.slice(0, 50).map(function (r) {
-      var endMs = r.logoutAt ? toMs(r.logoutAt) : toMs(r.lastHeartbeat);
-      return "<tr>" +
-        "<td>" + escapeHTML(r.workerName || "—") + "</td>" +
+    historyTable.innerHTML = rows.map(function (r) {
+      return "<tr class='" + rowClass(r.status) + "'>" +
+        "<td>" + escapeHTML(r.workerName) + "</td>" +
+        "<td>" + escapeHTML(r.role) + "</td>" +
         "<td>" + fmtSessionDate(r.loginAt) + "</td>" +
         "<td>" + fmtSessionDate(r.logoutAt) + "</td>" +
-        "<td>" + fmtDuration(endMs - toMs(r.loginAt)) + "</td>" +
-        "<td>" + escapeHTML(parseUserAgent(r.userAgent)) + "</td>" +
-        "<td dir='ltr'>" + escapeHTML(r.ip || "—") + "</td>" +
-        "<td>" + statusLabel(r.status) + "</td>" +
+        "<td>" + fmtDuration(r.durationMs) + "</td>" +
+        "<td>" + escapeHTML(END_REASON_TEXT[r.status] || "—") + "</td>" +
+        "<td dir='ltr' style='font-family:monospace;font-size:.85em' title='מזהה חלקי — לא הטוקן המלא'>" + escapeHTML(shortSessionId(r.sessionId)) + "</td>" +
+        "<td dir='ltr'>" + escapeHTML(r.ip) + "</td>" +
+        "<td>" + escapeHTML(r.browser) + "</td>" +
+        "<td>" + escapeHTML(r.os) + "</td>" +
+        "<td>" + statusHtml(r.status) + "</td>" +
+        "<td>" + activityBtn(r.workerId, r.workerName) + "</td>" +
         "</tr>";
     }).join("");
   }
+
+  function renderStats() {
+    if (statActiveNow)     statActiveNow.textContent     = _rawActive.length;
+    if (statLoginsToday)   statLoginsToday.textContent   = _rawHistory.filter(function (s) { return isToday(s.loginAt); }).length;
+    if (statLogoutsToday)  statLogoutsToday.textContent  = _rawHistory.filter(function (s) { return s.status === "logout"  && isToday(s.logoutAt); }).length;
+    if (statTimeoutsToday) statTimeoutsToday.textContent = _rawHistory.filter(function (s) { return s.status === "timeout" && isToday(s.logoutAt); }).length;
+  }
+
+  function renderAll() {
+    renderStats();
+    renderActive();
+    renderHistory();
+  }
+
+  // ── New-login / disconnect toasts ────────────────────────────────────────────
+  // Only fires from the 2nd successful load onward, so opening the panel never
+  // spams a toast per already-connected user.
+
+  function notifySessionChanges(newActive) {
+    var newBySid = {};
+    newActive.forEach(function (s) { newBySid[s.sessionId] = s; });
+
+    if (_prevActiveBySid !== null && typeof showToast === "function") {
+      Object.keys(newBySid).forEach(function (sid) {
+        if (!_prevActiveBySid[sid]) showToast("🟢 משתמש חדש התחבר: " + newBySid[sid].workerName);
+      });
+      Object.keys(_prevActiveBySid).forEach(function (sid) {
+        if (!newBySid[sid]) showToast("🔴 משתמש התנתק: " + _prevActiveBySid[sid].workerName);
+      });
+    }
+
+    _prevActiveBySid = newBySid;
+  }
+
+  // ── Data loading ─────────────────────────────────────────────────────────────
 
   function loadSessionsPanel() {
     apiFetch("/api/admin/sessions")
@@ -932,16 +1125,195 @@ reloadWorkers().then(function () { renderWorkers(); });
         return res.json();
       })
       .then(function (data) {
-        renderActiveSessions(data.active || []);
-        renderSessionsHistory(data.history || []);
+        var newActive = data.active || [];
+        notifySessionChanges(newActive);
+        _rawActive  = newActive;
+        _rawHistory = data.history || [];
+        renderAll();
       })
-      .catch(function () {
-        var msg = '<tr><td colspan="7" style="text-align:center;color:#b00">שגיאה בטעינת נתונים</td></tr>';
+      .catch(function (err) {
+        console.error("[Sessions]", err);
+        var msg = '<tr><td colspan="13" style="text-align:center;color:#b00">שגיאה בטעינת נתונים</td></tr>';
         if (activeTable)  activeTable.innerHTML  = msg;
         if (historyTable) historyTable.innerHTML = msg;
       });
   }
 
-  if (refreshBtn) refreshBtn.addEventListener("click", loadSessionsPanel);
+  // ── Auto-refresh every 30s (opt-in) ──────────────────────────────────────────
+
+  function updateAutoRefresh() {
+    if (_autoRefreshTimer) { clearInterval(_autoRefreshTimer); _autoRefreshTimer = null; }
+    if (autoRefreshCheck && autoRefreshCheck.checked) {
+      _autoRefreshTimer = setInterval(loadSessionsPanel, 30000);
+    }
+  }
+  if (autoRefreshCheck) autoRefreshCheck.addEventListener("change", updateAutoRefresh);
+
+  // ── Disconnect user remotely ─────────────────────────────────────────────────
+
+  if (activeTable) {
+    activeTable.addEventListener("click", function (e) {
+      var btn = e.target.closest(".session-disconnect-btn");
+      if (!btn) return;
+      var sessionId  = btn.dataset.sessionId;
+      var workerName = btn.dataset.workerName;
+      if (!sessionId) return;
+      if (!confirm('לנתק את המשתמש "' + workerName + '" מהמערכת?\n\nהמשתמש יקבל הודעה ויועבר להתחברות מחדש.')) return;
+
+      btn.disabled    = true;
+      btn.textContent = "מנתק...";
+      apiFetch("/api/admin/sessions/" + encodeURIComponent(sessionId) + "/force-logout", { method: "POST" })
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            return { ok: res.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            alert(result.data.error || "שגיאה בניתוק המשתמש");
+            btn.disabled    = false;
+            btn.textContent = "נתק משתמש";
+            return;
+          }
+          if (typeof showToast === "function") showToast('המשתמש "' + workerName + '" נותק בהצלחה');
+          loadSessionsPanel();
+        })
+        .catch(function () {
+          alert("שגיאת תקשורת עם השרת");
+          btn.disabled    = false;
+          btn.textContent = "נתק משתמש";
+        });
+    });
+  }
+
+  // ── "פעילות אחרונה" modal — last 10 audit-log entries for one worker ─────────
+
+  var activityModal = null;
+
+  function ensureActivityModal() {
+    if (activityModal) return activityModal;
+    var backdrop = document.createElement("div");
+    backdrop.className = "mini-modal-backdrop";
+    backdrop.style.display = "none";
+    backdrop.innerHTML =
+      '<div class="mini-modal">' +
+        '<div class="mini-modal-header">' +
+          '<h3 id="activityModalTitle">פעילות אחרונה</h3>' +
+          '<button type="button" class="mini-modal-close" id="activityModalClose">✕</button>' +
+        '</div>' +
+        '<div class="mini-modal-body" id="activityModalBody">טוען...</div>' +
+      '</div>';
+    document.body.appendChild(backdrop);
+
+    backdrop.addEventListener("click", function (e) {
+      if (e.target === backdrop) closeActivityModal();
+    });
+    backdrop.querySelector("#activityModalClose").addEventListener("click", closeActivityModal);
+
+    activityModal = backdrop;
+    return backdrop;
+  }
+
+  function closeActivityModal() {
+    if (activityModal) activityModal.style.display = "none";
+  }
+
+  function openActivityModal(workerId, workerName) {
+    var modal = ensureActivityModal();
+    var title = modal.querySelector("#activityModalTitle");
+    var body  = modal.querySelector("#activityModalBody");
+    title.textContent = "🕘 פעילות אחרונה — " + workerName;
+    body.innerHTML = "טוען...";
+    modal.style.display = "flex";
+
+    apiFetch("/api/admin/workers/" + encodeURIComponent(workerId) + "/audit-log?limit=10")
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (logs) {
+        if (!Array.isArray(logs) || logs.length === 0) {
+          body.innerHTML = '<p style="color:var(--muted);text-align:center;margin:10px 0;">לא נמצאו פעולות אחרונות</p>';
+          return;
+        }
+        body.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:.9em;">' +
+          '<thead><tr>' +
+            '<th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);">תאריך ושעה</th>' +
+            '<th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);">סוג פעולה</th>' +
+            '<th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);">תיאור</th>' +
+          '</tr></thead><tbody>' +
+          logs.map(function (l) {
+            return "<tr>" +
+              "<td style='padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap'>" + fmtSessionDate(l.createdAt) + "</td>" +
+              "<td style='padding:6px 8px;border-bottom:1px solid var(--border);font-family:monospace;font-size:.9em'>" + escapeHTML(l.action || "—") + "</td>" +
+              "<td style='padding:6px 8px;border-bottom:1px solid var(--border);'>" + escapeHTML(l.details || "—") + "</td>" +
+              "</tr>";
+          }).join("") +
+          "</tbody></table>";
+      })
+      .catch(function () {
+        body.innerHTML = '<p style="color:#b00;text-align:center;margin:10px 0;">שגיאה בטעינת הפעילות</p>';
+      });
+  }
+
+  [activeTable, historyTable].forEach(function (table) {
+    if (!table) return;
+    table.addEventListener("click", function (e) {
+      var btn = e.target.closest(".session-activity-btn");
+      if (!btn) return;
+      openActivityModal(btn.dataset.workerId, btn.dataset.workerName);
+    });
+  });
+
+  // ── Export to Excel ──────────────────────────────────────────────────────────
+
+  function exportToExcel() {
+    if (typeof XLSX === "undefined") { alert("ספריית ייצוא לא נטענה"); return; }
+
+    var activeRows = applyControls(_rawActive.map(buildActiveRow)).map(function (r) {
+      return {
+        "עובד": r.workerName, "תפקיד": r.role,
+        "זמן כניסה": fmtSessionDate(r.loginAt), "פעילות אחרונה": fmtSessionDate(r.lastHeartbeat),
+        "משך התחברות": fmtDuration(r.durationMs),
+        "חיבורים פעילים": countActiveConnections(r.workerId),
+        "מזהה סשן": shortSessionId(r.sessionId),
+        "IP": r.ip, "דפדפן": r.browser, "מערכת הפעלה": r.os,
+        "פעולה אחרונה": lastActionText(r), "סטטוס": statusText(r.status),
+      };
+    });
+
+    var historyRows = applyControls(_rawHistory.map(buildHistoryRow)).map(function (r) {
+      return {
+        "עובד": r.workerName, "תפקיד": r.role,
+        "כניסה": fmtSessionDate(r.loginAt), "יציאה": fmtSessionDate(r.logoutAt),
+        "משך סשן": fmtDuration(r.durationMs), "סיבת סיום": END_REASON_TEXT[r.status] || "—",
+        "מזהה סשן": shortSessionId(r.sessionId),
+        "IP": r.ip, "דפדפן": r.browser, "מערכת הפעלה": r.os, "סטטוס": statusText(r.status),
+        "פעולה אחרונה": lastActionText(r),
+      };
+    });
+
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(activeRows),  "מחוברים עכשיו");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(historyRows), "היסטוריה");
+    XLSX.writeFile(wb, "sessions-" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  }
+
+  // ── Wiring ───────────────────────────────────────────────────────────────────
+
+  if (refreshBtn)   refreshBtn.addEventListener("click", loadSessionsPanel);
+  if (exportBtn)    exportBtn.addEventListener("click", exportToExcel);
+  if (searchInput)  searchInput.addEventListener("input", renderAll);
+  if (statusFilter) statusFilter.addEventListener("change", renderAll);
+  if (sortSelect)   sortSelect.addEventListener("change", renderAll);
+  if (clearBtn) {
+    clearBtn.addEventListener("click", function () {
+      if (searchInput)  searchInput.value  = "";
+      if (statusFilter) statusFilter.value = "";
+      if (sortSelect)   sortSelect.value   = "lastHeartbeat-desc";
+      renderAll();
+    });
+  }
+
   loadSessionsPanel();
 }());

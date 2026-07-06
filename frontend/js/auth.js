@@ -116,6 +116,16 @@ function requireAdminAction(message) {
 
 // ── Session heartbeat ─────────────────────────────────────────────────────────
 
+// An admin disconnected this session remotely from the sessions screen — end the
+// local session the same way an expired one ends, but with a distinct message.
+function _handleForcedLogout() {
+  if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+  sessionStorage.removeItem("authToken");
+  sessionStorage.removeItem("currentUser");
+  sessionStorage.removeItem("sessionId");
+  window.location.replace(_loginRedirectTarget("forced=1"));
+}
+
 function _sendHeartbeat() {
   var token     = getAuthToken();
   var sessionId = sessionStorage.getItem("sessionId") || "";
@@ -124,6 +134,10 @@ function _sendHeartbeat() {
     method:  "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
     body:    JSON.stringify({ sessionId: sessionId }),
+  }).then(function (res) {
+    return res.json().catch(function () { return {}; });
+  }).then(function (data) {
+    if (data && data.forceLogout) _handleForcedLogout();
   }).catch(function () { /* silent — heartbeat failures do not affect UX */ });
 }
 

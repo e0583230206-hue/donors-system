@@ -49,6 +49,10 @@ const {
   createWorkerSession,
   heartbeatSession,
   closeWorkerSession,
+  getSessionBySessionId,
+  forceLogoutSession,
+  getLastActionsByWorker,
+  getAuditLogsByWorker,
   getActiveSessions,
   getSessionHistory,
 } = require("./db");
@@ -269,6 +273,12 @@ app.post("/api/sessions/heartbeat", requireAuth, function (req, res, next) {
   try {
     var sessionId = (req.body || {}).sessionId;
     if (sessionId) heartbeatSession(String(sessionId));
+    // An admin may have force-logged-out this session from the sessions screen —
+    // tell the client so it can redirect to login instead of silently drifting.
+    var session = sessionId ? getSessionBySessionId(String(sessionId)) : null;
+    if (session && session.status === "forced_logout") {
+      return res.json({ ok: true, forceLogout: true });
+    }
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -277,10 +287,59 @@ app.post("/api/sessions/heartbeat", requireAuth, function (req, res, next) {
 
 app.get("/api/admin/sessions", requireRole([ROLES.ADMIN]), function (req, res, next) {
   try {
-    res.json({
-      active:  getActiveSessions(),
-      history: getSessionHistory(200),
-    });
+    var active      = getActiveSessions();
+    var history     = getSessionHistory(200);
+    var lastActions = getLastActionsByWorker();
+    active.forEach(function (s)  { s.lastAction = lastActions[s.workerId] || null; });
+    history.forEach(function (s) { s.lastAction = lastActions[s.workerId] || null; });
+    res.json({ active: active, history: history });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-only remote disconnect of another worker's live session.
+app.post("/api/admin/sessions/:sessionId/force-logout", apiLimiter, requireRole([ROLES.ADMIN]), function (req, res, next) {
+  try {
+    var sessionId = String(req.params.sessionId || "").trim();
+    if (!sessionId) return res.status(400).json({ error: "sessionId חסר" });
+
+    var session = getSessionBySessionId(sessionId);
+    if (!session) return res.status(404).json({ error: "session לא נמצא" });
+    if (session.status !== "active") return res.status(400).json({ error: "המשתמש כבר אינו מחובר" });
+    if (Number(session.workerId) === Number(req.user.id)) {
+      return res.status(400).json({ error: "לא ניתן לנתק את המשתמש המחובר של עצמך" });
+    }
+
+    var closed = forceLogoutSession(sessionId);
+    if (!closed) return res.status(409).json({ error: "המשתמש כבר אינו מחובר" });
+
+    try {
+      insertAuditLog({
+        action:     "force_logout",
+        entityType: "worker",
+        entityId:   session.workerId,
+        entityName: session.workerName,
+        details:    "המשתמש " + req.user.name + " ניתק מרחוק את " + session.workerName,
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+    } catch (_) {}
+
+    return res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-only — last N audit-log entries for one worker (the "פעילות אחרונה" modal).
+app.get("/api/admin/workers/:workerId/audit-log", requireRole([ROLES.ADMIN]), function (req, res, next) {
+  try {
+    var workerId = Number(req.params.workerId);
+    if (!workerId) return res.status(400).json({ error: "workerId לא תקין" });
+    var limit = Math.min(Number(req.query.limit) || 10, 50);
+    res.json(getAuditLogsByWorker(workerId, limit));
   } catch (err) {
     next(err);
   }

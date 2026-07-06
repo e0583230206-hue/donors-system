@@ -2344,3 +2344,31 @@ body.sidebar-collapsed .sidebar-search { display: none; }
 @keyframes btn-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ---- Sessions table row tints by status (subtle, matches site palette) ---- */
+tbody tr.row-status-active        { background: var(--success-soft); }
+tbody tr.row-status-logout        { background: var(--surface-subtle); }
+tbody tr.row-status-timeout       { background: var(--danger-soft); }
+tbody tr.row-status-forced_logout { background: var(--warning-soft); }
+
+/* ---- Small modal for the "פעילות אחרונה" (recent activity) window ---- */
+.mini-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(31, 24, 12, 0.45);
+  z-index: 1200; display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 60px;
+}
+.mini-modal {
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);
+  max-width: 560px; width: 92%; max-height: 70vh; overflow-y: auto;
+  border: 1px solid var(--border);
+}
+.mini-modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.mini-modal-header h3 { margin: 0; font-size: 1.05em; }
+.mini-modal-close {
+  background: none; border: none; font-size: 1.3em; cursor: pointer; color: var(--muted);
+}
+.mini-modal-body { padding: 14px 20px 20px; }
+.mini-modal-body table { min-width: 0; }

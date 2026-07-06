@@ -139,5 +139,8 @@ passwordInput.addEventListener("keydown", function (e) {
 if (new URLSearchParams(window.location.search).get("expired") === "1") {
   showMessage("פג תוקף החיבור — נא להתחבר מחדש", "error");
 }
+if (new URLSearchParams(window.location.search).get("forced") === "1") {
+  showMessage("החיבור שלך נותק על ידי מנהל המערכת — נא להתחבר מחדש", "error");
+}
 
 loadWorkers();

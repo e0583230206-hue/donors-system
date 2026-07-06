@@ -45,16 +45,6 @@ function setupSidebarToggle() {
     if (settingsAnchor) nav.insertBefore(syncA, settingsAnchor);
     else nav.appendChild(syncA);
   }
-  if (_isAdmin && nav && !nav.querySelector('a[href="sessions.html"]')) {
-    var sessionsA = document.createElement("a");
-    sessionsA.href = "sessions.html";
-    sessionsA.textContent = "🟢 Sessions";
-    if (window.location.pathname.endsWith("sessions.html")) sessionsA.className = "active";
-    var settingsAnchor2 = nav.querySelector('a[href="settings.html"]');
-    if (settingsAnchor2) nav.insertBefore(sessionsA, settingsAnchor2);
-    else nav.appendChild(sessionsA);
-  }
-
   // Inject softphone link (opens in new tab so it stays open while working)
   if (nav && !nav.querySelector('a[href="softphone.html"]')) {
     var phoneA = document.createElement("a");

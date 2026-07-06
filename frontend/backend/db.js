@@ -1014,6 +1014,52 @@ function closeWorkerSession(sessionId, reason) {
     .run(nowIso(), status, String(sessionId));
 }
 
+function getSessionBySessionId(sessionId) {
+  if (!sessionId) return null;
+  return db.prepare("SELECT * FROM worker_sessions WHERE sessionId = ? LIMIT 1").get(String(sessionId));
+}
+
+// Admin-initiated remote disconnect. Distinct from closeWorkerSession (self logout / auto-timeout)
+// so the session history can tell them apart.
+function forceLogoutSession(sessionId) {
+  if (!sessionId) return false;
+  var result = db.prepare("UPDATE worker_sessions SET logoutAt = ?, status = 'forced_logout' WHERE sessionId = ? AND status = 'active'")
+    .run(nowIso(), String(sessionId));
+  return result.changes > 0;
+}
+
+// Most recent server_audit_log entry per workerId — used to show "פעולה אחרונה"
+// on the sessions screen without fabricating data when none exists.
+function getLastActionsByWorker() {
+  var rows = db.prepare(`
+    SELECT a.workerId, a.action, a.details, a.createdAt
+    FROM server_audit_log a
+    INNER JOIN (
+      SELECT workerId, MAX(id) AS maxId
+      FROM server_audit_log
+      WHERE workerId IS NOT NULL
+      GROUP BY workerId
+    ) latest ON latest.workerId = a.workerId AND latest.maxId = a.id
+  `).all();
+  var map = {};
+  rows.forEach(function (r) {
+    map[r.workerId] = { action: r.action, details: r.details, createdAt: r.createdAt };
+  });
+  return map;
+}
+
+// Last N server_audit_log entries for one worker — backs the "פעילות אחרונה" modal.
+function getAuditLogsByWorker(workerId, limit) {
+  if (!workerId) return [];
+  return db.prepare(`
+    SELECT id, createdAt, action, details
+    FROM server_audit_log
+    WHERE workerId = ?
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(Number(workerId), Math.min(Number(limit) || 10, 50));
+}
+
 function getActiveSessions() {
   // Auto-expire sessions silent for more than SESSION_TIMEOUT_HOURS
   var cutoff = new Date(Date.now() - SESSION_TIMEOUT_HOURS * 3600 * 1000).toISOString();
@@ -1039,18 +1085,22 @@ function getActiveSessions() {
   }
 
   return db.prepare(`
-    SELECT id, sessionId, workerId, workerName, loginAt, lastHeartbeat, ip, userAgent, status
-    FROM worker_sessions
-    WHERE status = 'active'
-    ORDER BY loginAt DESC
+    SELECT ws.id, ws.sessionId, ws.workerId, ws.workerName, ws.loginAt, ws.lastHeartbeat,
+           ws.ip, ws.userAgent, ws.status, w.role AS workerRole
+    FROM worker_sessions ws
+    LEFT JOIN workers w ON w.id = ws.workerId
+    WHERE ws.status = 'active'
+    ORDER BY ws.loginAt DESC
   `).all();
 }
 
 function getSessionHistory(limit) {
   return db.prepare(`
-    SELECT id, sessionId, workerId, workerName, loginAt, lastHeartbeat, logoutAt, ip, userAgent, status
-    FROM worker_sessions
-    ORDER BY loginAt DESC
+    SELECT ws.id, ws.sessionId, ws.workerId, ws.workerName, ws.loginAt, ws.lastHeartbeat,
+           ws.logoutAt, ws.ip, ws.userAgent, ws.status, w.role AS workerRole
+    FROM worker_sessions ws
+    LEFT JOIN workers w ON w.id = ws.workerId
+    ORDER BY ws.loginAt DESC
     LIMIT ?
   `).all(Number(limit) || 200);
 }
@@ -1189,6 +1239,10 @@ module.exports = {
   createWorkerSession,
   heartbeatSession,
   closeWorkerSession,
+  getSessionBySessionId,
+  forceLogoutSession,
+  getLastActionsByWorker,
+  getAuditLogsByWorker,
   getActiveSessions,
   getSessionHistory,
   // Phone normalization (shared with sync service)

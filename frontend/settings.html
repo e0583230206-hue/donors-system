@@ -152,11 +152,57 @@
 
       <section class="panel" id="sessionsPanel" style="display:none;">
         <h2>🔐 ניהול כניסות ויציאות</h2>
-        <p style="color:var(--muted);margin-bottom:14px;font-size:14px">מעקב אחר כניסות ויציאות של עובדים למערכת — גלוי למנהלים בלבד.</p>
+        <p style="color:var(--muted);margin-bottom:14px;font-size:14px">מעקב אחר כניסות ויציאות של עובדים למערכת, כולל ניתוק מרחוק — גלוי למנהלים בלבד.</p>
+
+        <div class="stats-grid" style="margin-bottom:18px;">
+          <div class="stat-card success">
+            <h3>🟢 מחוברים עכשיו</h3>
+            <strong id="statActiveNow">0</strong>
+            <p>עובדים מחוברים</p>
+          </div>
+          <div class="stat-card">
+            <h3>➡️ התחברויות היום</h3>
+            <strong id="statLoginsToday">0</strong>
+            <p>כניסות למערכת היום</p>
+          </div>
+          <div class="stat-card">
+            <h3>⬅️ יציאות היום</h3>
+            <strong id="statLogoutsToday">0</strong>
+            <p>יציאות רגילות היום</p>
+          </div>
+          <div class="stat-card warning">
+            <h3>⏱ פג תוקף היום</h3>
+            <strong id="statTimeoutsToday">0</strong>
+            <p>סשנים שפג תוקפם היום</p>
+          </div>
+        </div>
 
         <div class="form-grid">
-          <button id="refreshSessionsBtn" class="secondary-btn">🔄 רענון</button>
+          <input id="sessionsSearchInput" type="search" placeholder="🔍 חיפוש לפי שם עובד, IP, דפדפן או מערכת הפעלה..." />
+          <select id="sessionsStatusFilter">
+            <option value="">כל הסטטוסים</option>
+            <option value="active">מחוברים</option>
+            <option value="logout">מנותקים</option>
+            <option value="timeout">פג תוקף</option>
+            <option value="forced_logout">נותקו ע"י מנהל</option>
+          </select>
+          <select id="sessionsSortSelect">
+            <option value="lastHeartbeat-desc">מיון לפי: פעילות אחרונה</option>
+            <option value="loginAt-desc">מיון לפי: זמן כניסה</option>
+            <option value="logoutAt-desc">מיון לפי: זמן יציאה</option>
+            <option value="workerName-asc">מיון לפי: שם עובד</option>
+            <option value="duration-desc">מיון לפי: משך סשן</option>
+          </select>
         </div>
+        <div class="form-grid" style="margin-bottom:10px;">
+          <button id="refreshSessionsBtn" class="secondary-btn">🔄 רענון</button>
+          <button id="exportSessionsBtn" class="success-btn">📊 ייצוא לאקסל</button>
+          <button id="clearSessionsFiltersBtn" class="secondary-btn">🧹 נקה פילטרים</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:.9em;color:var(--muted);margin-bottom:18px;cursor:pointer;">
+          <input type="checkbox" id="sessionsAutoRefresh" style="width:16px;height:16px;cursor:pointer;" />
+          רענון אוטומטי כל 30 שניות
+        </label>
 
         <h3 style="margin:20px 0 10px;font-size:1em;color:var(--text);">🟢 מחוברים עכשיו</h3>
         <div class="table-wrap">
@@ -164,16 +210,22 @@
             <thead>
               <tr>
                 <th>עובד</th>
+                <th>תפקיד</th>
                 <th>זמן כניסה</th>
                 <th>פעילות אחרונה</th>
                 <th>משך התחברות</th>
-                <th>דפדפן / מכשיר</th>
+                <th>חיבורים פעילים</th>
+                <th>מזהה סשן</th>
                 <th>כתובת IP</th>
+                <th>דפדפן</th>
+                <th>מערכת הפעלה</th>
                 <th>סטטוס</th>
+                <th>פעולות אחרונות</th>
+                <th>פעולה</th>
               </tr>
             </thead>
             <tbody id="activeSessionsTable">
-              <tr><td colspan="7" style="text-align:center;color:var(--muted)">טוען...</td></tr>
+              <tr><td colspan="13" style="text-align:center;color:var(--muted)">טוען...</td></tr>
             </tbody>
           </table>
         </div>
@@ -184,16 +236,21 @@
             <thead>
               <tr>
                 <th>עובד</th>
+                <th>תפקיד</th>
                 <th>כניסה</th>
                 <th>יציאה</th>
-                <th>משך חיבור</th>
-                <th>דפדפן / מכשיר</th>
+                <th>משך סשן</th>
+                <th>סיבת סיום</th>
+                <th>מזהה סשן</th>
                 <th>כתובת IP</th>
+                <th>דפדפן</th>
+                <th>מערכת הפעלה</th>
                 <th>סטטוס</th>
+                <th>פעולות אחרונות</th>
               </tr>
             </thead>
             <tbody id="sessionsHistoryTable">
-              <tr><td colspan="7" style="text-align:center;color:var(--muted)">טוען...</td></tr>
+              <tr><td colspan="12" style="text-align:center;color:var(--muted)">טוען...</td></tr>
             </tbody>
           </table>
         </div>
@@ -250,6 +307,7 @@
     <script src="js/hebrew-date.js"></script>
     <script src="js/audit-log.js"></script>
     <script src="js/system-clock.js"></script>
+    <script src="js/vendor/xlsx.full.min.js"></script>
     <script src="js/settings.js"></script>
     <script src="js/toast.js"></script>
     <script src="js/notifications.js"></script>
