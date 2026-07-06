@@ -1,4 +1,40 @@
-/* global apiFetch, Database, showToast, escapeHTML */
+/* global apiFetch, Database, showToast, escapeHTML, isAdmin */
+
+// ── Fallback mode (admin-only) ────────────────────────────────────────────────
+var _fallbackEnabled = false;
+
+function _injectFallbackSection() {
+  if (!isAdmin()) return;
+  var sendBtn = document.getElementById("sendButton");
+  if (!sendBtn) return;
+
+  var card = document.createElement("div");
+  card.className = "send-card";
+  card.style.borderColor = "#e65100";
+  card.id = "adminFallbackCard";
+  card.innerHTML =
+    '<div class="send-card-header" style="background:#fff3e0;color:#bf360c;">' +
+      '⚠️ אפשרות מנהל — Phone Fallback' +
+    '</div>' +
+    '<div class="send-card-body">' +
+      '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">' +
+        '<input type="checkbox" id="fallbackCheckbox" style="margin-top:3px;flex-shrink:0" />' +
+        '<span style="font-size:.92em">כלול גם <strong>טלפון ראשי</strong> של תורמים שלא אושרו ל-IVR<br>' +
+        '<span style="color:#888;font-size:.88em">ברירת מחדל: כבוי. משתמש ב-phone בלבד, לא ב-phone2/phone3/phone4.</span></span>' +
+      '</label>' +
+      '<div id="fallbackWarning" style="display:none;margin-top:10px;padding:10px 12px;background:#ffebee;border-radius:6px;font-size:.86em;color:#c62828;line-height:1.6">' +
+        '⚠️ <strong>אזהרה:</strong> מצב זה שולח לתורמים שלא אישרו קבלת שיחות IVR. יש לוודא שיש אישור חוקי לפני שליחה.' +
+      '</div>' +
+    '</div>';
+
+  sendBtn.parentNode.insertBefore(card, sendBtn);
+
+  document.getElementById("fallbackCheckbox").addEventListener("change", function () {
+    _fallbackEnabled = this.checked;
+    document.getElementById("fallbackWarning").style.display = this.checked ? "block" : "none";
+    refreshCount();
+  });
+}
 
 // ── Radio-card visual selection helper ───────────────────────────────────────
 
@@ -63,15 +99,26 @@ async function loadAudienceOptions() {
   await refreshCount();
 }
 
-var _lastDonorCount = 0;
+var _lastDonorCount     = 0;
+var _lastIvrPhones      = 0;
+var _lastFallbackPhones = 0;
+var _lastFallbackDonors = 0;
 
 async function fetchCount(filter) {
   try {
-    var res  = await apiFetch("/api/technoline/send/recipient-count?filter=" + encodeURIComponent(filter));
+    var url = "/api/technoline/send/recipient-count?filter=" + encodeURIComponent(filter) +
+              (_fallbackEnabled ? "&fallback=1" : "");
+    var res  = await apiFetch(url);
     var data = await res.json();
-    _lastDonorCount = data.donorCount || 0;
+    _lastDonorCount     = data.donorCount         || 0;
+    _lastIvrPhones      = data.ivrPhoneCount       || 0;
+    _lastFallbackPhones = data.fallbackPhoneCount  || 0;
+    _lastFallbackDonors = data.fallbackDonorCount  || 0;
     return data.count || 0;
-  } catch (_) { _lastDonorCount = 0; return 0; }
+  } catch (_) {
+    _lastDonorCount = _lastIvrPhones = _lastFallbackPhones = _lastFallbackDonors = 0;
+    return 0;
+  }
 }
 
 function getAudienceFilter() {
@@ -211,13 +258,18 @@ function updateSendButton(count) {
 
   btn.disabled = (n === 0 || !textFilled);
 
-  // Update button label: "שלח ל-X מספרים (Y תורמים)" when counts differ
+  // Rule 7: show split counts in button
   var countEl = document.getElementById("sendCount");
   if (countEl) {
-    var suffix = (_lastDonorCount > 0 && _lastDonorCount !== n)
-      ? n + " מספרים (" + _lastDonorCount + " תורמים)"
-      : n + " מספרים";
-    countEl.textContent = suffix;
+    var label;
+    if (_lastFallbackPhones > 0) {
+      label = n + " מספרים (" + _lastIvrPhones + " IVR + " + _lastFallbackPhones + " fallback)";
+    } else if (_lastDonorCount > 0 && _lastDonorCount !== n) {
+      label = n + " מספרים (" + _lastDonorCount + " תורמים)";
+    } else {
+      label = n + " מספרים";
+    }
+    countEl.textContent = label;
   }
 }
 
@@ -250,19 +302,24 @@ document.getElementById("sendButton").addEventListener("click", async function (
     return;
   }
 
-  // Clear audience label for confirm dialog
+  // Rule 3: clear warning before send if fallback enabled
   var audLabel = getAudienceLabel();
-  if (!confirm("לשלוח הודעה ל-" + count + " מספרים" + (audLabel ? " (" + audLabel + ")" : "") + "?")) return;
+  var confirmMsg = "לשלוח הודעה ל-" + count + " מספרים" + (audLabel ? " (" + audLabel + ")" : "") + "?";
+  if (_fallbackEnabled && _lastFallbackPhones > 0) {
+    confirmMsg += "\n\n⚠️ אזהרה: " + _lastFallbackPhones + " מספרים הם phone fallback (לא אושרו ל-IVR).\nיש לך אישור חוקי לשלוח אליהם?";
+  }
+  if (!confirm(confirmMsg)) return;
 
   btn.disabled    = true;
   btn.textContent = "שולח...";
 
   try {
     var payload = {
-      recipientFilter: filter,
-      messageKind:     msgVal,
-      messageText:     msgText,
-      quietHours:      true,
+      recipientFilter:  filter,
+      messageKind:      msgVal,
+      messageText:      msgText,
+      quietHours:       true,
+      fallbackToPrimary: _fallbackEnabled,
     };
 
     var res  = await apiFetch("/api/technoline/send", { method: "POST", body: JSON.stringify(payload) });
@@ -272,6 +329,11 @@ document.getElementById("sendButton").addEventListener("click", async function (
       showStatus(data.error || "שגיאה בשיגור", "error");
     } else {
       var summary = "ההודעות נשוגרו ל-" + (data.phones || count) + " מספרים";
+      if (data.ivrPhoneCount > 0 || data.fallbackPhoneCount > 0) {
+        summary += " (" + data.ivrPhoneCount + " IVR";
+        if (data.fallbackPhoneCount > 0) summary += " + " + data.fallbackPhoneCount + " fallback ⚠️";
+        summary += ")";
+      }
       if (data.errorPhones)   summary += " | " + data.errorPhones   + " שגיאות פורמט";
       if (data.blockedPhones) summary += " | " + data.blockedPhones + " חסומים";
       showStatus("✅ " + summary, "success");
@@ -307,7 +369,9 @@ async function runDebug() {
   content.innerHTML   = "<em>טוען...</em>";
 
   try {
-    var res  = await apiFetch("/api/technoline/send/recipient-debug?filter=" + encodeURIComponent(filter));
+    var debugUrl = "/api/technoline/send/recipient-debug?filter=" + encodeURIComponent(filter) +
+                   (_fallbackEnabled ? "&fallback=1" : "");
+    var res  = await apiFetch(debugUrl);
     var data = await res.json();
 
     if (!res.ok) { content.innerHTML = escapeHTML(data.error || "שגיאה"); return; }
@@ -414,6 +478,7 @@ async function loadRecentLog() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 Database.whenReady(function () {
+  _injectFallbackSection();
   loadAudienceOptions();
   loadRecentLog();
 });

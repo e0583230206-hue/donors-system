@@ -769,17 +769,26 @@ function campaignErrMsg(body) {
 
 // Helper: build phone list from donors with ivrApprovedPhones, filtered by recipientFilter.
 // Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>"
-// Returns { phones: string[], donorCount: number }
-function buildPhoneList(recipientFilter) {
+// opts.fallbackToPrimary — if true, donors with no ivrApprovedPhones use d.phone as fallback.
+// Returns { phones, donorCount, ivrDonorCount, fallbackDonorCount, ivrPhoneCount, fallbackPhoneCount }
+function buildPhoneList(recipientFilter, opts) {
+  var fallbackToPrimary = !!(opts && opts.fallbackToPrimary);
   var donors = getAppState("donors") || [];
   var filter = String(recipientFilter || "all").trim();
-  var phones = [];
-  var donorCount = 0;
+  var ivrPhones      = [];   // from ivrApprovedPhones
+  var fallbackPhones = [];   // from d.phone (fallback only)
+  var donorCount = 0, ivrDonorCount = 0, fallbackDonorCount = 0;
+
   for (var i = 0; i < donors.length; i++) {
     var d        = donors[i];
     var approved = d.ivrApprovedPhones || [];
-    if (approved.length === 0) continue;
-    var include  = false;
+    var primary  = d.phone ? String(d.phone).trim() : "";
+
+    // Must have at least one phone source
+    if (approved.length === 0 && !(fallbackToPrimary && primary)) continue;
+
+    // Apply filter
+    var include = false;
     if (filter === "all") {
       include = true;
     } else if (filter === "debt") {
@@ -795,22 +804,49 @@ function buildPhoneList(recipientFilter) {
       include = true;
     }
     if (!include) continue;
+
     donorCount++;
-    for (var j = 0; j < approved.length; j++) {
-      if (phones.indexOf(approved[j]) === -1) phones.push(approved[j]);
+    if (approved.length > 0) {
+      ivrDonorCount++;
+      for (var j = 0; j < approved.length; j++) {
+        var p = approved[j];
+        if (ivrPhones.indexOf(p) === -1 && fallbackPhones.indexOf(p) === -1) ivrPhones.push(p);
+      }
+    } else {
+      // fallbackToPrimary guaranteed true here
+      fallbackDonorCount++;
+      if (primary && ivrPhones.indexOf(primary) === -1 && fallbackPhones.indexOf(primary) === -1) {
+        fallbackPhones.push(primary);
+      }
     }
   }
-  return { phones: phones, donorCount: donorCount };
+
+  return {
+    phones:             ivrPhones.concat(fallbackPhones),
+    donorCount:         donorCount,
+    ivrDonorCount:      ivrDonorCount,
+    fallbackDonorCount: fallbackDonorCount,
+    ivrPhoneCount:      ivrPhones.length,
+    fallbackPhoneCount: fallbackPhones.length,
+  };
 }
 
-// GET /api/technoline/send/recipient-count?filter=<filter>
+// GET /api/technoline/send/recipient-count?filter=<filter>[&fallback=1]
 app.get(
   "/api/technoline/send/recipient-count",
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   function (req, res, next) {
     try {
-      var result = buildPhoneList(req.query.filter || "all");
-      return res.json({ count: result.phones.length, donorCount: result.donorCount });
+      var fallback = req.query.fallback === "1" && req.userRole === ROLES.ADMIN;
+      var result   = buildPhoneList(req.query.filter || "all", { fallbackToPrimary: fallback });
+      return res.json({
+        count:              result.phones.length,
+        donorCount:         result.donorCount,
+        ivrPhoneCount:      result.ivrPhoneCount,
+        fallbackPhoneCount: result.fallbackPhoneCount,
+        ivrDonorCount:      result.ivrDonorCount,
+        fallbackDonorCount: result.fallbackDonorCount,
+      });
     } catch (err) { next(err); }
   }
 );
@@ -821,8 +857,9 @@ app.get(
   requireRole([ROLES.ADMIN]),
   function (req, res, next) {
     try {
-      var donors = getAppState("donors") || [];
-      var filter = String(req.query.filter || "debt").trim();
+      var donors   = getAppState("donors") || [];
+      var filter   = String(req.query.filter || "debt").trim();
+      var fallback = req.query.fallback === "1";
       var included = [], excluded = [];
 
       for (var i = 0; i < donors.length; i++) {
@@ -831,16 +868,20 @@ app.get(
         var hasDebt  = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
         var name     = d.fullName || ("תורם #" + d.id);
 
-        // Gate 1: must have ivrApprovedPhones
+        // Gate 1: must have ivrApprovedPhones (or fallback phone if fallback mode on)
         if (approved.length === 0) {
           var anyPhone = !!(d.phone || d.phone2 || d.phone3 || d.phone4 || (d.phones || []).length);
-          excluded.push({
-            id: d.id, name: name,
-            reason: "no_ivr_approved_phones",
-            detail: anyPhone ? "יש מספרי טלפון רגילים אבל אין ivrApprovedPhones" : "אין מספרי טלפון כלל",
-            hasPhone: anyPhone, hasDebt: hasDebt,
-          });
-          continue;
+          if (fallback && d.phone) {
+            // Will be handled as fallback — don't exclude yet, fall through to filter check
+          } else {
+            excluded.push({
+              id: d.id, name: name,
+              reason: "no_ivr_approved_phones",
+              detail: anyPhone ? "יש מספרי טלפון רגילים אבל אין ivrApprovedPhones" + (fallback && !d.phone ? " (ואין phone ראשי לfallback)" : "") : "אין מספרי טלפון כלל",
+              hasPhone: anyPhone, hasDebt: hasDebt,
+            });
+            continue;
+          }
         }
 
         // Gate 2: filter-specific
@@ -866,7 +907,12 @@ app.get(
         }
 
         if (include) {
-          included.push({ id: d.id, name: name, phones: approved });
+          var useFallback = approved.length === 0 && fallback && d.phone;
+          included.push({
+            id: d.id, name: name,
+            phones:   useFallback ? [d.phone] : approved,
+            source:   useFallback ? "phone_fallback" : "ivr_approved",
+          });
         } else {
           excluded.push({
             id: d.id, name: name,
@@ -930,13 +976,14 @@ app.post(
       var apiKey = process.env.TECHNOLINE_API_KEY || "";
       if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
 
-      var body            = req.body || {};
-      var title           = String(body.title           || "").trim();
-      var messageKind     = String(body.messageKind     || "ivr").trim();   // "ivr" | "text"
-      var messageText     = String(body.messageText     || "").trim();
-      var recipientFilter = String(body.recipientFilter || "all").trim();
-      var sendTime        = body.sendTime || null;
-      var quietHours      = body.quietHours !== false;   // default true
+      var body               = req.body || {};
+      var title              = String(body.title           || "").trim();
+      var messageKind        = String(body.messageKind     || "ivr").trim();   // "ivr" | "text"
+      var messageText        = String(body.messageText     || "").trim();
+      var recipientFilter    = String(body.recipientFilter || "all").trim();
+      var sendTime           = body.sendTime || null;
+      var quietHours         = body.quietHours !== false;   // default true
+      var fallbackToPrimary  = !!(body.fallbackToPrimary); // admin-only; default false
 
       // Resolve IVR extension: use env, fallback to body.extension for advanced callers
       var ivrExtension = String(
@@ -945,11 +992,12 @@ app.post(
 
       // Build phone list using filter
       var phonesOverride = body.phones || null;
-      var phones;
+      var phones, listResult;
       if (Array.isArray(phonesOverride) && phonesOverride.length > 0) {
         phones = phonesOverride;
+        listResult = { ivrPhoneCount: phones.length, fallbackPhoneCount: 0, fallbackDonorCount: 0 };
       } else {
-        var listResult = buildPhoneList(recipientFilter);
+        listResult = buildPhoneList(recipientFilter, { fallbackToPrimary: fallbackToPrimary });
         phones = listResult.phones;
       }
 
@@ -985,7 +1033,8 @@ app.post(
       }
 
       var urlParams = new URLSearchParams(params);
-      console.log("[Campaign] launching", phones.length, "phones | title:", title, "| kind:", messageKind);
+      console.log("[Campaign] launching", phones.length, "phones | title:", title, "| kind:", messageKind,
+        listResult.fallbackPhoneCount > 0 ? "| fallback phones: " + listResult.fallbackPhoneCount : "");
 
       var techRes  = await fetch("https://app.ipsales.co.il/campaignApi.php", {
         method:  "POST",
@@ -1001,13 +1050,29 @@ app.post(
         return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode });
       }
 
+      // Rule 8: log if fallback phones were included
+      if (listResult.fallbackPhoneCount > 0) {
+        try {
+          insertAuditLog({
+            action:     "campaign_fallback_send",
+            entityType: "campaign",
+            details:    "שיגור כולל " + listResult.fallbackPhoneCount + " מספרי phone fallback (לא ivrApprovedPhones) ו-" + listResult.ivrPhoneCount + " מספרי IVR | פילטר: " + recipientFilter,
+            workerId:   req.user && req.user.id,
+            workerName: req.user && req.user.name,
+            ip:         req.ip,
+          });
+        } catch (_) {}
+      }
+
       return res.json({
-        ok:            true,
-        campaignId:    techBody.campaignId,
-        phones:        techBody.phones,
-        errorPhones:   techBody.errorPhones,
-        blockedPhones: techBody.blockedPhones,
-        billing:       techBody.billing,
+        ok:                 true,
+        campaignId:         techBody.campaignId,
+        phones:             techBody.phones,
+        errorPhones:        techBody.errorPhones,
+        blockedPhones:      techBody.blockedPhones,
+        billing:            techBody.billing,
+        ivrPhoneCount:      listResult.ivrPhoneCount,
+        fallbackPhoneCount: listResult.fallbackPhoneCount,
       });
     } catch (err) {
       next(err);
