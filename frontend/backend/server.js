@@ -578,6 +578,7 @@ app.post(
         ringSec:    30,
       }));
 
+      console.log("[Click2Call] → URL: https://app.ipsales.co.il/ivrFilesApi.php");
       var techRes  = await fetch("https://app.ipsales.co.il/ivrFilesApi.php", {
         method:  "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -586,10 +587,15 @@ app.post(
       });
 
       var techHttpStatus = techRes.status;
-      var techBody = await techRes.json();
-
-      // Always log the full Technoline response for diagnostics
-      console.log("[Click2Call] ← Technoline HTTP", techHttpStatus, "| body:", JSON.stringify(techBody));
+      var rawText = await techRes.text();
+      console.log("[Click2Call] ← Technoline HTTP", techHttpStatus, "| body:", rawText);
+      var techBody;
+      try {
+        techBody = JSON.parse(rawText);
+      } catch (_) {
+        console.error("[Click2Call] ← תגובה לא-JSON מטכנוליין:", rawText.slice(0, 500));
+        return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
+      }
 
       var success  = techBody && String(techBody.status).toUpperCase() === "OK";
 
@@ -784,7 +790,7 @@ function buildPhoneList(recipientFilter, opts) {
 
   for (var i = 0; i < donors.length; i++) {
     var d       = donors[i];
-    var primary = d.phone ? String(d.phone).trim() : "";
+    var primary = normalizePhone(d.phone || "");
     // null/undefined ivrApprovedPhones → never configured → auto-include primary phone.
     // An explicit [] means admin cleared all approvals intentionally.
     var approved = (d.ivrApprovedPhones != null)
@@ -816,8 +822,8 @@ function buildPhoneList(recipientFilter, opts) {
     if (approved.length > 0) {
       ivrDonorCount++;
       for (var j = 0; j < approved.length; j++) {
-        var p = approved[j];
-        if (ivrPhones.indexOf(p) === -1 && fallbackPhones.indexOf(p) === -1) ivrPhones.push(p);
+        var p = normalizePhone(approved[j]);
+        if (p && ivrPhones.indexOf(p) === -1 && fallbackPhones.indexOf(p) === -1) ivrPhones.push(p);
       }
     } else {
       // fallbackToPrimary guaranteed true here
@@ -994,7 +1000,7 @@ app.post(
 
       var body        = req.body || {};
       var rawPhone    = String(body.phone || "").trim();
-      var phone       = rawPhone.replace(/\D/g, "");
+      var phone       = normalizePhone(rawPhone);
       var messageKind = String(body.messageKind || "ivr").trim();
       var messageText = String(body.messageText || "").trim();
 
@@ -1027,7 +1033,9 @@ app.post(
       }
 
       var urlParams = new URLSearchParams(params);
-      console.log("[Campaign/Manual] sending to", phone, "| kind:", messageKind);
+      var logParamsManual = Object.assign({}, params, { apiKey: maskSecret(params.apiKey) });
+      console.log("[Campaign/Manual] → URL: https://app.ipsales.co.il/campaignApi.php");
+      console.log("[Campaign/Manual] → payload:", JSON.stringify(logParamsManual));
 
       var techRes  = await fetch("https://app.ipsales.co.il/campaignApi.php", {
         method:  "POST",
@@ -1035,8 +1043,15 @@ app.post(
         body:    urlParams.toString(),
         signal:  AbortSignal.timeout(30000),
       });
-      var techBody = await techRes.json();
-      console.log("[Campaign/Manual] response:", JSON.stringify(techBody));
+      var rawTextManual = await techRes.text();
+      console.log("[Campaign/Manual] ← HTTP", techRes.status, "| body:", rawTextManual);
+      var techBody;
+      try {
+        techBody = JSON.parse(rawTextManual);
+      } catch (_) {
+        console.error("[Campaign/Manual] ← תגובה לא-JSON מטכנוליין:", rawTextManual.slice(0, 500));
+        return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
+      }
 
       if (String(techBody.status).toUpperCase() !== "OK") {
         return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode, techBody: techBody });
@@ -1120,6 +1135,9 @@ app.post(
       }
 
       var urlParams = new URLSearchParams(params);
+      var logParamsCampaign = Object.assign({}, params, { apiKey: maskSecret(params.apiKey) });
+      console.log("[Campaign] → URL: https://app.ipsales.co.il/campaignApi.php");
+      console.log("[Campaign] → payload:", JSON.stringify(logParamsCampaign));
       console.log("[Campaign] launching", phones.length, "phones | title:", title, "| kind:", messageKind,
         listResult.fallbackPhoneCount > 0 ? "| fallback phones: " + listResult.fallbackPhoneCount : "");
 
@@ -1129,9 +1147,15 @@ app.post(
         body:    urlParams.toString(),
         signal:  AbortSignal.timeout(30000),
       });
-      var techBody = await techRes.json();
-
-      console.log("[Campaign] response:", JSON.stringify(techBody));
+      var rawTextCampaign = await techRes.text();
+      console.log("[Campaign] ← HTTP", techRes.status, "| body:", rawTextCampaign);
+      var techBody;
+      try {
+        techBody = JSON.parse(rawTextCampaign);
+      } catch (_) {
+        console.error("[Campaign] ← תגובה לא-JSON מטכנוליין:", rawTextCampaign.slice(0, 500));
+        return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
+      }
 
       if (String(techBody.status).toUpperCase() !== "OK") {
         return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode });
