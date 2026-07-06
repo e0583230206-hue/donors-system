@@ -2328,3 +2328,19 @@ body.sidebar-collapsed .sidebar-search { display: none; }
   .panel { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd !important; }
   body::before { display: none !important; }
 }
+
+/* ---- Inline button spinner (prevents double-click during async sends) ---- */
+.btn-spinner {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-left-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.15em;
+  margin-left: 0.4em;
+  animation: btn-spin 0.7s linear infinite;
+}
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}

@@ -1,4 +1,5 @@
 let donors = Database.get("donors");
+var selectedDonorIds = new Set();
 
 const nameInput = document.getElementById("nameInput");
 const phoneInput = document.getElementById("phoneInput");
@@ -259,6 +260,9 @@ function renderDonors() {
     card.className = "donor-card";
 
     card.innerHTML = `
+      <label style="position:absolute;top:10px;left:10px;cursor:pointer;">
+        <input type="checkbox" class="donor-select-checkbox" data-id="${donor.id}" ${selectedDonorIds.has(donor.id) ? "checked" : ""} style="width:18px;height:18px;cursor:pointer;" />
+      </label>
       <h3>👤 ${escapeHTML(donor.fullName)}</h3>
       ${tagsHtml}
       <p>📞 ${escapeHTML(donor.phone)}</p>
@@ -277,8 +281,70 @@ function renderDonors() {
         <button onclick="deleteDonor(${donor.id})" class="danger-btn">מחק</button>
       </div>
     `;
+    card.style.position = "relative";
 
     donorsList.appendChild(card);
+  });
+}
+
+// ── Bulk selection for campaign send ──────────────────────────────────────────
+
+function updateBulkSelectBar() {
+  var bar   = document.getElementById("bulkSelectBar");
+  var count = document.getElementById("bulkSelectCount");
+  if (!bar || !count) return;
+  var n = selectedDonorIds.size;
+  bar.style.display = n > 0 ? "flex" : "none";
+  count.textContent = n + " נבחרו";
+}
+
+if (donorsList) {
+  donorsList.addEventListener("change", function (e) {
+    if (!e.target.classList || !e.target.classList.contains("donor-select-checkbox")) return;
+    var id = Number(e.target.dataset.id);
+    if (e.target.checked) selectedDonorIds.add(id);
+    else selectedDonorIds.delete(id);
+    updateBulkSelectBar();
+  });
+}
+
+var bulkClearSelectionBtn = document.getElementById("bulkClearSelectionBtn");
+if (bulkClearSelectionBtn) {
+  bulkClearSelectionBtn.addEventListener("click", function () {
+    selectedDonorIds.clear();
+    updateBulkSelectBar();
+    renderDonors();
+  });
+}
+
+var bulkSendCampaignBtn = document.getElementById("bulkSendCampaignBtn");
+if (bulkSendCampaignBtn) {
+  bulkSendCampaignBtn.addEventListener("click", function () {
+    var selected = donors.filter(function (d) { return selectedDonorIds.has(d.id); });
+    if (selected.length === 0) return;
+
+    var withPhone = selected.filter(function (d) {
+      var approved = d.ivrApprovedPhones;
+      return (Array.isArray(approved) && approved.length > 0) || (approved == null && d.phone);
+    });
+    var withoutPhone = selected.filter(function (d) { return withPhone.indexOf(d) === -1; });
+
+    if (withPhone.length === 0) {
+      alert("לאף אחד מהתורמים שנבחרו אין מספר טלפון תקין לשליחה.");
+      return;
+    }
+    if (withoutPhone.length > 0) {
+      var names = withoutPhone.map(function (d) { return d.fullName; }).join(", ");
+      if (!confirm(
+        "⚠️ ל-" + withoutPhone.length + " תורמים אין מספר טלפון תקין ולא יכללו בשליחה:\n" + names +
+        "\n\nלהמשיך עם " + withPhone.length + " התורמים הנותרים?"
+      )) return;
+    }
+
+    try {
+      sessionStorage.setItem("campaignSelectedDonorIds", JSON.stringify(withPhone.map(function (d) { return d.id; })));
+    } catch (_) {}
+    window.location.href = "campaigns.html?selected=1";
   });
 }
 

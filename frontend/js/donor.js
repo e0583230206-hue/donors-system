@@ -1283,11 +1283,11 @@ Database.whenReady(function () {
       if (!confirm("📣 שלח צינתוק IVR\n\nתורם: " + donor.fullName + "\nמספר: " + phoneLabel + "\n\nהמשך?")) return;
 
       sendCampaignButton.disabled = true;
-      sendCampaignButton.textContent = "שולח...";
+      sendCampaignButton.innerHTML = 'שולח... <span class="btn-spinner"></span>';
       try {
         var res  = await apiFetch("/api/technoline/send/manual", {
           method: "POST",
-          body:   JSON.stringify({ phone: phone, messageKind: "ivr" }),
+          body:   JSON.stringify({ phone: phone, messageKind: "ivr", donorId: donor.id, donorName: donor.fullName }),
         });
         var data = await res.json();
         if (!res.ok) {
@@ -1296,6 +1296,7 @@ Database.whenReady(function () {
           showToast("❌ " + msg);
         } else {
           showToast("✅ צינתוק שוגר ל-" + phone + (data.campaignId ? " | מזהה: " + data.campaignId : ""));
+          loadClick2CallLogs();
         }
       } catch (_) {
         showToast("❌ שגיאת תקשורת עם השרת");

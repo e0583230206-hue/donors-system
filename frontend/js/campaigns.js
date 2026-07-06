@@ -60,6 +60,63 @@ document.querySelectorAll("input[name=message]").forEach(function (r) {
 
 var selectedDonorId   = null;
 var selectedDonorName = null;
+var selectedListIds   = [];
+
+// ── "Selected donors from list" row — filled via sessionStorage from donors.html ──
+function _initSelectedListRow() {
+  var raw = null;
+  try { raw = sessionStorage.getItem("campaignSelectedDonorIds"); } catch (_) {}
+  if (!raw) return;
+
+  var ids = [];
+  try { ids = JSON.parse(raw) || []; } catch (_) { ids = []; }
+  if (!Array.isArray(ids) || ids.length === 0) return;
+
+  selectedListIds = ids;
+  var rowSelected = document.getElementById("rowSelected");
+  if (!rowSelected) return;
+  rowSelected.style.display = "";
+
+  var donorsAll = Database.get("donors") || [];
+  var names = ids.map(function (id) {
+    var d = donorsAll.find(function (x) { return x.id === id; });
+    return d ? d.fullName : ("#" + id);
+  });
+  var info = document.getElementById("selectedListInfo");
+  if (info) info.textContent = names.slice(0, 15).join(", ") + (names.length > 15 ? " ...ועוד " + (names.length - 15) : "");
+
+  // Default to this audience since the user arrived here specifically to send to it.
+  var radio = rowSelected.querySelector("input[name=audience]");
+  if (radio) {
+    radio.checked = true;
+    document.querySelectorAll("#audienceGrid [data-value]").forEach(function (row) {
+      row.classList.toggle("selected", row === rowSelected);
+    });
+  }
+
+  var clearBtn = document.getElementById("clearSelectedListBtn");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", function (e) {
+      e.preventDefault();
+      _clearSelectedList();
+    });
+  }
+}
+
+function _clearSelectedList() {
+  selectedListIds = [];
+  try { sessionStorage.removeItem("campaignSelectedDonorIds"); } catch (_) {}
+  var rowSelected = document.getElementById("rowSelected");
+  if (rowSelected) rowSelected.style.display = "none";
+  var debtRadio = document.querySelector('input[name=audience][value=debt]');
+  if (debtRadio) {
+    debtRadio.checked = true;
+    document.querySelectorAll("#audienceGrid [data-value]").forEach(function (row) {
+      row.classList.toggle("selected", row.dataset.value === "debt");
+    });
+  }
+  refreshCount();
+}
 
 async function loadAudienceOptions() {
   try {
@@ -110,6 +167,7 @@ async function loadAudienceOptions() {
     }
   }
 
+  _initSelectedListRow();
   await refreshCount();
 }
 
@@ -148,6 +206,9 @@ function getAudienceFilter() {
   if (val === "donor") {
     return selectedDonorId ? "donor:" + selectedDonorId : null;
   }
+  if (val === "selected") {
+    return selectedListIds.length > 0 ? "ids:" + selectedListIds.join(",") : null;
+  }
   if (val === "manual") return "manual";
   return val; // "debt" | "all"
 }
@@ -181,9 +242,10 @@ async function refreshCount() {
   updateSendButton(count);
 
   // Update per-row badge for sub-selectors
-  if (audVal === "tag")    updateBadge("badgeTag",    count);
-  if (audVal === "city")   updateBadge("badgeCity",   count);
-  if (audVal === "donor")  updateBadge("badgeDonor",  count);
+  if (audVal === "tag")      updateBadge("badgeTag",      count);
+  if (audVal === "city")     updateBadge("badgeCity",     count);
+  if (audVal === "donor")    updateBadge("badgeDonor",    count);
+  if (audVal === "selected") updateBadge("badgeSelected", count);
 }
 
 function updateBadge(id, count) {
@@ -354,8 +416,8 @@ document.getElementById("sendButton").addEventListener("click", async function (
       return;
     }
     if (!confirm("🧪 בדיקה ידנית\n\nלשלוח הודעה מסוג " + msgVal + " למספר: " + phone + "?\n\nשים לב: שיחה תצא בפועל.")) return;
-    btn.disabled    = true;
-    btn.textContent = "שולח...";
+    btn.disabled  = true;
+    btn.innerHTML = 'שולח... <span class="btn-spinner"></span>';
     try {
       var res  = await apiFetch("/api/technoline/send/manual", {
         method: "POST",
@@ -366,12 +428,13 @@ document.getElementById("sendButton").addEventListener("click", async function (
         var errDetail = data.error || "שגיאה בשיגור";
         if (data.errorCode) errDetail += " (קוד: " + data.errorCode + ")";
         if (data.techBody)  errDetail += " | " + JSON.stringify(data.techBody);
-        showStatus(errDetail, "error");
+        showStatus("❌ נכשל | " + errDetail, "error");
       } else {
-        showStatus("✅ שוגר! מזהה קמפיין: " + (data.campaignId || "—") + " | מספר: " + data.phone, "success");
+        showStatus("✅ הצליח | נשלח 1 מספר | מזהה קמפיין: " + (data.campaignId || "—") + " | מספר: " + data.phone, "success");
         showToast("שיגור בדיקה הושלם");
         loadRecentLog();
       }
+      loadRecentRecipientLog();
     } catch (_) {
       showStatus("שגיאת תקשורת עם השרת", "error");
     } finally {
@@ -398,7 +461,7 @@ document.getElementById("sendButton").addEventListener("click", async function (
   if (!confirm(confirmMsg)) return;
 
   btn.disabled    = true;
-  btn.textContent = "שולח...";
+  btn.innerHTML   = 'שולח... <span class="btn-spinner"></span>';
 
   try {
     var payload = {
@@ -415,21 +478,25 @@ document.getElementById("sendButton").addEventListener("click", async function (
     if (!res.ok) {
       var errDetail = data.error || "שגיאה בשיגור";
       if (data.errorCode) errDetail += " (קוד: " + data.errorCode + ")";
-      showStatus(errDetail, "error");
+      showStatus("❌ " + errDetail, "error");
     } else {
-      var summary = "✅ שוגר!";
-      if (data.campaignId) summary += " מזהה: " + data.campaignId + " |";
-      summary += " " + (data.phones || count) + " מספרים";
+      var sent    = data.sentCount    != null ? data.sentCount    : count;
+      var success = data.successCount != null ? data.successCount : sent;
+      var failed  = data.failedCount  != null ? data.failedCount  : 0;
+      var summary = "✅ שוגר! נשלחו: " + sent + " | הצליחו: " + success + " | נכשלו: " + failed;
+      if (data.campaignId) summary += " | מזהה: " + data.campaignId;
       if (data.ivrPhoneCount > 0 || data.fallbackPhoneCount > 0) {
         summary += " (" + data.ivrPhoneCount + " IVR";
         if (data.fallbackPhoneCount > 0) summary += " + " + data.fallbackPhoneCount + " fallback ⚠️";
         summary += ")";
       }
-      if (data.errorPhones)   summary += " | " + data.errorPhones   + " שגיאות פורמט";
-      if (data.blockedPhones) summary += " | " + data.blockedPhones + " חסומים";
       showStatus(summary, "success");
       showToast("שיגור הושלם");
       loadRecentLog();
+      loadRecentRecipientLog();
+
+      // A "selected from list" send is one-shot — clear it so a stale list can't be resent.
+      if (audVal === "selected") _clearSelectedList();
     }
   } catch (_) {
     showStatus("שגיאת תקשורת עם השרת", "error");
@@ -446,6 +513,7 @@ function getAudienceLabel() {
   if (val === "tag")    return "תגית: " + ((document.getElementById("tagSelect")  || {}).value || "");
   if (val === "city")   return "עיר: "  + ((document.getElementById("citySelect") || {}).value || "");
   if (val === "donor" && selectedDonorName) return selectedDonorName;
+  if (val === "selected") return selectedListIds.length + " נבחרים מרשימה";
   if (val === "manual") return "בדיקה ידנית";
   return "";
 }
@@ -572,10 +640,59 @@ async function loadRecentLog() {
   }
 }
 
+// ── Recent per-recipient success/failure log (read-only) ─────────────────────
+
+async function loadRecentRecipientLog() {
+  var container = document.getElementById("recentRecipientLog");
+  if (!container) return;
+
+  try {
+    var res  = await apiFetch("/api/technoline/send/recent-logs");
+    var logs = await res.json();
+
+    if (!res.ok) {
+      container.innerHTML = '<p class="log-empty">' + escapeHTML((logs && logs.error) || "שגיאה בטעינה") + '</p>';
+      return;
+    }
+    if (!Array.isArray(logs) || logs.length === 0) {
+      container.innerHTML = '<p class="log-empty">אין צינתוקים קודמים</p>';
+      return;
+    }
+
+    container.innerHTML = '<table style="width:100%;font-size:.88em;border-collapse:collapse;">' +
+      '<thead><tr>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">תאריך</th>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">תורם</th>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">טלפון</th>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">סטטוס</th>' +
+      '<th style="text-align:right;padding:4px 8px;color:#888;font-weight:600;border-bottom:1px solid #eee;">שגיאה</th>' +
+      '</tr></thead><tbody>' +
+      logs.slice(0, 30).map(function (l) {
+        var dateStr = l.createdAt
+          ? new Date(l.createdAt).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem", hour12: false, dateStyle: "short", timeStyle: "short" })
+          : "—";
+        var statusHtml = l.status === "success"
+          ? '<span style="color:#1a7a1a;font-weight:600">🟢 הצליח</span>'
+          : '<span style="color:#b00;font-weight:600">🔴 נכשל</span>';
+        return "<tr>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5;white-space:nowrap'>" + escapeHTML(dateStr) + "</td>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + escapeHTML(l.donorName || "—") + "</td>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5' dir='ltr'>" + escapeHTML(l.donorPhone || "—") + "</td>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5'>" + statusHtml + "</td>" +
+          "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5;font-size:.85em;color:#555'>" + escapeHTML(l.errorNote || "—") + "</td>" +
+          "</tr>";
+      }).join("") +
+      "</tbody></table>";
+  } catch (_) {
+    container.innerHTML = '<p class="log-empty">לא ניתן לטעון לוג</p>';
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 Database.whenReady(function () {
   _injectFallbackSection();
   loadAudienceOptions();
   loadRecentLog();
+  loadRecentRecipientLog();
 });

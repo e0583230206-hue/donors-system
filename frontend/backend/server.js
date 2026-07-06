@@ -25,6 +25,7 @@ const {
   insertCallLog,
   logClick2Call,
   getClick2CallLogs,
+  getRecentClick2CallLogs,
   getDashboardStats,
   getIvrMonitorStats,
   getIvrAlerts,
@@ -774,12 +775,14 @@ function campaignErrMsg(body) {
 }
 
 // Helper: build phone list from donors, filtered by recipientFilter.
-// Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>"
+// Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>" | "ids:<id,id,...>"
 // Phone resolution order:
 //   1. d.ivrApprovedPhones (explicitly approved)
 //   2. d.phone auto-included when ivrApprovedPhones was never configured (null/undefined)
 //   3. d.phone as fallback when opts.fallbackToPrimary=true and ivrApprovedPhones is []
-// Returns { phones, donorCount, ivrDonorCount, fallbackDonorCount, ivrPhoneCount, fallbackPhoneCount }
+// Returns { phones, donorCount, ivrDonorCount, fallbackDonorCount, ivrPhoneCount, fallbackPhoneCount, donors }
+// `donors` lists every included donor with the phones actually queued for them — used to
+// write a Timeline entry per donor after a send, without re-deriving the filter logic.
 function buildPhoneList(recipientFilter, opts) {
   var fallbackToPrimary = !!(opts && opts.fallbackToPrimary);
   var donors = getAppState("donors") || [];
@@ -787,6 +790,10 @@ function buildPhoneList(recipientFilter, opts) {
   var ivrPhones      = [];
   var fallbackPhones = [];
   var donorCount = 0, ivrDonorCount = 0, fallbackDonorCount = 0;
+  var includedDonors = [];
+  var idSet = filter.startsWith("ids:")
+    ? filter.slice(4).split(",").map(function (s) { return Number(s.trim()); }).filter(function (n) { return !isNaN(n); })
+    : null;
 
   for (var i = 0; i < donors.length; i++) {
     var d       = donors[i];
@@ -813,24 +820,33 @@ function buildPhoneList(recipientFilter, opts) {
       include = (d.tags || []).indexOf(tag) !== -1;
     } else if (filter.startsWith("donor:")) {
       include = d.id === Number(filter.slice(6));
+    } else if (idSet) {
+      include = idSet.indexOf(d.id) !== -1;
     } else {
       include = true;
     }
     if (!include) continue;
 
     donorCount++;
+    var donorPhones = [];
     if (approved.length > 0) {
       ivrDonorCount++;
       for (var j = 0; j < approved.length; j++) {
         var p = normalizePhone(approved[j]);
-        if (p && ivrPhones.indexOf(p) === -1 && fallbackPhones.indexOf(p) === -1) ivrPhones.push(p);
+        if (!p) continue;
+        donorPhones.push(p);
+        if (ivrPhones.indexOf(p) === -1 && fallbackPhones.indexOf(p) === -1) ivrPhones.push(p);
       }
     } else {
       // fallbackToPrimary guaranteed true here
       fallbackDonorCount++;
-      if (primary && ivrPhones.indexOf(primary) === -1 && fallbackPhones.indexOf(primary) === -1) {
-        fallbackPhones.push(primary);
+      if (primary) {
+        donorPhones.push(primary);
+        if (ivrPhones.indexOf(primary) === -1 && fallbackPhones.indexOf(primary) === -1) fallbackPhones.push(primary);
       }
+    }
+    if (donorPhones.length > 0) {
+      includedDonors.push({ id: d.id, name: d.fullName || ("תורם #" + d.id), phones: donorPhones });
     }
   }
 
@@ -841,6 +857,7 @@ function buildPhoneList(recipientFilter, opts) {
     fallbackDonorCount: fallbackDonorCount,
     ivrPhoneCount:      ivrPhones.length,
     fallbackPhoneCount: fallbackPhones.length,
+    donors:             includedDonors,
   };
 }
 
@@ -874,6 +891,9 @@ app.get(
       var filter   = String(req.query.filter || "debt").trim();
       var fallback = req.query.fallback === "1";
       var included = [], excluded = [];
+      var idSet = filter.startsWith("ids:")
+        ? filter.slice(4).split(",").map(function (s) { return Number(s.trim()); }).filter(function (n) { return !isNaN(n); })
+        : null;
 
       for (var i = 0; i < donors.length; i++) {
         var d        = donors[i];
@@ -922,6 +942,9 @@ app.get(
         } else if (filter.startsWith("donor:")) {
           include = d.id === Number(filter.slice(6));
           if (!include) filterFail = "תורם אחר";
+        } else if (idSet) {
+          include = idSet.indexOf(d.id) !== -1;
+          if (!include) filterFail = "לא ברשימת הנבחרים";
         } else {
           include = true;
         }
@@ -958,6 +981,18 @@ app.get(
           ? "חלק מהתורמים נוקה להם ivrApprovedPhones ידנית. הפעל fallback לשלוח לmain phone."
           : null,
       });
+    } catch (err) { next(err); }
+  }
+);
+
+// GET /api/technoline/send/recent-logs — recent per-recipient success/failure log (all donors)
+app.get(
+  "/api/technoline/send/recent-logs",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var limit = Math.min(Number(req.query.limit) || 30, 200);
+      return res.json(getRecentClick2CallLogs(limit));
     } catch (err) { next(err); }
   }
 );
@@ -1003,6 +1038,8 @@ app.post(
       var phone       = normalizePhone(rawPhone);
       var messageKind = String(body.messageKind || "ivr").trim();
       var messageText = String(body.messageText || "").trim();
+      var donorId     = body.donorId   || null;
+      var donorName   = body.donorName ? String(body.donorName).trim() : null;
 
       if (!phone) return res.status(400).json({ error: "יש לציין מספר טלפון" });
       if (phone.length < 9 || phone.length > 15) return res.status(400).json({ error: "מספר טלפון לא תקין: " + rawPhone });
@@ -1053,7 +1090,37 @@ app.post(
         return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
       }
 
-      if (String(techBody.status).toUpperCase() !== "OK") {
+      var sendOk = String(techBody.status).toUpperCase() === "OK";
+
+      // Timeline + audit trail — best-effort, never blocks the Technoline response.
+      try {
+        logClick2Call({
+          pbxCallId:      sendOk && techBody.campaignId ? "campaign:" + techBody.campaignId : null,
+          workerId:       req.user ? req.user.id   : null,
+          workerName:     req.user ? req.user.name : null,
+          donorId:        donorId,
+          donorName:      donorName,
+          donorPhone:     phone,
+          agentExtension: messageKind === "ivr" ? ivrExtension : "text",
+          status:         sendOk ? "success" : "error",
+          errorCode:      sendOk ? null : (techBody.errorCode != null ? techBody.errorCode : null),
+          errorNote:      sendOk ? null : campaignErrMsg(techBody),
+        });
+        insertAuditLog({
+          action:     sendOk ? "campaign_send_single" : "campaign_send_single_failed",
+          entityType: "donor",
+          entityId:   donorId,
+          entityName: donorName,
+          details:    (sendOk ? "צינתוק בודד שוגר ל-" : "צינתוק בודד נכשל עבור ") + phone + (sendOk ? "" : " — " + campaignErrMsg(techBody)),
+          workerId:   req.user && req.user.id,
+          workerName: req.user && req.user.name,
+          ip:         req.ip,
+        });
+      } catch (logErr) {
+        console.error("[Campaign/Manual] Failed to write log — send result unaffected:", logErr.message);
+      }
+
+      if (!sendOk) {
         return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode, techBody: techBody });
       }
 
@@ -1157,22 +1224,63 @@ app.post(
         return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
       }
 
-      if (String(techBody.status).toUpperCase() !== "OK") {
-        return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode });
-      }
+      var sendOk = String(techBody.status).toUpperCase() === "OK";
 
-      // Rule 8: log if fallback phones were included
-      if (listResult.fallbackPhoneCount > 0) {
+      if (!sendOk) {
         try {
           insertAuditLog({
-            action:     "campaign_fallback_send",
+            action:     "campaign_send_failed",
             entityType: "campaign",
-            details:    "שיגור כולל " + listResult.fallbackPhoneCount + " מספרי phone fallback (לא ivrApprovedPhones) ו-" + listResult.ivrPhoneCount + " מספרי IVR | פילטר: " + recipientFilter,
+            details:    "שיגור נכשל | פילטר: " + recipientFilter + " | " + campaignErrMsg(techBody),
             workerId:   req.user && req.user.id,
             workerName: req.user && req.user.name,
             ip:         req.ip,
           });
         } catch (_) {}
+        return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode });
+      }
+
+      var acceptedCount = Number(techBody.phones) || phones.length;
+      var failedCount   = (Number(techBody.errorPhones) || 0) + (Number(techBody.blockedPhones) || 0);
+
+      // General audit trail — every bulk send, not just ones using phone fallback.
+      try {
+        insertAuditLog({
+          action:     "campaign_send",
+          entityType: "campaign",
+          entityId:   techBody.campaignId,
+          details:    "שיגור צינתוקים | פילטר: " + recipientFilter + " | נשלחו: " + phones.length +
+                      " | הצליחו: " + acceptedCount + " | נכשלו: " + failedCount +
+                      (listResult.fallbackPhoneCount > 0 ? " | כולל " + listResult.fallbackPhoneCount + " מספרי fallback" : ""),
+          workerId:   req.user && req.user.id,
+          workerName: req.user && req.user.name,
+          ip:         req.ip,
+        });
+      } catch (_) {}
+
+      // Timeline — one entry per donor whose phone was included in this send. Best-effort,
+      // skipped for the raw phonesOverride path (no donor list available there).
+      if (Array.isArray(listResult.donors)) {
+        listResult.donors.forEach(function (d) {
+          d.phones.forEach(function (p) {
+            try {
+              logClick2Call({
+                pbxCallId:      "campaign:" + techBody.campaignId,
+                workerId:       req.user ? req.user.id   : null,
+                workerName:     req.user ? req.user.name : null,
+                donorId:        d.id,
+                donorName:      d.name,
+                donorPhone:     p,
+                agentExtension: messageKind === "ivr" ? ivrExtension : "text",
+                status:         "success",
+                errorCode:      null,
+                errorNote:      null,
+              });
+            } catch (logErr) {
+              console.error("[Campaign] Failed to write timeline entry for donor", d.id, ":", logErr.message);
+            }
+          });
+        });
       }
 
       return res.json({
@@ -1184,6 +1292,9 @@ app.post(
         billing:            techBody.billing,
         ivrPhoneCount:      listResult.ivrPhoneCount,
         fallbackPhoneCount: listResult.fallbackPhoneCount,
+        sentCount:          phones.length,
+        successCount:       acceptedCount,
+        failedCount:        failedCount,
       });
     } catch (err) {
       next(err);

@@ -767,6 +767,18 @@ function getClick2CallLogs(sqliteDonorId, limit, phone) {
   return [];
 }
 
+// Latest click2call_logs rows across all donors — used by the campaigns screen
+// to show a system-wide success/failure log (as opposed to per-donor timeline).
+function getRecentClick2CallLogs(limit) {
+  var n = Math.min(Number(limit) || 30, 200);
+  return db.prepare(`
+    SELECT id, pbxCallId, workerName, donorId, donorName, donorPhone, agentExtension, status, errorNote, createdAt
+    FROM click2call_logs
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(n);
+}
+
 // ── App State (key-value store for frontend data) ────────────────────────────
 
 const ALLOWED_APP_STATE_KEYS = new Set([
@@ -1129,6 +1141,7 @@ module.exports = {
   // Click-to-Call
   logClick2Call,
   getClick2CallLogs,
+  getRecentClick2CallLogs,
   // App state
   getAppState,
   setAppState,

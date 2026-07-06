@@ -204,6 +204,17 @@
                 </div>
               </label>
 
+              <!-- selected donors from the donors list (checkbox multi-select) -->
+              <label class="aud-row" data-value="selected" id="rowSelected" style="display:none;">
+                <input type="radio" name="audience" value="selected" />
+                <span class="aud-label">נבחרים מרשימת תורמים</span>
+                <span class="aud-badge zero" id="badgeSelected">0</span>
+                <div class="aud-sub">
+                  <div id="selectedListInfo" style="font-size:.85em;color:#555;"></div>
+                  <button type="button" id="clearSelectedListBtn" class="secondary-btn" style="margin-top:6px;font-size:.85em;">נקה בחירה</button>
+                </div>
+              </label>
+
               <!-- specific donor -->
               <label class="aud-row" data-value="donor" id="rowDonor">
                 <input type="radio" name="audience" value="donor" />
@@ -288,6 +299,12 @@
         <div class="recent-log">
           <h3>שיגורים אחרונים</h3>
           <div id="recentLog"><p class="log-empty">טוען...</p></div>
+        </div>
+
+        <!-- Recent per-recipient success/failure log -->
+        <div class="recent-log">
+          <h3>לוג צינתוקים אחרונים — הצלחות / כישלונות</h3>
+          <div id="recentRecipientLog"><p class="log-empty">טוען...</p></div>
         </div>
 
       </div>
