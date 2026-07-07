@@ -582,6 +582,7 @@ function updateDonorDebtAfterPayment(phone, paidAmount) {
 
   var remaining = paidAmount;
   var affectedDebts = 0;
+  var touchedDebts = [];
   var now = nowIso();
 
   for (var i = 0; i < openDebts.length && remaining > 0.005; i++) {
@@ -592,16 +593,20 @@ function updateDonorDebtAfterPayment(phone, paidAmount) {
     if (remaining >= debtAmt - 0.005) {
       // Full payment of this debt
       remaining = Math.round((remaining - debtAmt) * 100) / 100;
+      debt.paidPartial = Math.round(((Number(debt.paidPartial) || 0) + debtAmt) * 100) / 100;
       debt.remainingDebt = 0;
       debt.paid = true;
       debt.paidAt = now;
       debt.paidVia = "ivr";
       affectedDebts++;
+      touchedDebts.push(debt);
     } else {
       // Partial payment — reduce remaining debt
+      debt.paidPartial = Math.round(((Number(debt.paidPartial) || 0) + remaining) * 100) / 100;
       debt.remainingDebt = Math.round((debtAmt - remaining) * 100) / 100;
       remaining = 0;
       affectedDebts++;
+      touchedDebts.push(debt);
     }
   }
 
@@ -610,7 +615,38 @@ function updateDonorDebtAfterPayment(phone, paidAmount) {
   }
 
   setAppState("donors", donors);
+  reconcileApprovalDraftsForDonor(donor.id, touchedDebts, now);
   return { donorFound: true, updated: true, affectedDebts: affectedDebts };
+}
+
+// Keeps existing approval drafts (approvals.html, app_state key "approvals") in sync
+// when an IVR payment changes a donation's remainingDebt — only updates/cancels an
+// existing "טיוטה" draft, never creates or approves a real charge.
+function reconcileApprovalDraftsForDonor(donorId, touchedDebts, now) {
+  if (!touchedDebts || touchedDebts.length === 0) return;
+  var approvals = getAppState("approvals");
+  if (!Array.isArray(approvals) || approvals.length === 0) return;
+
+  var changed = false;
+  touchedDebts.forEach(function (debt) {
+    var draft = approvals.find(function (a) {
+      return a.donorId === donorId && a.donationId === debt.id && a.status === "טיוטה";
+    });
+    if (!draft) return;
+
+    var remainingDebt = Number(debt.remainingDebt || 0);
+    if (remainingDebt <= 0) {
+      draft.status = "בוטל";
+      draft.cancelledAt = now;
+      draft.updatedAt = now;
+    } else {
+      draft.amount = remainingDebt;
+      draft.updatedAt = now;
+    }
+    changed = true;
+  });
+
+  if (changed) setAppState("approvals", approvals);
 }
 
 // ── Call Logs ────────────────────────────────────────────────────────────────
@@ -799,14 +835,23 @@ function getAppState(key) {
 
 function setAppState(key, data) {
   if (!ALLOWED_APP_STATE_KEYS.has(key)) return false;
+  var stamp = nowIso();
   db.prepare(`
     INSERT INTO app_state (key, value, updatedAt)
     VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET
       value     = excluded.value,
       updatedAt = excluded.updatedAt
-  `).run(String(key), JSON.stringify(data), nowIso());
+  `).run(String(key), JSON.stringify(data), stamp);
   return true;
+}
+
+// Cheap lookup used only to warn (never block) when a client saves a blob
+// based on a version that's no longer current — see /api/data/:key in server.js.
+function getAppStateUpdatedAt(key) {
+  if (!ALLOWED_APP_STATE_KEYS.has(key)) return null;
+  const row = db.prepare("SELECT updatedAt FROM app_state WHERE key = ? LIMIT 1").get(String(key));
+  return row ? row.updatedAt : null;
 }
 
 // ── Backup ───────────────────────────────────────────────────────────────────
@@ -1222,6 +1267,7 @@ module.exports = {
   // App state
   getAppState,
   setAppState,
+  getAppStateUpdatedAt,
   // Backup
   backupDatabase,
   restoreFromBackup,

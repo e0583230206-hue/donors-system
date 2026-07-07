@@ -37,19 +37,6 @@ function formatDateTime(iso) {
   return d.toLocaleString("he-IL", { timeZone: "Asia/Jerusalem", hour12: false });
 }
 
-function formatMoney(amount) {
-  if (amount == null) return "—";
-  return "₪" + Number(amount).toLocaleString("he-IL",
-    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function escapeHTML(s) {
-  if (s === null || s === undefined) return "";
-  return String(s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-
 function statusBadge(status) {
   if (status === "success")  return '<span class="badge badge-ok">🟢 הצליח</span>';
   if (status === "failed" || status === "error")

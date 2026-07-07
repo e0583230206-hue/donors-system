@@ -40,6 +40,14 @@
   </style>
 </head>
 <body>
+  <script src="js/auth.js"></script>
+  <script>
+    // This page lists internal QA/security test cases — admin-only, same as other
+    // management screens (sync.html, settings.html sessions panel).
+    if (typeof isAdmin === "function" && !isAdmin()) {
+      window.location.replace("index.html");
+    }
+  </script>
   <h1>📋 רשימת בדיקות E2E — א בלאט גמרא CRM</h1>
   <p class="subtitle">סמן כל בדיקה לאחר אימות ידני. המצב נשמר בדפדפן.</p>
 

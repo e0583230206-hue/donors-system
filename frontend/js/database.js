@@ -90,6 +90,11 @@ const Database = {
   _serverKeys: ["donors", "tasks", "logs", "settings", "approvals"],
   _serverLoadPromise: null,
 
+  // Last "updatedAt" seen from the server per key — echoed back on save purely so
+  // the server can log a warning if this tab is writing over a newer version saved
+  // by someone else in the meantime. Never blocks the save.
+  _lastKnownUpdatedAt: {},
+
   get: function (key) {
     if (key === "donors" && _CrmIDB.isUsingIDB()) {
       return _CrmIDB.getCache();
@@ -197,12 +202,18 @@ const Database = {
   // Pull a single key fresh from the server and update local storage.
   // Returns a Promise that resolves when done (or on error — never rejects).
   refreshFromServer: function (key) {
+    var self = this;
     var tok = this._getToken();
     if (!tok) return Promise.resolve();
     return fetch("/api/data/" + key, {
       headers: { "Authorization": "Bearer " + tok },
     })
-      .then(function (res) { return res.ok ? res.json() : undefined; })
+      .then(function (res) {
+        if (!res.ok) return undefined;
+        var stamp = res.headers.get("X-Data-Updated-At");
+        if (stamp) self._lastKnownUpdatedAt[key] = stamp;
+        return res.json();
+      })
       .then(function (data) {
         if (data === undefined) return;
         if (key === "donors" && _CrmIDB.isUsingIDB()) {
@@ -225,15 +236,23 @@ const Database = {
     if (this._serverKeys.indexOf(key) === -1) return;
     var token = this._getToken();
     if (!token) return;
+    var self = this;
+
+    var pushHeaders = {
+      "Content-Type":  "application/json",
+      "Authorization": "Bearer " + token,
+    };
+    if (self._lastKnownUpdatedAt[key]) {
+      pushHeaders["X-Expected-Updated-At"] = self._lastKnownUpdatedAt[key];
+    }
 
     fetch("/api/data/" + key, {
       method:  "POST",
-      headers: {
-        "Content-Type":  "application/json",
-        "Authorization": "Bearer " + token,
-      },
+      headers: pushHeaders,
       body: JSON.stringify(data),
-    }).then(function () {
+    }).then(function (res) {
+      var stamp = res.headers.get("X-Data-Updated-At");
+      if (stamp) self._lastKnownUpdatedAt[key] = stamp;
       if (key !== "donors") return;
       // Sync all phones to IVR donors table so the phone system can identify by any number
       var syncList = (Array.isArray(data) ? data : []).map(function (d) {
@@ -275,6 +294,8 @@ const Database = {
       })
         .then(function (res) {
           if (!res.ok) return;
+          var stamp = res.headers.get("X-Data-Updated-At");
+          if (stamp) self._lastKnownUpdatedAt[key] = stamp;
           return res.json();
         })
         .then(function (data) {

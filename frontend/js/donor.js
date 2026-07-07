@@ -77,6 +77,36 @@ function saveDonors() {
   Database.save("donors", donors);
 }
 
+// Keeps existing approval drafts (approvals.html) in sync when a donation's
+// remainingDebt changes here — never creates/approves a charge, only updates
+// or cancels an existing "טיוטה" so it doesn't keep showing a stale amount.
+function reconcileApprovalDrafts(affectedDonations) {
+  if (!affectedDonations || !affectedDonations.length) return;
+  var approvals = Database.get("approvals") || [];
+  var changed = false;
+  var now = new Date().toISOString();
+
+  affectedDonations.forEach(function (donation) {
+    var draft = approvals.find(function (a) {
+      return a.donorId === donor.id && a.donationId === donation.id && a.status === "טיוטה";
+    });
+    if (!draft) return;
+
+    var remainingDebt = Number(donation.remainingDebt || 0);
+    if (remainingDebt <= 0) {
+      draft.status = "בוטל";
+      draft.cancelledAt = now;
+      draft.updatedAt = now;
+    } else {
+      draft.amount = remainingDebt;
+      draft.updatedAt = now;
+    }
+    changed = true;
+  });
+
+  if (changed) Database.save("approvals", approvals);
+}
+
 function showMessage(element, text, type = "success") {
   element.innerText = text;
   element.className = "message show " + type;
@@ -880,10 +910,13 @@ function renderTimeline() {
     var phone = l.donorPhone ? " → " + escapeHTML(l.donorPhone) : "";
     var worker = l.workerName ? " | " + escapeHTML(l.workerName) : "";
     var errNote = l.errorNote ? " — " + escapeHTML(l.errorNote) : "";
+    var callStatusText = l.status === "success" ? "נשלח"
+      : l.status === "sent_unknown" ? "נשלח לקמפיין — סטטוס פרטני לא זמין"
+      : "נכשל";
     addEv("call", "call-" + l.id,
       l.createdAt || "",
       "צינתוק" + phone,
-      (l.status === "success" ? "נשלח" : "נכשל") + worker + errNote
+      callStatusText + worker + errNote
     );
   });
 
@@ -1008,6 +1041,7 @@ function addDonation() {
   donor.updatedAt = new Date().toISOString();
 
   saveDonors();
+  reconcileApprovalDrafts([newDonation]);
   AuditLog.record({
     action: "create",
     entityType: "donation",
@@ -1075,6 +1109,8 @@ function registerPartialPayment() {
     return;
   }
 
+  const affectedDebts = [];
+
   openDebts.forEach(function (debt) {
     if (remainingPayment <= 0) return;
 
@@ -1094,11 +1130,13 @@ function registerPartialPayment() {
 
     debt.lastPaymentMethod = partialPaymentMethod.value;
     debt.updatedAt = new Date().toISOString();
+    affectedDebts.push(debt);
   });
 
   donor.updatedAt = new Date().toISOString();
 
   saveDonors();
+  reconcileApprovalDrafts(affectedDebts);
   AuditLog.record({
     action: "payment",
     entityType: "donation",
@@ -1372,6 +1410,8 @@ async function loadClick2CallLogs() {
         : "—";
       var statusHtml = l.status === "success"
         ? '<span style="color:#1a7a1a;font-weight:600">🟢 נשלח</span>'
+        : l.status === "sent_unknown"
+        ? '<span style="color:#a67c00;font-weight:600">🟡 נשלח לקמפיין — סטטוס לא זמין</span>'
         : '<span style="color:#b00;font-weight:600">🔴 נכשל</span>';
       var note = l.errorNote || "—";
       return "<tr>" +

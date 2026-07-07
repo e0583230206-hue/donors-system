@@ -8,7 +8,7 @@ const {
   logCallEnd,
 } = require("./log.service");
 const { parsePositiveAmount, saveIvrPaymentOnce } = require("./payment.service");
-const { updateDonorDebtAfterPayment } = require("./db");
+const { updateDonorDebtAfterPayment, insertAuditLog } = require("./db");
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -380,6 +380,21 @@ function handleIvrQuery(query) {
       });
       logCallEnd(callId, phone, "payment_success", amount);
 
+      try {
+        insertAuditLog({
+          action:     "ivr_payment_success",
+          entityType: "donor",
+          entityId:   donor ? donor.id : null,
+          entityName: donor ? donor.fullName : null,
+          details:    "תשלום IVR התקבל בסך " + amount + " ₪" +
+                      (confirmationNumber ? " (אישור " + confirmationNumber + ")" : "") +
+                      (saveResult.duplicate ? " — כפול, לא נספר פעמיים" : ""),
+          workerName: "IVR",
+        });
+      } catch (auditErr) {
+        console.error("[IVR] Failed to write server_audit_log for payment_success:", auditErr.message);
+      }
+
     } else {
       console.log("[IVR] paymentStatus is not OK:", paymentStatus,
                   "— entering failure branch",
@@ -391,6 +406,19 @@ function handleIvrQuery(query) {
         donorId:   donor ? donor.id : null,
       });
       logCallEnd(callId, phone, "payment_failed");
+
+      try {
+        insertAuditLog({
+          action:     "ivr_payment_failed",
+          entityType: "donor",
+          entityId:   donor ? donor.id : null,
+          entityName: donor ? donor.fullName : null,
+          details:    "תשלום IVR נכשל — סטטוס: " + paymentStatus,
+          workerName: "IVR",
+        });
+      } catch (auditErr) {
+        console.error("[IVR] Failed to write server_audit_log for payment_failed:", auditErr.message);
+      }
     }
 
     return { response: buildResponse(q, donor) };

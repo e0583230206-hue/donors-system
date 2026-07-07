@@ -20,7 +20,7 @@
 #     -out /tmp/restore.sqlite
 #
 #   # לאחר מכן שנה את שם הקובץ לשם המקורי והפעל מחדש את השרת:
-#   cp /tmp/restore.sqlite /var/www/donors-system/frontend/backend/db/crm.sqlite
+#   cp /tmp/restore.sqlite /var/www/donors-system/frontend/backend/data.sqlite
 #   pm2 restart crm-ivr-server
 #
 # ─── אימות תקינות ──────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ set -euo pipefail
 # ── הגדרות ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-DB_PATH="${DB_PATH:-$REPO_ROOT/frontend/backend/db/crm.sqlite}"
+DB_PATH="${DB_PATH:-$REPO_ROOT/frontend/backend/data.sqlite}"
 BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/frontend/backend/backups}"
 KEEP_DAYS="${KEEP_DAYS:-30}"
 

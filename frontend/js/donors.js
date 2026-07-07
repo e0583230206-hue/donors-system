@@ -156,6 +156,9 @@ function getDonorDebt(donor) {
 
 function getPaidTotal(donor) {
   return donor.donations.reduce(function (sum, donation) {
+    if (donation.paid === true) {
+      return sum + Number(donation.amount);
+    }
     return sum + Number(donation.paidPartial || 0);
   }, 0);
 }

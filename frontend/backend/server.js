@@ -31,6 +31,7 @@ const {
   getIvrAlerts,
   getAppState,
   setAppState,
+  getAppStateUpdatedAt,
   backupDatabase,
   restoreFromBackup,
   dbHealthCheck,
@@ -490,6 +491,62 @@ app.put("/api/workers/:id/password", passwordLimiter, requireRole([ROLES.ADMIN])
 // ── App data (donors, tasks, logs, settings, approvals) ──────────────────────
 app.use("/api/data", apiLimiter);
 
+// ── Minimal server-side sanity checks for the generic app_state blob store ──────
+// donors/approvals are saved wholesale from the client (see setAppState below), so
+// there is no per-field schema on this endpoint. These checks only reject clearly
+// invalid values (non-numeric/negative/absurd amounts, unknown approval status) —
+// they intentionally do not require every optional field to be present, so existing
+// records and existing save flows keep working unchanged.
+const MAX_SANE_AMOUNT = 100000000; // 100,000,000 ₪ — sanity ceiling, not a business cap
+
+function validateDonorsPayload(donors) {
+  if (!Array.isArray(donors)) return "donors must be an array";
+  for (var i = 0; i < donors.length; i++) {
+    var d = donors[i];
+    if (!d || typeof d !== "object") return "רשומת תורם לא תקינה במיקום " + i;
+    if (d.fullName != null && typeof d.fullName !== "string") return "שם תורם לא תקין (מזהה " + d.id + ")";
+    if (d.phone != null && typeof d.phone !== "string") return "טלפון תורם לא תקין (מזהה " + d.id + ")";
+    if (Array.isArray(d.donations)) {
+      for (var j = 0; j < d.donations.length; j++) {
+        var don = d.donations[j];
+        if (!don || typeof don !== "object") return "רשומת תרומה לא תקינה עבור תורם " + d.id;
+        if (don.amount != null) {
+          var amt = Number(don.amount);
+          if (!isFinite(amt) || amt < 0 || amt > MAX_SANE_AMOUNT) {
+            return "סכום תרומה לא תקין עבור תורם " + (d.fullName || d.id);
+          }
+        }
+        if (don.remainingDebt != null) {
+          var rem = Number(don.remainingDebt);
+          if (!isFinite(rem) || rem < 0 || rem > MAX_SANE_AMOUNT) {
+            return "סכום חוב לא תקין עבור תורם " + (d.fullName || d.id);
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+const ALLOWED_APPROVAL_STATUSES = new Set(["טיוטה", "אושר", "בוטל"]);
+function validateApprovalsPayload(approvals) {
+  if (!Array.isArray(approvals)) return "approvals must be an array";
+  for (var i = 0; i < approvals.length; i++) {
+    var a = approvals[i];
+    if (!a || typeof a !== "object") return "רשומת אישור לא תקינה במיקום " + i;
+    if (a.status != null && !ALLOWED_APPROVAL_STATUSES.has(a.status)) {
+      return "סטטוס אישור לא חוקי: " + a.status;
+    }
+    if (a.amount != null) {
+      var amt = Number(a.amount);
+      if (!isFinite(amt) || amt < 0 || amt > MAX_SANE_AMOUNT) {
+        return "סכום אישור לא תקין";
+      }
+    }
+  }
+  return null;
+}
+
 app.get("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function (req, res, next) {
   try {
     const key  = req.params.key;
@@ -498,6 +555,11 @@ app.get("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function 
     if (data === null) {
       return res.status(400).json({ error: "Unknown data key: " + key });
     }
+
+    // Exposed so the client can echo it back on save — used only to log a
+    // warning below if a save turns out to be based on stale data. Never blocks.
+    var updatedAt = getAppStateUpdatedAt(key);
+    if (updatedAt) res.set("X-Data-Updated-At", updatedAt);
 
     res.json(data);
   } catch (err) {
@@ -514,11 +576,35 @@ app.post("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function
       return res.status(400).json({ error: "Body must be an array or object" });
     }
 
+    if (key === "donors") {
+      var donorsErr = validateDonorsPayload(body);
+      if (donorsErr) return res.status(400).json({ error: donorsErr });
+    } else if (key === "approvals") {
+      var approvalsErr = validateApprovalsPayload(body);
+      if (approvalsErr) return res.status(400).json({ error: approvalsErr });
+    }
+
+    // Lost-update visibility only — compares against what the client last read
+    // (if it sent that back) and logs a warning; the save always proceeds.
+    var expectedUpdatedAt = req.get("X-Expected-Updated-At");
+    if (expectedUpdatedAt) {
+      var currentUpdatedAt = getAppStateUpdatedAt(key);
+      if (currentUpdatedAt && currentUpdatedAt !== expectedUpdatedAt) {
+        console.warn("[LostUpdate] key=" + key +
+          " worker=" + (req.user && req.user.name || "?") +
+          " saved over a newer version — expected updatedAt " + expectedUpdatedAt +
+          " but found " + currentUpdatedAt + ". Another session may have overwritten concurrent changes.");
+      }
+    }
+
     const ok = setAppState(key, body);
 
     if (!ok) {
       return res.status(400).json({ error: "Unknown data key: " + key });
     }
+
+    var newUpdatedAt = getAppStateUpdatedAt(key);
+    if (newUpdatedAt) res.set("X-Data-Updated-At", newUpdatedAt);
 
     res.json({ saved: true, key });
   } catch (err) {
@@ -607,7 +693,8 @@ app.post(
   async function (req, res, next) {
     try {
       var body      = req.body || {};
-      var phone     = String(body.phone     || "").trim();
+      var rawPhone  = String(body.phone     || "").trim();
+      var phone     = normalizePhone(rawPhone);
       var donorName = String(body.donorName || "").trim();
       var donorId   = body.donorId  || null;
       var extension = String(body.extension || process.env.TECHNOLINE_AGENT_EXTENSION || "").trim();
@@ -621,6 +708,9 @@ app.post(
       }
       if (!phone) {
         return res.status(400).json({ error: "מספר טלפון חסר" });
+      }
+      if (phone.length < 9 || phone.length > 15) {
+        return res.status(400).json({ error: "מספר טלפון לא תקין: " + rawPhone });
       }
 
       const techParams = new URLSearchParams({
@@ -675,6 +765,16 @@ app.post(
           status:         success ? "success" : "error",
           errorCode:      success ? null : (techBody.errorCode != null ? techBody.errorCode : null),
           errorNote:      success ? null : (techBody.note || null),
+        });
+        insertAuditLog({
+          action:     success ? "click2call" : "click2call_failed",
+          entityType: "donor",
+          entityId:   donorId,
+          entityName: donorName || null,
+          details:    (success ? "חיוג ישיר בוצע ל-" : "חיוג ישיר נכשל עבור ") + phone + (success ? "" : " — " + (techBody.note || techBody.message || "")),
+          workerId:   req.user && req.user.id,
+          workerName: req.user && req.user.name,
+          ip:         req.ip,
         });
       } catch (logErr) {
         console.error("[Click2Call] Failed to write log — call result unaffected:", logErr.message);
@@ -1290,17 +1390,44 @@ app.post(
       var sendOk = String(techBody.status).toUpperCase() === "OK";
 
       if (!sendOk) {
+        var totalFailMsg = campaignErrMsg(techBody);
         try {
           insertAuditLog({
             action:     "campaign_send_failed",
             entityType: "campaign",
-            details:    "שיגור נכשל | פילטר: " + recipientFilter + " | " + campaignErrMsg(techBody),
+            details:    "שיגור נכשל | פילטר: " + recipientFilter + " | " + totalFailMsg,
             workerId:   req.user && req.user.id,
             workerName: req.user && req.user.name,
             ip:         req.ip,
           });
         } catch (_) {}
-        return res.status(400).json({ error: campaignErrMsg(techBody), errorCode: techBody.errorCode });
+
+        // Timeline — record the failed attempt for every donor that would have been
+        // included, so a total rejection from Technoline doesn't vanish silently.
+        if (Array.isArray(listResult.donors)) {
+          listResult.donors.forEach(function (d) {
+            d.phones.forEach(function (p) {
+              try {
+                logClick2Call({
+                  pbxCallId:      null,
+                  workerId:       req.user ? req.user.id   : null,
+                  workerName:     req.user ? req.user.name : null,
+                  donorId:        d.id,
+                  donorName:      d.name,
+                  donorPhone:     p,
+                  agentExtension: messageKind === "ivr" ? ivrExtension : "text",
+                  status:         "error",
+                  errorCode:      techBody.errorCode != null ? techBody.errorCode : null,
+                  errorNote:      totalFailMsg,
+                });
+              } catch (logErr) {
+                console.error("[Campaign] Failed to write failure timeline entry for donor", d.id, ":", logErr.message);
+              }
+            });
+          });
+        }
+
+        return res.status(400).json({ error: totalFailMsg, errorCode: techBody.errorCode });
       }
 
       var acceptedCount = Number(techBody.phones) || phones.length;
@@ -1323,6 +1450,10 @@ app.post(
 
       // Timeline — one entry per donor whose phone was included in this send. Best-effort,
       // skipped for the raw phonesOverride path (no donor list available there).
+      // Technoline only returns aggregate errorPhones/blockedPhones counts, never a
+      // per-recipient outcome — so when any failures occurred we cannot label individual
+      // recipients "success" (misleading); we mark them with a distinct, honest status.
+      var perRecipientStatusUnknown = failedCount > 0;
       if (Array.isArray(listResult.donors)) {
         listResult.donors.forEach(function (d) {
           d.phones.forEach(function (p) {
@@ -1335,9 +1466,11 @@ app.post(
                 donorName:      d.name,
                 donorPhone:     p,
                 agentExtension: messageKind === "ivr" ? ivrExtension : "text",
-                status:         "success",
+                status:         perRecipientStatusUnknown ? "sent_unknown" : "success",
                 errorCode:      null,
-                errorNote:      null,
+                errorNote:      perRecipientStatusUnknown
+                                  ? "נשלח לקמפיין — סטטוס פרטני לא זמין (" + failedCount + " כשלים בשיגור מצטבר)"
+                                  : null,
               });
             } catch (logErr) {
               console.error("[Campaign] Failed to write timeline entry for donor", d.id, ":", logErr.message);

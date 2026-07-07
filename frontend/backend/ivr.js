@@ -207,6 +207,9 @@ function buildResponse(query, donor) {
 
     // payChoice=1 → charge full debt amount
     if (payChoice === "1" && currentDebt) {
+      if (validateAmount(currentDebt.amount) === "too_high") {
+        return [simpleMessage([txt(T.AMOUNT_TOO_HIGH)]), hangup()];
+      }
       if (!hasTerminal) return paymentPlaceholder();
       return creditCardModule(currentDebt.amount);
     }
@@ -241,7 +244,11 @@ function buildResponse(query, donor) {
     // debtChoice=1 → pay total of all debts
     if (debtChoice === "1") {
       var totalDebt = allDebts.reduce(function (s, d) { return s + d.amount; }, 0);
-      if (!totalDebt || !hasTerminal) return paymentPlaceholder();
+      if (!totalDebt) return paymentPlaceholder();
+      if (validateAmount(totalDebt) === "too_high") {
+        return [simpleMessage([txt(T.AMOUNT_TOO_HIGH)]), hangup()];
+      }
+      if (!hasTerminal) return paymentPlaceholder();
       return creditCardModule(totalDebt);
     }
 

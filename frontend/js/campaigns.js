@@ -673,6 +673,8 @@ async function loadRecentRecipientLog() {
           : "—";
         var statusHtml = l.status === "success"
           ? '<span style="color:#1a7a1a;font-weight:600">🟢 הצליח</span>'
+          : l.status === "sent_unknown"
+          ? '<span style="color:#a67c00;font-weight:600">🟡 נשלח — סטטוס פרטני לא זמין</span>'
           : '<span style="color:#b00;font-weight:600">🔴 נכשל</span>';
         return "<tr>" +
           "<td style='padding:5px 8px;border-bottom:1px solid #f5f5f5;white-space:nowrap'>" + escapeHTML(dateStr) + "</td>" +
