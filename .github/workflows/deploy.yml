@@ -13,17 +13,15 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_IP }}
-          # Use a dedicated non-root deploy user with minimal permissions.
-          # Setup on server:
-          #   adduser --disabled-password deploy
-          #   usermod -aG www-data deploy
-          #   chown -R deploy:www-data /var/www/donors-system
-          #   # Add SSH key to /home/deploy/.ssh/authorized_keys
-          username: ${{ secrets.DEPLOY_USER }}
+          # Must be whichever user actually runs the live pm2 process (verify
+          # with `pm2 list` on the server as that user, or `pm2 list` as root
+          # if pm2 was started under root) — pm2's process list is per-user,
+          # so restarting from the wrong user will fail with "process not found".
+          username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /var/www/donors-system
             git pull origin master
             cd frontend/backend
             npm ci --omit=dev
-            pm2 restart crm-ivr-server --update-env
+            pm2 restart donors --update-env
