@@ -97,6 +97,10 @@
             </select>
           </div>
           <div class="form-grid" style="margin-bottom:10px;">
+            <label for="ivrAudioImportFile" class="secondary-btn" style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;">
+              📥 ייבוא מאקסל
+            </label>
+            <input type="file" id="ivrAudioImportFile" accept=".xlsx,.xls" style="display:none" />
             <button id="ivrAudioAddRowBtn" type="button" class="secondary-btn">➕ שורה חדשה</button>
             <button id="ivrAudioExportExcelBtn" type="button" class="success-btn">📊 ייצוא לאקסל</button>
             <button id="ivrAudioExportJsonBtn" type="button" class="secondary-btn">💾 גיבוי JSON</button>
@@ -109,13 +113,13 @@
               <thead>
                 <tr>
                   <th>Audio ID</th>
-                  <th>קטגוריה</th>
                   <th>טקסט מקור בעברית</th>
-                  <th>טקסט באידיש</th>
+                  <th>תרגום</th>
                   <th>הסבר שימוש</th>
-                  <th>קובץ שמע</th>
+                  <th>קובץ הקלטה 1</th>
+                  <th>קובץ הקלטה 2</th>
+                  <th>קובץ הקלטה 3</th>
                   <th>סטטוס</th>
-                  <th>הערות</th>
                 </tr>
               </thead>
               <tbody id="ivrAudioTableBody">

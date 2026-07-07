@@ -1442,8 +1442,13 @@ reloadWorkers().then(function () { renderWorkers(); });
   var addRowBtn    = document.getElementById("ivrAudioAddRowBtn");
   var exportXlsBtn = document.getElementById("ivrAudioExportExcelBtn");
   var exportJsonBtn= document.getElementById("ivrAudioExportJsonBtn");
+  var importFile   = document.getElementById("ivrAudioImportFile");
   var refreshBtn   = document.getElementById("ivrAudioRefreshBtn");
   var msgEl        = document.getElementById("ivrAudioMessage");
+
+  // Categories that belong on גיליון1 (fixed sentences) vs גיליון2 (numbers/
+  // currency) when exporting back to the exact Excel structure.
+  var SHEET1_CATEGORIES = ["open", "menu", "debt", "pay", "voicemail", "system", "purpose"];
 
   var statTotal      = document.getElementById("ivrAudioStatTotal");
   var statMissing     = document.getElementById("ivrAudioStatMissing");
@@ -1494,7 +1499,7 @@ reloadWorkers().then(function () { renderWorkers(); });
   function matchesFilters(rec, query, status) {
     if (status && rec.status !== status) return false;
     if (!query) return true;
-    var hay = [rec.audioId, rec.category, rec.sourceTextHe, rec.yiddishText, rec.usageDescription, rec.notes, rec.status]
+    var hay = [rec.audioId, rec.sourceTextHe, rec.translation, rec.usageDescription, rec.status]
       .join(" ").toLowerCase();
     return hay.indexOf(query.toLowerCase()) !== -1;
   }
@@ -1522,13 +1527,13 @@ reloadWorkers().then(function () { renderWorkers(); });
     tdId.textContent = rec.audioId;
     tr.appendChild(tdId);
 
-    tr.appendChild(makeInputCell(rec, "category", "input"));
     tr.appendChild(makeInputCell(rec, "sourceTextHe", "textarea"));
-    tr.appendChild(makeInputCell(rec, "yiddishText", "textarea"));
+    tr.appendChild(makeInputCell(rec, "translation", "textarea"));
     tr.appendChild(makeInputCell(rec, "usageDescription", "textarea"));
-    tr.appendChild(buildAudioCell(rec));
+    tr.appendChild(buildAudioCell(rec, 1));
+    tr.appendChild(buildAudioCell(rec, 2));
+    tr.appendChild(buildAudioCell(rec, 3));
     tr.appendChild(buildStatusCell(rec));
-    tr.appendChild(makeInputCell(rec, "notes", "textarea"));
 
     return tr;
   }
@@ -1573,18 +1578,20 @@ reloadWorkers().then(function () { renderWorkers(); });
     return td;
   }
 
-  function buildAudioCell(rec) {
+  function buildAudioCell(rec, slot) {
+    var field = "audioFile" + slot;
+    var filename = rec[field];
     var td = document.createElement("td");
-    td.style.minWidth = "220px";
+    td.style.minWidth = "180px";
 
-    if (rec.audioFilename) {
+    if (filename) {
       var audio = document.createElement("audio");
       audio.controls = true;
       audio.style.width = "100%";
       audio.style.height = "32px";
       audio.style.display = "block";
       audio.style.marginBottom = "4px";
-      audio.src = "/uploads/ivr-audio/" + encodeURIComponent(rec.audioFilename);
+      audio.src = "/uploads/ivr-audio/" + encodeURIComponent(filename);
       td.appendChild(audio);
 
       var name = document.createElement("div");
@@ -1592,7 +1599,7 @@ reloadWorkers().then(function () { renderWorkers(); });
       name.style.color = "var(--muted)";
       name.style.wordBreak = "break-all";
       name.style.marginBottom = "4px";
-      name.textContent = rec.audioFilename;
+      name.textContent = filename;
       td.appendChild(name);
 
       var delBtn = document.createElement("button");
@@ -1600,8 +1607,8 @@ reloadWorkers().then(function () { renderWorkers(); });
       delBtn.className = "danger-btn";
       delBtn.style.fontSize = "12px";
       delBtn.style.padding = "4px 10px";
-      delBtn.textContent = "🗑️ מחק קובץ";
-      delBtn.addEventListener("click", function () { deleteAudio(rec.audioId); });
+      delBtn.textContent = "🗑️ מחק";
+      delBtn.addEventListener("click", function () { deleteAudio(rec.audioId, slot); });
       td.appendChild(delBtn);
     }
 
@@ -1613,13 +1620,13 @@ reloadWorkers().then(function () { renderWorkers(); });
     label.style.cursor = "pointer";
     label.style.fontSize = "12px";
     label.style.padding = "4px 10px";
-    label.textContent = rec.audioFilename ? "🔁 החלף קובץ" : "⬆️ העלה קובץ";
+    label.textContent = filename ? "🔁 החלף" : "⬆️ העלה";
     var input = document.createElement("input");
     input.type = "file";
     input.accept = "audio/*";
     input.hidden = true;
     input.addEventListener("change", function () {
-      if (input.files[0]) uploadAudio(rec.audioId, input.files[0]);
+      if (input.files[0]) uploadAudio(rec.audioId, slot, input.files[0]);
     });
     label.appendChild(input);
     td.appendChild(label);
@@ -1649,7 +1656,7 @@ reloadWorkers().then(function () { renderWorkers(); });
   // Content-Type: application/json, which breaks multipart/form-data uploads
   // (the browser needs to set its own boundary). Only the Authorization
   // header is needed here.
-  async function uploadAudio(audioId, file) {
+  async function uploadAudio(audioId, slot, file) {
     var fd = new FormData();
     fd.append("audio", file);
     showMsg("מעלה קובץ...");
@@ -1659,7 +1666,7 @@ reloadWorkers().then(function () { renderWorkers(); });
         var token = getAuthToken();
         if (token) headers["Authorization"] = "Bearer " + token;
       }
-      var res = await fetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId) + "/audio", {
+      var res = await fetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId) + "/audio/" + slot, {
         method: "POST",
         headers: headers,
         body: fd,
@@ -1676,10 +1683,10 @@ reloadWorkers().then(function () { renderWorkers(); });
     }
   }
 
-  async function deleteAudio(audioId) {
-    if (!confirm("למחוק את קובץ השמע?")) return;
+  async function deleteAudio(audioId, slot) {
+    if (!confirm("למחוק את קובץ ההקלטה?")) return;
     try {
-      var res = await apiFetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId) + "/audio", { method: "DELETE" });
+      var res = await apiFetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId) + "/audio/" + slot, { method: "DELETE" });
       var data = await res.json();
       if (!res.ok) throw new Error(data.error || "שגיאה במחיקה");
       var idx = allRecordings.findIndex(function (r) { return r.audioId === audioId; });
@@ -1709,22 +1716,56 @@ reloadWorkers().then(function () { renderWorkers(); });
     }
   }
 
+  // Mirrors הקלטות_א_בלאט_גמרא_מעוצב.xlsx exactly: same 8 headers, same
+  // 2-sheet split (גיליון1 = fixed sentences, גיליון2 = numbers/currency).
+  function toExcelRow(r) {
+    return {
+      "Audio ID": r.audioId,
+      "טקסט מקור בעברית": r.sourceTextHe,
+      "תרגום": r.translation,
+      "הסבר שימוש": r.usageDescription,
+      "קובץ הקלטה 1": r.audioFile1,
+      "קובץ הקלטה 2": r.audioFile2,
+      "קובץ הקלטה 3": r.audioFile3,
+      "סטטוס": r.status,
+    };
+  }
+
   function exportToExcel() {
-    var rows = allRecordings.map(function (r) {
-      return {
-        "Audio ID": r.audioId,
-        "קטגוריה": r.category,
-        "טקסט מקור בעברית": r.sourceTextHe,
-        "טקסט באידיש": r.yiddishText,
-        "הסבר שימוש": r.usageDescription,
-        "שם קובץ שמע": r.audioFilename,
-        "סטטוס": r.status,
-        "הערות": r.notes,
-      };
-    });
+    var sheet1Rows = allRecordings.filter(function (r) { return SHEET1_CATEGORIES.indexOf(r.category) !== -1; }).map(toExcelRow);
+    var sheet2Rows = allRecordings.filter(function (r) { return SHEET1_CATEGORIES.indexOf(r.category) === -1; }).map(toExcelRow);
     var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "הקלטות IVR");
-    XLSX.writeFile(wb, "ivr-audio-" + new Date().toISOString().slice(0, 10) + ".xlsx");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet1Rows), "גיליון1");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet2Rows), "גיליון2");
+    XLSX.writeFile(wb, "הקלטות_א_בלאט_גמרא_מעוצב_" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  }
+
+  // Reads the uploaded Excel entirely in the browser (same xlsx lib already
+  // loaded on the page) and sends the parsed rows as JSON — the server never
+  // needs to parse .xlsx itself. Safe merge only, see importRows() on the server.
+  async function importFromExcel(file) {
+    showMsg("קורא קובץ...");
+    try {
+      var buf = await file.arrayBuffer();
+      var wb = XLSX.read(buf, { type: "array" });
+      var rows = [];
+      wb.SheetNames.forEach(function (name) {
+        var sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: "" });
+        rows = rows.concat(sheetRows);
+      });
+      if (!rows.length) throw new Error("לא נמצאו שורות בקובץ");
+
+      var res = await apiFetch("/api/admin/ivr-audio/import", {
+        method: "POST",
+        body: JSON.stringify({ rows: rows }),
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאת ייבוא");
+      showMsg("יובאו " + data.inserted + " חדשים, עודכנו " + data.merged + ", דולגו " + data.skipped);
+      await loadRecordings();
+    } catch (err) {
+      showMsg("שגיאה בייבוא: " + err.message, "error");
+    }
   }
 
   function exportJsonBackup() {
@@ -1745,6 +1786,12 @@ reloadWorkers().then(function () { renderWorkers(); });
   if (exportXlsBtn)  exportXlsBtn.addEventListener("click", exportToExcel);
   if (exportJsonBtn) exportJsonBtn.addEventListener("click", exportJsonBackup);
   if (refreshBtn)    refreshBtn.addEventListener("click", loadRecordings);
+  if (importFile) {
+    importFile.addEventListener("change", function () {
+      if (importFile.files[0]) importFromExcel(importFile.files[0]);
+      importFile.value = "";
+    });
+  }
 
   loadRecordings();
 }());

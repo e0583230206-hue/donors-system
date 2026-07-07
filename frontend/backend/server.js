@@ -80,15 +80,17 @@ const { getDonorForIvr, normalizePhone }   = require("./donor.service");
 // touch ivr.js / ivr.service.js / Technoline; see ivr-audio.service.js header.
 const {
   isValidStatus:            isValidIvrAudioStatus,
+  isValidSlot:              isValidIvrAudioSlot,
   bumpStatusOnUpload:       bumpIvrAudioStatusOnUpload,
   sanitizeAudioIdForFilename,
-  seedIfEmpty:              seedIvrAudioIfEmpty,
+  runStartupMigration:      runIvrAudioStartupMigration,
+  importRows:               importIvrAudioRows,
   getIvrAudioRecordings,
   getIvrAudioRecordingById,
   createIvrAudioRecording,
   updateIvrAudioRecording,
-  setIvrAudioRecordingFile,
-  clearIvrAudioRecordingFile,
+  setIvrAudioRecordingFileSlot,
+  clearIvrAudioRecordingFileSlot,
 } = require("./ivr-audio.service");
 
 const PORT         = Number(process.env.PORT || 3000);
@@ -99,7 +101,12 @@ const FRONTEND_DIR = path.join(__dirname, "..");
 // statically below. Separate from FRONTEND_DIR; not part of the donor UI.
 const IVR_AUDIO_UPLOADS_DIR = path.join(__dirname, "uploads", "ivr-audio");
 if (!fs.existsSync(IVR_AUDIO_UPLOADS_DIR)) fs.mkdirSync(IVR_AUDIO_UPLOADS_DIR, { recursive: true });
-seedIvrAudioIfEmpty();
+
+// Runs at most once per DB (idempotent — see db.js ensureIvrAudioRecordingsUpToDate
+// for the exact rules). Logged in full so the migration report is visible in
+// server logs even without a dedicated UI for it.
+var ivrAudioMigrationReport = runIvrAudioStartupMigration();
+console.log("[IVR-Audio] startup migration report:", JSON.stringify(ivrAudioMigrationReport));
 
 if (!IVR_KEY && process.env.NODE_ENV === "production") {
   console.error("FATAL: IVR_KEY is not set. The server will not start without it in production.");
@@ -390,6 +397,35 @@ app.get("/api/admin/ivr-audio", function (req, res, next) {
   }
 });
 
+// Read-only — lets an admin confirm what the last startup migration actually
+// did without needing server-log/SSH access.
+app.get("/api/admin/ivr-audio/migration-report", function (req, res) {
+  res.json(ivrAudioMigrationReport || { mode: "unknown" });
+});
+
+// Import rows parsed client-side from הקלטות_א_בלאט_גמרא_מעוצב.xlsx (both
+// sheets, combined) — safe merge only, see ivr-audio.service.js importRows().
+app.post("/api/admin/ivr-audio/import", function (req, res, next) {
+  try {
+    var rows = (req.body && req.body.rows) || [];
+    if (!Array.isArray(rows)) return res.status(400).json({ error: "rows חייב להיות מערך" });
+
+    var result = importIvrAudioRows(rows);
+
+    try {
+      insertAuditLog({
+        action: "ivr_audio_import", entityType: "ivr_audio_recording", entityId: null, entityName: null,
+        details: "ייבוא מאקסל: " + result.inserted + " חדשים, " + result.merged + " עודכנו, " + result.skipped + " דולגו",
+        workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+      });
+    } catch (_) {}
+
+    res.json(Object.assign({ ok: true }, result));
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.post("/api/admin/ivr-audio", function (req, res, next) {
   try {
     var audioId = String((req.body && req.body.audioId) || "").trim();
@@ -431,7 +467,7 @@ var ivrAudioUpload = multer({
     destination: function (req, file, cb) { cb(null, IVR_AUDIO_UPLOADS_DIR); },
     filename: function (req, file, cb) {
       var ext = path.extname(file.originalname) || ".mp3";
-      cb(null, sanitizeAudioIdForFilename(req.params.id) + ext);
+      cb(null, sanitizeAudioIdForFilename(req.params.id) + "-" + req.params.slot + ext);
     },
   }),
   limits: { fileSize: 50 * 1024 * 1024 },
@@ -441,7 +477,10 @@ var ivrAudioUpload = multer({
   },
 }).single("audio");
 
-app.post("/api/admin/ivr-audio/:id/audio", function (req, res, next) {
+var IVR_AUDIO_FILE_FIELD = { 1: "audioFile1", 2: "audioFile2", 3: "audioFile3" };
+
+app.post("/api/admin/ivr-audio/:id/audio/:slot", function (req, res, next) {
+  if (!isValidIvrAudioSlot(req.params.slot)) return res.status(400).json({ error: "סלוט לא תקין (1/2/3 בלבד)" });
   var existing = getIvrAudioRecordingById(req.params.id);
   if (!existing) return res.status(404).json({ error: "לא נמצאה הקלטה עם המזהה הזה" });
 
@@ -449,18 +488,20 @@ app.post("/api/admin/ivr-audio/:id/audio", function (req, res, next) {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "לא נשלח קובץ שמע" });
 
-    if (existing.audioFilename && existing.audioFilename !== req.file.filename) {
-      var oldPath = path.join(IVR_AUDIO_UPLOADS_DIR, existing.audioFilename);
+    var slot = Number(req.params.slot);
+    var existingFilename = existing[IVR_AUDIO_FILE_FIELD[slot]];
+    if (existingFilename && existingFilename !== req.file.filename) {
+      var oldPath = path.join(IVR_AUDIO_UPLOADS_DIR, existingFilename);
       if (fs.existsSync(oldPath)) { try { fs.unlinkSync(oldPath); } catch (_) {} }
     }
 
     var nextStatus = bumpIvrAudioStatusOnUpload(existing.status);
-    var updated = setIvrAudioRecordingFile(req.params.id, req.file.filename, nextStatus);
+    var updated = setIvrAudioRecordingFileSlot(req.params.id, slot, req.file.filename, nextStatus);
 
     try {
       insertAuditLog({
         action: "ivr_audio_upload", entityType: "ivr_audio_recording", entityId: req.params.id, entityName: req.params.id,
-        details: "הועלה קובץ שמע ל-" + req.params.id + " (" + req.file.filename + ")",
+        details: "הועלה קובץ הקלטה " + slot + " ל-" + req.params.id + " (" + req.file.filename + ")",
         workerId: req.user.id, workerName: req.user.name, ip: req.ip,
       });
     } catch (_) {}
@@ -469,21 +510,24 @@ app.post("/api/admin/ivr-audio/:id/audio", function (req, res, next) {
   });
 });
 
-app.delete("/api/admin/ivr-audio/:id/audio", function (req, res, next) {
+app.delete("/api/admin/ivr-audio/:id/audio/:slot", function (req, res, next) {
   try {
+    if (!isValidIvrAudioSlot(req.params.slot)) return res.status(400).json({ error: "סלוט לא תקין (1/2/3 בלבד)" });
     var existing = getIvrAudioRecordingById(req.params.id);
     if (!existing) return res.status(404).json({ error: "לא נמצאה הקלטה עם המזהה הזה" });
 
-    if (existing.audioFilename) {
-      var p = path.join(IVR_AUDIO_UPLOADS_DIR, existing.audioFilename);
+    var slot = Number(req.params.slot);
+    var filename = existing[IVR_AUDIO_FILE_FIELD[slot]];
+    if (filename) {
+      var p = path.join(IVR_AUDIO_UPLOADS_DIR, filename);
       if (fs.existsSync(p)) { try { fs.unlinkSync(p); } catch (_) {} }
     }
-    var updated = clearIvrAudioRecordingFile(req.params.id);
+    var updated = clearIvrAudioRecordingFileSlot(req.params.id, slot);
 
     try {
       insertAuditLog({
         action: "ivr_audio_delete_file", entityType: "ivr_audio_recording", entityId: req.params.id, entityName: req.params.id,
-        details: "נמחק קובץ שמע מ-" + req.params.id,
+        details: "נמחק קובץ הקלטה " + slot + " מ-" + req.params.id,
         workerId: req.user.id, workerName: req.user.name, ip: req.ip,
       });
     } catch (_) {}

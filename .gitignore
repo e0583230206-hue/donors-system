@@ -12,6 +12,9 @@ npm-debug.log
 *.sqlite
 *.db
 
+# Server-generated backups (גיבויים אוטומטיים + גיבויי migration — מכילים נתוני משתמשים)
+frontend/backend/backups/
+
 # Logs
 logs/
 *.log
@@ -25,3 +28,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Claude Code local session/permission state (מכיל נתיבים מקומיים ספציפיים למכונה)
+.claude/

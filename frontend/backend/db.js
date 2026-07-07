@@ -1,5 +1,6 @@
 require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 const path   = require("path");
+const fs     = require("fs");
 const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const bcrypt = require("bcryptjs");
@@ -1226,16 +1227,112 @@ function getSyncLogs(limit) {
 // ── IVR Audio Recordings (settings.html "ניהול הקלטות" tab) ─────────────────
 // Self-contained, like alfon_pending above — does not touch any donor/payment/
 // worker table. Status validation lives in ivr-audio.service.js, not here.
+//
+// Source of truth is הקלטות_א_בלאט_גמרא_מעוצב.xlsx (2 sheets: גיליון1 = fixed
+// sentences, גיליון2 = numbers/currency — 29 + 44 = 73 rows). Columns:
+// Audio ID, טקסט מקור בעברית, תרגום, הסבר שימוש, קובץ הקלטה 1/2/3, סטטוס.
+
+const IVR_AUDIO_CANONICAL_RECORDINGS = [
+  // ── גיליון1 — משפטים קבועים (29) ──────────────────────────────────────────
+  { audioId: "OPEN-001", category: "open", sourceTextHe: "שלום וברכה, הגעתם למערכת תשלומים של א בלאט גמרא.", usageDescription: "פתיחת כל שיחה" },
+  { audioId: "MENU-001", category: "menu", sourceTextHe: "למעבר לתשלום הקישו 1. לשמיעת חובות קודמים הקישו 2. להשארת הודעה הקישו 3.", usageDescription: "תפריט ראשי מלא" },
+  { audioId: "MENU-002", category: "menu", sourceTextHe: "למעבר לתשלום הקישו 1. להשארת הודעה הקישו 3.", usageDescription: "יש חוב, אין חובות קודמים" },
+  { audioId: "MENU-003", category: "menu", sourceTextHe: "לתרומה הקישו 1. להשארת הודעה הקישו 3.", usageDescription: "אין חוב, אפשר לתרום" },
+  { audioId: "MENU-004", category: "menu", sourceTextHe: "להשארת הודעה הקישו 3.", usageDescription: "רק השארת הודעה" },
+  { audioId: "MENU-005", category: "menu", sourceTextHe: "למעבר לתשלום הקישו 1.", usageDescription: "רק תשלום" },
+  { audioId: "MENU-006", category: "menu", sourceTextHe: "לתרומה הקישו 1.", usageDescription: "רק תרומה" },
+  { audioId: "DEBT-001", category: "debt", sourceTextHe: "יש לך חוב על סכום", usageDescription: "פתיח לפני הקראת סכום חוב" },
+  { audioId: "DEBT-002", category: "debt", sourceTextHe: "שקלים עבור", usageDescription: "מחבר בין סכום למטרה" },
+  { audioId: "DEBT-003", category: "debt", sourceTextHe: "לא נמצא חוב פתוח.", usageDescription: "אין חוב פתוח" },
+  { audioId: "DEBT-004", category: "debt", sourceTextHe: "לא נמצאו חובות קודמים.", usageDescription: "אין חובות קודמים" },
+  { audioId: "DEBT-005", category: "debt", sourceTextHe: "לתשלום כל החובות הקישו 1. לתשלום סכום אחר הקישו 2. לסיום הקישו 9.", usageDescription: "תפריט אחרי שמיעת חובות" },
+  { audioId: "DEBT-006", category: "debt", sourceTextHe: "הסכום גבוה, אנא פנו לנציג.", usageDescription: "חוב מעל 99,999" },
+  { audioId: "PAY-001", category: "pay", sourceTextHe: "לתשלום הסכום המלא,", usageDescription: "פתיח לפני סכום לתשלום מלא" },
+  { audioId: "PAY-002", category: "pay", sourceTextHe: "שקלים, הקישו 1. לתשלום סכום אחר הקישו 2.", usageDescription: "המשך תפריט תשלום" },
+  { audioId: "PAY-003", category: "pay", sourceTextHe: "אנא הזינו את הסכום בשקלים ולחצו סולמית.", usageDescription: "בקשת הזנת סכום" },
+  { audioId: "PAY-004", category: "pay", sourceTextHe: "הסכום שהוזן אינו תקין. אנא נסו שוב.", usageDescription: "סכום לא תקין" },
+  { audioId: "PAY-005", category: "pay", sourceTextHe: "הסכום שהוזן גבוה מדי. אנא פנו לנציג.", usageDescription: "סכום תשלום גבוה מדי" },
+  { audioId: "PAY-006", category: "pay", sourceTextHe: "התשלום התקבל בהצלחה. תודה רבה.", usageDescription: "אישור תשלום הצליח" },
+  { audioId: "PAY-007", category: "pay", sourceTextHe: "התשלום לא הושלם. אנא נסו שוב מאוחר יותר.", usageDescription: "תשלום נכשל" },
+  { audioId: "PAY-008", category: "pay", sourceTextHe: "התשלום בכרטיס אשראי אינו זמין כרגע. נציג ייצור איתך קשר בהקדם. תודה.", usageDescription: "אין אפשרות תשלום כרגע" },
+  { audioId: "VM-001", category: "voicemail", sourceTextHe: "אנא השאירו הודעתכם לאחר הצליל.", usageDescription: "לפני הקלטת הודעה" },
+  { audioId: "VM-002", category: "voicemail", sourceTextHe: "הודעתכם התקבלה. תודה.", usageDescription: "אחרי השארת הודעה" },
+  { audioId: "SYS-001", category: "system", sourceTextHe: "תודה על התקשרותך. להתראות.", usageDescription: "סיום שיחה" },
+  { audioId: "SYS-002", category: "system", sourceTextHe: "אירעה שגיאה. אנא נסו שוב מאוחר יותר.", usageDescription: "שגיאת מערכת" },
+  { audioId: "PURP-001", category: "purpose", sourceTextHe: "גליון מתאחדת", usageDescription: "מטרת חוב / תרומה" },
+  { audioId: "PURP-002", category: "purpose", sourceTextHe: "פרנס", usageDescription: "מטרת חוב / תרומה" },
+  { audioId: "PURP-003", category: "purpose", sourceTextHe: "כללי", usageDescription: "ברירת מחדל כשאין מטרה" },
+  { audioId: "PURP-004", category: "purpose", sourceTextHe: "המטרה הרשומה בכרטיסכם", usageDescription: "מטרה חופשית / אחר" },
+  // ── גיליון2 — מספרים ומטבע (44) ─────────────────────────────────────────
+  { audioId: "NUM-DIGIT-000", category: "number", sourceTextHe: "אפס", usageDescription: "ספרה" },
+  { audioId: "NUM-DIGIT-001", category: "number", sourceTextHe: "אחד", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-002", category: "number", sourceTextHe: "שניים", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-003", category: "number", sourceTextHe: "שלושה", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-004", category: "number", sourceTextHe: "ארבעה", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-005", category: "number", sourceTextHe: "חמישה", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-006", category: "number", sourceTextHe: "שישה", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-007", category: "number", sourceTextHe: "שבעה", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-008", category: "number", sourceTextHe: "שמונה", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-DIGIT-009", category: "number", sourceTextHe: "תשעה", usageDescription: "ספרה / סכום" },
+  { audioId: "NUM-TEEN-010", category: "number", sourceTextHe: "עשרה", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-011", category: "number", sourceTextHe: "אחד עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-012", category: "number", sourceTextHe: "שנים עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-013", category: "number", sourceTextHe: "שלושה עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-014", category: "number", sourceTextHe: "ארבעה עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-015", category: "number", sourceTextHe: "חמישה עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-016", category: "number", sourceTextHe: "שישה עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-017", category: "number", sourceTextHe: "שבעה עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-018", category: "number", sourceTextHe: "שמונה עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TEEN-019", category: "number", sourceTextHe: "תשעה עשר", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-020", category: "number", sourceTextHe: "עשרים", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-030", category: "number", sourceTextHe: "שלושים", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-040", category: "number", sourceTextHe: "ארבעים", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-050", category: "number", sourceTextHe: "חמישים", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-060", category: "number", sourceTextHe: "שישים", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-070", category: "number", sourceTextHe: "שבעים", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-080", category: "number", sourceTextHe: "שמונים", usageDescription: "מספר" },
+  { audioId: "NUM-TENS-090", category: "number", sourceTextHe: "תשעים", usageDescription: "מספר" },
+  { audioId: "NUM-HUNDRED-100", category: "number", sourceTextHe: "מאה", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-200", category: "number", sourceTextHe: "מאתיים", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-300", category: "number", sourceTextHe: "שלוש מאות", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-400", category: "number", sourceTextHe: "ארבע מאות", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-500", category: "number", sourceTextHe: "חמש מאות", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-600", category: "number", sourceTextHe: "שש מאות", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-700", category: "number", sourceTextHe: "שבע מאות", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-800", category: "number", sourceTextHe: "שמונה מאות", usageDescription: "מאות" },
+  { audioId: "NUM-HUNDRED-900", category: "number", sourceTextHe: "תשע מאות", usageDescription: "מאות" },
+  { audioId: "NUM-THOUSAND-001", category: "number", sourceTextHe: "אלף", usageDescription: "אלפים" },
+  { audioId: "NUM-THOUSAND-002", category: "number", sourceTextHe: "אלפיים", usageDescription: "אלפים" },
+  { audioId: "NUM-THOUSAND-PLURAL", category: "number", sourceTextHe: "אלפים", usageDescription: "אלפים רבים" },
+  { audioId: "CUR-001", category: "currency", sourceTextHe: "שקל", usageDescription: "מטבע יחיד" },
+  { audioId: "CUR-002", category: "currency", sourceTextHe: "שקלים", usageDescription: "מטבע רבים" },
+  { audioId: "CUR-003", category: "currency", sourceTextHe: "שקל אחד", usageDescription: "סכום 1 ₪" },
+  { audioId: "CUR-004", category: "currency", sourceTextHe: "שני שקלים", usageDescription: "סכום 2 ₪" },
+];
+
+// Old (unpadded) → new (Excel-authoritative, zero-padded) Audio ID map — the
+// 30 number IDs that were seeded wrong before the Excel structure was known.
+const IVR_AUDIO_ID_RENAME_MAP = {};
+for (let d = 0; d <= 9; d++) IVR_AUDIO_ID_RENAME_MAP["NUM-DIGIT-" + d] = "NUM-DIGIT-" + String(d).padStart(3, "0");
+for (let t = 10; t <= 19; t++) IVR_AUDIO_ID_RENAME_MAP["NUM-TEEN-" + t] = "NUM-TEEN-" + String(t).padStart(3, "0");
+[20, 30, 40, 50, 60, 70, 80, 90].forEach(function (t) {
+  IVR_AUDIO_ID_RENAME_MAP["NUM-TENS-" + t] = "NUM-TENS-" + String(t).padStart(3, "0");
+});
+IVR_AUDIO_ID_RENAME_MAP["NUM-THOUSAND-1"] = "NUM-THOUSAND-001";
+IVR_AUDIO_ID_RENAME_MAP["NUM-THOUSAND-2"] = "NUM-THOUSAND-002";
 
 function initIvrAudioRecordings() {
+  // Fresh installs get the target (Excel-shaped) schema directly.
   db.exec(`
     CREATE TABLE IF NOT EXISTS ivr_audio_recordings (
       audioId          TEXT PRIMARY KEY,
       category         TEXT NOT NULL DEFAULT '',
       sourceTextHe     TEXT NOT NULL DEFAULT '',
-      yiddishText      TEXT NOT NULL DEFAULT '',
+      translation      TEXT NOT NULL DEFAULT '',
       usageDescription TEXT NOT NULL DEFAULT '',
-      audioFilename    TEXT NOT NULL DEFAULT '',
+      audioFile1       TEXT NOT NULL DEFAULT '',
+      audioFile2       TEXT NOT NULL DEFAULT '',
+      audioFile3       TEXT NOT NULL DEFAULT '',
       status           TEXT NOT NULL DEFAULT 'חסר',
       notes            TEXT NOT NULL DEFAULT '',
       createdAt        TEXT NOT NULL,
@@ -1245,6 +1342,114 @@ function initIvrAudioRecordings() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_audio_status ON ivr_audio_recordings(status)");
 }
 initIvrAudioRecordings();
+
+// Runs at most once. Three possible outcomes:
+//  - table has the OLD schema (audioFilename/yiddishText columns) → full
+//    backup + migration (rename columns, fix the 30 mismatched IDs, sync
+//    sourceTextHe/usageDescription/category to the Excel — translation,
+//    status and all 3 audio file slots are NEVER touched).
+//  - table is empty (fresh install, already has the new schema) → seed all
+//    73 canonical rows, nothing to preserve.
+//  - table already has data in the new schema → no-op. Per explicit
+//    instruction: once migrated, the DB is its own source of truth and this
+//    function must never create, change, or overwrite rows again.
+function ensureIvrAudioRecordingsUpToDate() {
+  const cols = db.prepare("PRAGMA table_info(ivr_audio_recordings)").all().map(function (c) { return c.name; });
+  const hasOldSchema = cols.indexOf("audioFilename") !== -1 || cols.indexOf("yiddishText") !== -1;
+
+  if (!hasOldSchema) {
+    const count = countIvrAudioRecordings();
+    if (count > 0) {
+      return { mode: "noop", totalBefore: count, totalAfter: count };
+    }
+    // Fresh install — seed all 73 canonical rows.
+    const now = nowIso();
+    const insert = db.prepare(`
+      INSERT INTO ivr_audio_recordings
+        (audioId, category, sourceTextHe, translation, usageDescription, audioFile1, audioFile2, audioFile3, status, notes, createdAt, updatedAt)
+      VALUES (?, ?, ?, '', ?, '', '', '', 'חסר', '', ?, ?)
+    `);
+    for (const rec of IVR_AUDIO_CANONICAL_RECORDINGS) {
+      insert.run(rec.audioId, rec.category, rec.sourceTextHe, rec.usageDescription, now, now);
+    }
+    return { mode: "seeded", totalBefore: 0, totalAfter: IVR_AUDIO_CANONICAL_RECORDINGS.length };
+  }
+
+  // ── Old schema present → full migration ──────────────────────────────────
+  const before = db.prepare("SELECT * FROM ivr_audio_recordings").all();
+  const totalBefore = before.length;
+
+  // 1. Backup — both a queryable in-DB copy and a portable JSON file.
+  const stamp = nowIso().replace(/[:.]/g, "-");
+  const backupTable = "ivr_audio_recordings_backup_" + stamp.replace(/-/g, "_");
+  db.exec('CREATE TABLE "' + backupTable + '" AS SELECT * FROM ivr_audio_recordings');
+
+  const backupsDir = path.join(__dirname, "backups");
+  if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+  const jsonBackupPath = path.join(backupsDir, "ivr-audio-recordings-pre-migration-" + stamp + ".json");
+  fs.writeFileSync(jsonBackupPath, JSON.stringify(before, null, 2), "utf8");
+
+  // 2. Schema: rename columns to the Excel-shaped names, add the 2 new file slots.
+  if (cols.indexOf("audioFilename") !== -1 && cols.indexOf("audioFile1") === -1) {
+    db.exec("ALTER TABLE ivr_audio_recordings RENAME COLUMN audioFilename TO audioFile1");
+  }
+  if (cols.indexOf("yiddishText") !== -1 && cols.indexOf("translation") === -1) {
+    db.exec("ALTER TABLE ivr_audio_recordings RENAME COLUMN yiddishText TO translation");
+  }
+  const colsAfterRename = db.prepare("PRAGMA table_info(ivr_audio_recordings)").all().map(function (c) { return c.name; });
+  if (colsAfterRename.indexOf("audioFile2") === -1) db.exec("ALTER TABLE ivr_audio_recordings ADD COLUMN audioFile2 TEXT NOT NULL DEFAULT ''");
+  if (colsAfterRename.indexOf("audioFile3") === -1) db.exec("ALTER TABLE ivr_audio_recordings ADD COLUMN audioFile3 TEXT NOT NULL DEFAULT ''");
+
+  // 3. Fix the 30 mismatched Audio IDs (rename only — every other column,
+  //    including translation/status/audio files, travels with the row).
+  let idsRenamed = 0;
+  for (const oldId in IVR_AUDIO_ID_RENAME_MAP) {
+    const newId = IVR_AUDIO_ID_RENAME_MAP[oldId];
+    const oldRow = db.prepare("SELECT audioId FROM ivr_audio_recordings WHERE audioId = ?").get(oldId);
+    if (!oldRow) continue;
+    const newExists = db.prepare("SELECT audioId FROM ivr_audio_recordings WHERE audioId = ?").get(newId);
+    if (newExists) continue; // safety: never clobber if both somehow exist
+    db.prepare("UPDATE ivr_audio_recordings SET audioId = ?, updatedAt = ? WHERE audioId = ?").run(newId, nowIso(), oldId);
+    idsRenamed++;
+  }
+
+  // 4. Excel is the source of truth for sourceTextHe/usageDescription/category
+  //    only — translation, status and the 3 audio files are never written here.
+  let recordsChanged = 0;
+  let translationsPreserved = 0;
+  let audioFilesPreserved = 0;
+  for (const canon of IVR_AUDIO_CANONICAL_RECORDINGS) {
+    const row = db.prepare("SELECT * FROM ivr_audio_recordings WHERE audioId = ?").get(canon.audioId);
+    if (!row) {
+      const now = nowIso();
+      db.prepare(`
+        INSERT INTO ivr_audio_recordings
+          (audioId, category, sourceTextHe, translation, usageDescription, audioFile1, audioFile2, audioFile3, status, notes, createdAt, updatedAt)
+        VALUES (?, ?, ?, '', ?, '', '', '', 'חסר', '', ?, ?)
+      `).run(canon.audioId, canon.category, canon.sourceTextHe, canon.usageDescription, now, now);
+      recordsChanged++;
+      continue;
+    }
+    const needsUpdate = row.sourceTextHe !== canon.sourceTextHe || row.usageDescription !== canon.usageDescription || row.category !== canon.category;
+    if (needsUpdate) {
+      db.prepare("UPDATE ivr_audio_recordings SET sourceTextHe=?, usageDescription=?, category=?, updatedAt=? WHERE audioId=?")
+        .run(canon.sourceTextHe, canon.usageDescription, canon.category, nowIso(), canon.audioId);
+      recordsChanged++;
+    }
+    if (row.translation && row.translation.trim()) translationsPreserved++;
+    if ((row.audioFile1 && row.audioFile1.trim()) || (row.audioFile2 && row.audioFile2.trim()) || (row.audioFile3 && row.audioFile3.trim())) {
+      audioFilesPreserved++;
+    }
+  }
+
+  const totalAfter = countIvrAudioRecordings();
+  return {
+    mode: "migrated",
+    totalBefore, totalAfter,
+    idsRenamed, recordsChanged, translationsPreserved, audioFilesPreserved,
+    backupTable, jsonBackupPath,
+  };
+}
 
 function getIvrAudioRecordings() {
   return db.prepare("SELECT * FROM ivr_audio_recordings ORDER BY audioId").all();
@@ -1256,19 +1461,6 @@ function getIvrAudioRecordingById(audioId) {
 
 function countIvrAudioRecordings() {
   return db.prepare("SELECT COUNT(*) AS count FROM ivr_audio_recordings").get().count;
-}
-
-// Used only by the one-time seed from docs/ivr-audio/*.csv — never overwrites
-// an existing row (seed is safe to re-run).
-function seedIvrAudioRecordingIfMissing(rec) {
-  if (getIvrAudioRecordingById(rec.audioId)) return false;
-  const now = nowIso();
-  db.prepare(`
-    INSERT INTO ivr_audio_recordings
-      (audioId, category, sourceTextHe, yiddishText, usageDescription, audioFilename, status, notes, createdAt, updatedAt)
-    VALUES (?, ?, ?, '', ?, '', 'חסר', ?, ?, ?)
-  `).run(rec.audioId, rec.category || "", rec.sourceTextHe || "", rec.usageDescription || "", rec.notes || "", now, now);
-  return true;
 }
 
 // Manual "+ שורה חדשה" — returns null if the id already exists.
@@ -1289,27 +1481,33 @@ function updateIvrAudioRecording(audioId, fields) {
   const next = {
     category:         fields.category         !== undefined ? String(fields.category)         : existing.category,
     sourceTextHe:      fields.sourceTextHe      !== undefined ? String(fields.sourceTextHe)      : existing.sourceTextHe,
-    yiddishText:       fields.yiddishText       !== undefined ? String(fields.yiddishText)       : existing.yiddishText,
+    translation:       fields.translation       !== undefined ? String(fields.translation)       : existing.translation,
     usageDescription:  fields.usageDescription  !== undefined ? String(fields.usageDescription)  : existing.usageDescription,
     status:            fields.status            !== undefined ? String(fields.status)            : existing.status,
     notes:             fields.notes             !== undefined ? String(fields.notes)             : existing.notes,
   };
   db.prepare(`
     UPDATE ivr_audio_recordings
-    SET category=?, sourceTextHe=?, yiddishText=?, usageDescription=?, status=?, notes=?, updatedAt=?
+    SET category=?, sourceTextHe=?, translation=?, usageDescription=?, status=?, notes=?, updatedAt=?
     WHERE audioId=?
-  `).run(next.category, next.sourceTextHe, next.yiddishText, next.usageDescription, next.status, next.notes, nowIso(), String(audioId));
+  `).run(next.category, next.sourceTextHe, next.translation, next.usageDescription, next.status, next.notes, nowIso(), String(audioId));
   return getIvrAudioRecordingById(audioId);
 }
 
-function setIvrAudioRecordingFile(audioId, filename, status) {
-  db.prepare("UPDATE ivr_audio_recordings SET audioFilename=?, status=?, updatedAt=? WHERE audioId=?")
+var IVR_AUDIO_FILE_COLUMNS = { 1: "audioFile1", 2: "audioFile2", 3: "audioFile3" };
+
+function setIvrAudioRecordingFileSlot(audioId, slot, filename, status) {
+  const col = IVR_AUDIO_FILE_COLUMNS[slot];
+  if (!col) throw new Error("סלוט קובץ לא תקין: " + slot);
+  db.prepare("UPDATE ivr_audio_recordings SET " + col + "=?, status=?, updatedAt=? WHERE audioId=?")
     .run(filename, status, nowIso(), String(audioId));
   return getIvrAudioRecordingById(audioId);
 }
 
-function clearIvrAudioRecordingFile(audioId) {
-  db.prepare("UPDATE ivr_audio_recordings SET audioFilename='', updatedAt=? WHERE audioId=?")
+function clearIvrAudioRecordingFileSlot(audioId, slot) {
+  const col = IVR_AUDIO_FILE_COLUMNS[slot];
+  if (!col) throw new Error("סלוט קובץ לא תקין: " + slot);
+  db.prepare("UPDATE ivr_audio_recordings SET " + col + "='', updatedAt=? WHERE audioId=?")
     .run(nowIso(), String(audioId));
   return getIvrAudioRecordingById(audioId);
 }
@@ -1394,12 +1592,13 @@ module.exports = {
   // Phone normalization (shared with sync service)
   normalizePhoneForDb,
   // IVR Audio Recordings
+  ensureIvrAudioRecordingsUpToDate,
   getIvrAudioRecordings,
   getIvrAudioRecordingById,
   countIvrAudioRecordings,
-  seedIvrAudioRecordingIfMissing,
   createIvrAudioRecording,
   updateIvrAudioRecording,
-  setIvrAudioRecordingFile,
-  clearIvrAudioRecordingFile,
+  setIvrAudioRecordingFileSlot,
+  clearIvrAudioRecordingFileSlot,
+  IVR_AUDIO_CANONICAL_RECORDINGS,
 };

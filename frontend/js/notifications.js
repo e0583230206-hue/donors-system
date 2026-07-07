@@ -11,6 +11,8 @@
 
   var donors = Database.get("donors");
   var tasks  = Database.get("tasks");
+  if (!Array.isArray(donors)) donors = [];
+  if (!Array.isArray(tasks))  tasks  = [];
 
   var todayTasks = tasks.filter(function (t) {
     return !t.done && t.dueDate === todayISO;
