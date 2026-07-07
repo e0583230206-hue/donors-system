@@ -1223,6 +1223,97 @@ function getSyncLogs(limit) {
   return db.prepare("SELECT * FROM sync_log ORDER BY id DESC LIMIT ?").all(Number(limit) || 50);
 }
 
+// ── IVR Audio Recordings (settings.html "ניהול הקלטות" tab) ─────────────────
+// Self-contained, like alfon_pending above — does not touch any donor/payment/
+// worker table. Status validation lives in ivr-audio.service.js, not here.
+
+function initIvrAudioRecordings() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ivr_audio_recordings (
+      audioId          TEXT PRIMARY KEY,
+      category         TEXT NOT NULL DEFAULT '',
+      sourceTextHe     TEXT NOT NULL DEFAULT '',
+      yiddishText      TEXT NOT NULL DEFAULT '',
+      usageDescription TEXT NOT NULL DEFAULT '',
+      audioFilename    TEXT NOT NULL DEFAULT '',
+      status           TEXT NOT NULL DEFAULT 'חסר',
+      notes            TEXT NOT NULL DEFAULT '',
+      createdAt        TEXT NOT NULL,
+      updatedAt        TEXT NOT NULL
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_audio_status ON ivr_audio_recordings(status)");
+}
+initIvrAudioRecordings();
+
+function getIvrAudioRecordings() {
+  return db.prepare("SELECT * FROM ivr_audio_recordings ORDER BY audioId").all();
+}
+
+function getIvrAudioRecordingById(audioId) {
+  return db.prepare("SELECT * FROM ivr_audio_recordings WHERE audioId = ?").get(String(audioId));
+}
+
+function countIvrAudioRecordings() {
+  return db.prepare("SELECT COUNT(*) AS count FROM ivr_audio_recordings").get().count;
+}
+
+// Used only by the one-time seed from docs/ivr-audio/*.csv — never overwrites
+// an existing row (seed is safe to re-run).
+function seedIvrAudioRecordingIfMissing(rec) {
+  if (getIvrAudioRecordingById(rec.audioId)) return false;
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO ivr_audio_recordings
+      (audioId, category, sourceTextHe, yiddishText, usageDescription, audioFilename, status, notes, createdAt, updatedAt)
+    VALUES (?, ?, ?, '', ?, '', 'חסר', ?, ?, ?)
+  `).run(rec.audioId, rec.category || "", rec.sourceTextHe || "", rec.usageDescription || "", rec.notes || "", now, now);
+  return true;
+}
+
+// Manual "+ שורה חדשה" — returns null if the id already exists.
+function createIvrAudioRecording(audioId) {
+  if (getIvrAudioRecordingById(audioId)) return null;
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO ivr_audio_recordings (audioId, createdAt, updatedAt)
+    VALUES (?, ?, ?)
+  `).run(audioId, now, now);
+  return getIvrAudioRecordingById(audioId);
+}
+
+// Merge-update: only fields present in `fields` are changed.
+function updateIvrAudioRecording(audioId, fields) {
+  const existing = getIvrAudioRecordingById(audioId);
+  if (!existing) return null;
+  const next = {
+    category:         fields.category         !== undefined ? String(fields.category)         : existing.category,
+    sourceTextHe:      fields.sourceTextHe      !== undefined ? String(fields.sourceTextHe)      : existing.sourceTextHe,
+    yiddishText:       fields.yiddishText       !== undefined ? String(fields.yiddishText)       : existing.yiddishText,
+    usageDescription:  fields.usageDescription  !== undefined ? String(fields.usageDescription)  : existing.usageDescription,
+    status:            fields.status            !== undefined ? String(fields.status)            : existing.status,
+    notes:             fields.notes             !== undefined ? String(fields.notes)             : existing.notes,
+  };
+  db.prepare(`
+    UPDATE ivr_audio_recordings
+    SET category=?, sourceTextHe=?, yiddishText=?, usageDescription=?, status=?, notes=?, updatedAt=?
+    WHERE audioId=?
+  `).run(next.category, next.sourceTextHe, next.yiddishText, next.usageDescription, next.status, next.notes, nowIso(), String(audioId));
+  return getIvrAudioRecordingById(audioId);
+}
+
+function setIvrAudioRecordingFile(audioId, filename, status) {
+  db.prepare("UPDATE ivr_audio_recordings SET audioFilename=?, status=?, updatedAt=? WHERE audioId=?")
+    .run(filename, status, nowIso(), String(audioId));
+  return getIvrAudioRecordingById(audioId);
+}
+
+function clearIvrAudioRecordingFile(audioId) {
+  db.prepare("UPDATE ivr_audio_recordings SET audioFilename='', updatedAt=? WHERE audioId=?")
+    .run(nowIso(), String(audioId));
+  return getIvrAudioRecordingById(audioId);
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 initDatabase();
@@ -1302,4 +1393,13 @@ module.exports = {
   getSessionHistory,
   // Phone normalization (shared with sync service)
   normalizePhoneForDb,
+  // IVR Audio Recordings
+  getIvrAudioRecordings,
+  getIvrAudioRecordingById,
+  countIvrAudioRecordings,
+  seedIvrAudioRecordingIfMissing,
+  createIvrAudioRecording,
+  updateIvrAudioRecording,
+  setIvrAudioRecordingFile,
+  clearIvrAudioRecordingFile,
 };

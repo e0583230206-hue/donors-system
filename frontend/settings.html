@@ -42,6 +42,91 @@
         </div>
       </header>
 
+      <nav class="settings-tabs" id="settingsTabs">
+        <button type="button" class="settings-tab-btn" data-tab="ivr-audio">🎙️ ניהול הקלטות</button>
+        <button type="button" class="settings-tab-btn" data-tab="workers">👥 הגדרות עובדים</button>
+        <button type="button" class="settings-tab-btn" data-tab="currency">💱 הגדרות מטבע</button>
+        <button type="button" class="settings-tab-btn" data-tab="sessions">🔐 כניסות ויציאות</button>
+        <button type="button" class="settings-tab-btn" data-tab="backup">💾 גיבוי ושחזור</button>
+      </nav>
+
+      <div class="tab-panel" data-tab-panel="ivr-audio">
+        <section class="panel">
+          <h2>🎙️ ניהול הקלטות IVR — א בלאט גמרא</h2>
+          <p style="color:var(--muted);margin-bottom:14px;font-size:14px">
+            כלי הכנה/טיוטה לקבצי השמע העתידיים באידיש למערכת הטלפונית — לניהול ומעקב בלבד. אינו מחובר לטכנוליין ואינו משפיע על ה-IVR הפעיל.
+          </p>
+
+          <div class="stats-grid" style="margin-bottom:18px;">
+            <div class="stat-card">
+              <h3>📋 סה"כ</h3>
+              <strong id="ivrAudioStatTotal">0</strong>
+              <p>הקלטות במפרט</p>
+            </div>
+            <div class="stat-card">
+              <h3>❌ חסר</h3>
+              <strong id="ivrAudioStatMissing">0</strong>
+              <p>טרם טופל</p>
+            </div>
+            <div class="stat-card warning">
+              <h3>📝 תורגם</h3>
+              <strong id="ivrAudioStatTranslated">0</strong>
+              <p>ממתין להקלטה</p>
+            </div>
+            <div class="stat-card">
+              <h3>🎤 הוקלט</h3>
+              <strong id="ivrAudioStatRecorded">0</strong>
+              <p>ממתין לבדיקה</p>
+            </div>
+            <div class="stat-card success">
+              <h3>✅ אושר</h3>
+              <strong id="ivrAudioStatApproved">0</strong>
+              <p>מוכן</p>
+            </div>
+          </div>
+
+          <div class="form-grid" style="margin-bottom:10px;">
+            <input id="ivrAudioSearchInput" type="search" placeholder="🔍 חיפוש לפי Audio ID / טקסט / סטטוס..." />
+            <select id="ivrAudioStatusFilter">
+              <option value="">כל הסטטוסים</option>
+              <option value="חסר">חסר</option>
+              <option value="תורגם">תורגם</option>
+              <option value="הוקלט">הוקלט</option>
+              <option value="נבדק">נבדק</option>
+              <option value="אושר">אושר</option>
+            </select>
+          </div>
+          <div class="form-grid" style="margin-bottom:10px;">
+            <button id="ivrAudioAddRowBtn" type="button" class="secondary-btn">➕ שורה חדשה</button>
+            <button id="ivrAudioExportExcelBtn" type="button" class="success-btn">📊 ייצוא לאקסל</button>
+            <button id="ivrAudioExportJsonBtn" type="button" class="secondary-btn">💾 גיבוי JSON</button>
+            <button id="ivrAudioRefreshBtn" type="button" class="secondary-btn">🔄 רענון</button>
+          </div>
+          <p id="ivrAudioMessage" class="message"></p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Audio ID</th>
+                  <th>קטגוריה</th>
+                  <th>טקסט מקור בעברית</th>
+                  <th>טקסט באידיש</th>
+                  <th>הסבר שימוש</th>
+                  <th>קובץ שמע</th>
+                  <th>סטטוס</th>
+                  <th>הערות</th>
+                </tr>
+              </thead>
+              <tbody id="ivrAudioTableBody">
+                <tr><td colspan="8" style="text-align:center;color:var(--muted)">טוען...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="tab-panel" data-tab-panel="workers" style="display:none;">
       <section class="stats-grid">
         <div class="stat-card">
           <h3>👥 עובדים</h3>
@@ -67,7 +152,9 @@
           <p>גרסה מקומית</p>
         </div>
       </section>
+      </div>
 
+      <div class="tab-panel" data-tab-panel="currency" style="display:none;">
       <section class="panel">
         <h2>💱 הגדרות מטבע</h2>
         <div class="form-grid">
@@ -80,7 +167,9 @@
         <button id="saveCurrencyButton" class="primary-btn">שמור מטבע</button>
         <p id="currencyMessage" class="message"></p>
       </section>
+      </div>
 
+      <div class="tab-panel" data-tab-panel="workers" style="display:none;">
       <section class="panel">
         <h2>➕ הוספת עובד</h2>
 
@@ -149,7 +238,9 @@
 
         <p id="changePasswordMessage" class="message"></p>
       </section>
+      </div>
 
+      <div class="tab-panel" data-tab-panel="sessions" style="display:none;">
       <section class="panel" id="sessionsPanel" style="display:none;">
         <h2>🔐 ניהול כניסות ויציאות</h2>
         <p style="color:var(--muted);margin-bottom:14px;font-size:14px">מעקב אחר כניסות ויציאות של עובדים למערכת, כולל ניתוק מרחוק — גלוי למנהלים בלבד.</p>
@@ -255,7 +346,9 @@
           </table>
         </div>
       </section>
+      </div>
 
+      <div class="tab-panel" data-tab-panel="backup" style="display:none;">
       <section class="panel">
         <h2>💾 גיבוי ושחזור</h2>
 
@@ -299,6 +392,7 @@
         <p id="autoBackupMessage" class="message"></p>
         <ul id="autoBackupList" style="list-style:none;padding:0;margin-top:10px;font-size:13px;color:var(--muted)"></ul>
       </section>
+      </div>
     </main>
     <script src="js/auth.js"></script>
     <script src="js/database.js"></script>

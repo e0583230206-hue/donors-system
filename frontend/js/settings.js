@@ -1385,3 +1385,366 @@ reloadWorkers().then(function () { renderWorkers(); });
 
   loadSessionsPanel();
 }());
+
+// ── Settings tabs ─────────────────────────────────────────────────────────────
+(function () {
+  var tabButtons = document.querySelectorAll(".settings-tab-btn");
+  var tabPanels  = document.querySelectorAll("[data-tab-panel]");
+  if (!tabButtons.length) return;
+
+  var admin = typeof isAdmin === "function" && isAdmin();
+
+  // Admin-only tabs — hide the button entirely for non-admins (same visibility
+  // rule the sessions panel already used, just applied to the tab button too).
+  ["ivr-audio", "sessions"].forEach(function (name) {
+    if (admin) return;
+    var btn = document.querySelector('.settings-tab-btn[data-tab="' + name + '"]');
+    if (btn) btn.style.display = "none";
+  });
+
+  function activate(tabName) {
+    tabButtons.forEach(function (btn) {
+      btn.classList.toggle("active", btn.dataset.tab === tabName);
+    });
+    tabPanels.forEach(function (panel) {
+      panel.style.display = panel.getAttribute("data-tab-panel") === tabName ? "" : "none";
+    });
+    try { window.location.hash = tabName; } catch (_) {}
+  }
+
+  var allowedTabs = Array.prototype.map.call(tabButtons, function (b) { return b.dataset.tab; })
+    .filter(function (name) { return admin || (name !== "ivr-audio" && name !== "sessions"); });
+
+  tabButtons.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (btn.style.display === "none") return;
+      activate(btn.dataset.tab);
+    });
+  });
+
+  var initial = (window.location.hash || "").replace("#", "");
+  if (allowedTabs.indexOf(initial) === -1) {
+    initial = admin ? "ivr-audio" : "workers";
+  }
+  activate(initial);
+}());
+
+// ── IVR Audio Recordings tab ("ניהול הקלטות") ─────────────────────────────────
+// Staging/management tool for the future Yiddish IVR recordings. Talks only to
+// /api/admin/ivr-audio/* (admin-only on the server). Does not touch Technoline
+// or ivr.js/ivr.service.js in any way.
+(function () {
+  var tableBody = document.getElementById("ivrAudioTableBody");
+  if (!tableBody || typeof isAdmin !== "function" || !isAdmin()) return;
+
+  var searchInput  = document.getElementById("ivrAudioSearchInput");
+  var statusFilter = document.getElementById("ivrAudioStatusFilter");
+  var addRowBtn    = document.getElementById("ivrAudioAddRowBtn");
+  var exportXlsBtn = document.getElementById("ivrAudioExportExcelBtn");
+  var exportJsonBtn= document.getElementById("ivrAudioExportJsonBtn");
+  var refreshBtn   = document.getElementById("ivrAudioRefreshBtn");
+  var msgEl        = document.getElementById("ivrAudioMessage");
+
+  var statTotal      = document.getElementById("ivrAudioStatTotal");
+  var statMissing     = document.getElementById("ivrAudioStatMissing");
+  var statTranslated  = document.getElementById("ivrAudioStatTranslated");
+  var statRecorded    = document.getElementById("ivrAudioStatRecorded");
+  var statApproved    = document.getElementById("ivrAudioStatApproved");
+
+  var STATUSES   = ["חסר", "תורגם", "הוקלט", "נבדק", "אושר"];
+  var STATUS_CSS = { "חסר": "missing", "תורגם": "translated", "הוקלט": "recorded", "נבדק": "checked", "אושר": "approved" };
+
+  var allRecordings = [];
+
+  function showMsg(text, type) {
+    if (!msgEl) return;
+    msgEl.innerText = text;
+    msgEl.className = "message show " + (type || "success");
+    clearTimeout(showMsg._t);
+    showMsg._t = setTimeout(function () {
+      msgEl.innerText = "";
+      msgEl.className = "message";
+    }, 3000);
+  }
+
+  async function loadRecordings() {
+    tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">טוען...</td></tr>';
+    try {
+      var res = await apiFetch("/api/admin/ivr-audio");
+      if (!res.ok) throw new Error("שגיאה בטעינת הרשימה");
+      allRecordings = await res.json();
+      render();
+      updateStats();
+    } catch (err) {
+      tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--danger)">שגיאה בטעינה: ' + escapeHTML(err.message) + "</td></tr>";
+    }
+  }
+
+  function updateStats() {
+    var counts = { total: allRecordings.length };
+    STATUSES.forEach(function (s) { counts[s] = 0; });
+    allRecordings.forEach(function (r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+    if (statTotal)      statTotal.innerText      = counts.total;
+    if (statMissing)     statMissing.innerText     = counts["חסר"]   || 0;
+    if (statTranslated)  statTranslated.innerText  = counts["תורגם"] || 0;
+    if (statRecorded)    statRecorded.innerText    = counts["הוקלט"] || 0;
+    if (statApproved)    statApproved.innerText    = counts["אושר"] || 0;
+  }
+
+  function matchesFilters(rec, query, status) {
+    if (status && rec.status !== status) return false;
+    if (!query) return true;
+    var hay = [rec.audioId, rec.category, rec.sourceTextHe, rec.yiddishText, rec.usageDescription, rec.notes, rec.status]
+      .join(" ").toLowerCase();
+    return hay.indexOf(query.toLowerCase()) !== -1;
+  }
+
+  function render() {
+    var query  = (searchInput  && searchInput.value.trim())  || "";
+    var status = (statusFilter && statusFilter.value)        || "";
+    var rows = allRecordings.filter(function (r) { return matchesFilters(r, query, status); });
+
+    tableBody.innerHTML = "";
+    if (!rows.length) {
+      tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">אין הקלטות להצגה</td></tr>';
+      return;
+    }
+    rows.forEach(function (rec) { tableBody.appendChild(buildRow(rec)); });
+  }
+
+  function buildRow(rec) {
+    var tr = document.createElement("tr");
+
+    var tdId = document.createElement("td");
+    tdId.style.fontFamily = "monospace";
+    tdId.style.fontWeight = "700";
+    tdId.style.whiteSpace = "nowrap";
+    tdId.textContent = rec.audioId;
+    tr.appendChild(tdId);
+
+    tr.appendChild(makeInputCell(rec, "category", "input"));
+    tr.appendChild(makeInputCell(rec, "sourceTextHe", "textarea"));
+    tr.appendChild(makeInputCell(rec, "yiddishText", "textarea"));
+    tr.appendChild(makeInputCell(rec, "usageDescription", "textarea"));
+    tr.appendChild(buildAudioCell(rec));
+    tr.appendChild(buildStatusCell(rec));
+    tr.appendChild(makeInputCell(rec, "notes", "textarea"));
+
+    return tr;
+  }
+
+  function makeInputCell(rec, field, kind) {
+    var td = document.createElement("td");
+    var el = document.createElement(kind === "textarea" ? "textarea" : "input");
+    if (kind === "input") el.type = "text";
+    el.value = rec[field] || "";
+    el.style.width = "100%";
+    el.style.minWidth = "140px";
+    el.style.font = "inherit";
+    el.style.fontSize = "13.5px";
+    el.style.border = "1px solid transparent";
+    el.style.borderRadius = "6px";
+    el.style.padding = "6px 8px";
+    el.style.background = "transparent";
+    if (kind === "textarea") { el.style.minHeight = "40px"; el.style.resize = "vertical"; }
+    el.addEventListener("focus", function () { el.style.borderColor = "var(--border)"; el.style.background = "var(--bg-soft)"; });
+    el.addEventListener("blur",  function () { el.style.borderColor = "transparent"; el.style.background = "transparent"; });
+    el.addEventListener("change", function () { saveField(rec.audioId, field, el.value); });
+    td.appendChild(el);
+    return td;
+  }
+
+  function buildStatusCell(rec) {
+    var td = document.createElement("td");
+    var sel = document.createElement("select");
+    sel.className = "ivr-audio-status-select ivr-audio-status-" + (STATUS_CSS[rec.status] || "missing");
+    STATUSES.forEach(function (s) {
+      var opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      if (s === rec.status) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", function () {
+      sel.className = "ivr-audio-status-select ivr-audio-status-" + (STATUS_CSS[sel.value] || "missing");
+      saveField(rec.audioId, "status", sel.value);
+    });
+    td.appendChild(sel);
+    return td;
+  }
+
+  function buildAudioCell(rec) {
+    var td = document.createElement("td");
+    td.style.minWidth = "220px";
+
+    if (rec.audioFilename) {
+      var audio = document.createElement("audio");
+      audio.controls = true;
+      audio.style.width = "100%";
+      audio.style.height = "32px";
+      audio.style.display = "block";
+      audio.style.marginBottom = "4px";
+      audio.src = "/uploads/ivr-audio/" + encodeURIComponent(rec.audioFilename);
+      td.appendChild(audio);
+
+      var name = document.createElement("div");
+      name.style.fontSize = "11px";
+      name.style.color = "var(--muted)";
+      name.style.wordBreak = "break-all";
+      name.style.marginBottom = "4px";
+      name.textContent = rec.audioFilename;
+      td.appendChild(name);
+
+      var delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "danger-btn";
+      delBtn.style.fontSize = "12px";
+      delBtn.style.padding = "4px 10px";
+      delBtn.textContent = "🗑️ מחק קובץ";
+      delBtn.addEventListener("click", function () { deleteAudio(rec.audioId); });
+      td.appendChild(delBtn);
+    }
+
+    var label = document.createElement("label");
+    label.className = "secondary-btn";
+    label.style.display = "inline-flex";
+    label.style.alignItems = "center";
+    label.style.gap = "6px";
+    label.style.cursor = "pointer";
+    label.style.fontSize = "12px";
+    label.style.padding = "4px 10px";
+    label.textContent = rec.audioFilename ? "🔁 החלף קובץ" : "⬆️ העלה קובץ";
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = "audio/*";
+    input.hidden = true;
+    input.addEventListener("change", function () {
+      if (input.files[0]) uploadAudio(rec.audioId, input.files[0]);
+    });
+    label.appendChild(input);
+    td.appendChild(label);
+
+    return td;
+  }
+
+  async function saveField(audioId, field, value) {
+    try {
+      var body = {};
+      body[field] = value;
+      var res = await apiFetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId), {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה בשמירה");
+      var idx = allRecordings.findIndex(function (r) { return r.audioId === audioId; });
+      if (idx >= 0) allRecordings[idx][field] = value;
+      showMsg("נשמר ✓");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    }
+  }
+
+  // Uses fetch directly (not apiFetch) — apiFetch always forces
+  // Content-Type: application/json, which breaks multipart/form-data uploads
+  // (the browser needs to set its own boundary). Only the Authorization
+  // header is needed here.
+  async function uploadAudio(audioId, file) {
+    var fd = new FormData();
+    fd.append("audio", file);
+    showMsg("מעלה קובץ...");
+    try {
+      var headers = {};
+      if (typeof getAuthToken === "function") {
+        var token = getAuthToken();
+        if (token) headers["Authorization"] = "Bearer " + token;
+      }
+      var res = await fetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId) + "/audio", {
+        method: "POST",
+        headers: headers,
+        body: fd,
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה בהעלאה");
+      var idx = allRecordings.findIndex(function (r) { return r.audioId === audioId; });
+      if (idx >= 0) allRecordings[idx] = data.recording;
+      render();
+      updateStats();
+      showMsg("הקובץ הועלה ✓");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    }
+  }
+
+  async function deleteAudio(audioId) {
+    if (!confirm("למחוק את קובץ השמע?")) return;
+    try {
+      var res = await apiFetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId) + "/audio", { method: "DELETE" });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה במחיקה");
+      var idx = allRecordings.findIndex(function (r) { return r.audioId === audioId; });
+      if (idx >= 0) allRecordings[idx] = data.recording;
+      render();
+      updateStats();
+      showMsg("הקובץ נמחק");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    }
+  }
+
+  async function addRow() {
+    var id = prompt("Audio ID חדש:");
+    if (!id) return;
+    try {
+      var res = await apiFetch("/api/admin/ivr-audio", {
+        method: "POST",
+        body: JSON.stringify({ audioId: id.trim() }),
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה");
+      await loadRecordings();
+      showMsg("נוספה שורה חדשה ✓");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    }
+  }
+
+  function exportToExcel() {
+    var rows = allRecordings.map(function (r) {
+      return {
+        "Audio ID": r.audioId,
+        "קטגוריה": r.category,
+        "טקסט מקור בעברית": r.sourceTextHe,
+        "טקסט באידיש": r.yiddishText,
+        "הסבר שימוש": r.usageDescription,
+        "שם קובץ שמע": r.audioFilename,
+        "סטטוס": r.status,
+        "הערות": r.notes,
+      };
+    });
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "הקלטות IVR");
+    XLSX.writeFile(wb, "ivr-audio-" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  }
+
+  function exportJsonBackup() {
+    var blob = new Blob([JSON.stringify(allRecordings, null, 2)], { type: "application/json" });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement("a");
+    a.href = url;
+    a.download = "ivr-audio-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  if (searchInput)   searchInput.addEventListener("input", render);
+  if (statusFilter)  statusFilter.addEventListener("change", render);
+  if (addRowBtn)     addRowBtn.addEventListener("click", addRow);
+  if (exportXlsBtn)  exportXlsBtn.addEventListener("click", exportToExcel);
+  if (exportJsonBtn) exportJsonBtn.addEventListener("click", exportJsonBackup);
+  if (refreshBtn)    refreshBtn.addEventListener("click", loadRecordings);
+
+  loadRecordings();
+}());

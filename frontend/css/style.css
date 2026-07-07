@@ -552,6 +552,63 @@ nav span {
   gap: 22px;
 }
 
+/* ── Settings tabs (settings.html) ────────────────────────────────────── */
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-tab-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 12px 12px 0 0;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.settings-tab-btn:hover {
+  color: var(--text);
+  background: var(--primary-soft);
+}
+
+.settings-tab-btn.active {
+  color: var(--primary-dark);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: 0 -3px 0 var(--gold) inset;
+}
+
+.settings-tab-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ── IVR audio recordings tab — status pills ──────────────────────────── */
+.ivr-audio-status-select {
+  padding: 6px 10px;
+  border-radius: 100px;
+  font-weight: 700;
+  font-size: 12.5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.ivr-audio-status-missing    { background: var(--bg-soft);   color: var(--muted); }
+.ivr-audio-status-translated { background: var(--warning-soft); color: var(--warning); }
+.ivr-audio-status-recorded   { background: var(--primary-soft); color: var(--primary-dark); }
+.ivr-audio-status-checked    { background: #e0e7ff; color: #4338ca; }
+.ivr-audio-status-approved   { background: var(--success-soft); color: var(--success); }
+
 .panel {
   background: linear-gradient(180deg, #fffdf8, #f7f1e6);
   border: 1px solid var(--border);
