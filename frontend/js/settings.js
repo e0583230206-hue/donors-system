@@ -1449,8 +1449,10 @@ reloadWorkers().then(function () { renderWorkers(); });
 
   // Categories that belong on גיליון1 (fixed sentences) vs גיליון2 (numbers/
   // currency) when exporting back to the exact Excel structure. Also used to
-  // split the two internal sheet-tabs in the UI itself.
-  var SHEET1_CATEGORIES = ["open", "menu", "debt", "pay", "voicemail", "system", "purpose"];
+  // split the two internal sheet-tabs in the UI itself. "ident" = the caller-
+  // identification texts added after the frozen v1.0 73-row spec — fixed
+  // sentences, not numbers, so they belong on גיליון1 too.
+  var SHEET1_CATEGORIES = ["open", "menu", "debt", "pay", "voicemail", "system", "purpose", "ident"];
   var activeSheet = "sentences"; // "sentences" | "numbers"
 
   // Fields that support Excel-style multi-cell paste, in on-screen column

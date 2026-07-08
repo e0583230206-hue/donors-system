@@ -24,4 +24,8 @@ jobs:
             git pull origin master
             cd frontend/backend
             npm ci --omit=dev
+            # Idempotent — only ever inserts a row that's still missing by
+            # audioId, never touches an existing one. Safe to run on every
+            # deploy forever; a no-op once all rows already exist.
+            node seed-ident-audio.js
             pm2 restart donors --update-env
