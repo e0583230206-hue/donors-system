@@ -179,6 +179,20 @@ function initDatabase() {
   try { db.exec("ALTER TABLE ivr_call_logs ADD COLUMN timestamp TEXT"); } catch (_) {}
   try { db.exec("ALTER TABLE payments ADD COLUMN confirmationNumber TEXT"); } catch (_) {}
 
+  // ── Caller-identification redesign: payer (who called/identified
+  // themselves) vs beneficiary (existing donorId — whose debt is paid) ──────
+  try { db.exec("ALTER TABLE payments ADD COLUMN payerDonorId INTEGER REFERENCES donors(id)"); } catch (_) {}
+  try { db.exec("ALTER TABLE payments ADD COLUMN payerPhone TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE payments ADD COLUMN identificationMethod TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE payments ADD COLUMN isSelfPayment INTEGER"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_donations ADD COLUMN payerDonorId INTEGER REFERENCES donors(id)"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_donations ADD COLUMN payerPhone TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_donations ADD COLUMN identificationMethod TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_donations ADD COLUMN isSelfPayment INTEGER"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN payerDonorId INTEGER REFERENCES donors(id)"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN payerDonorName TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN payerIdentMethod TEXT"); } catch (_) {}
+
   try {
     const missing = db.prepare("SELECT COUNT(*) AS count FROM ivr_call_logs WHERE timestamp IS NULL").get();
     if (missing.count > 0) {
@@ -433,9 +447,19 @@ function recordPayment(payment) {
   );
 }
 
-function savePaymentInTransaction(callId, phone, amount, donorId, confirmationNumber) {
-  const cid = String(callId).trim();
-  const ph  = String(phone).trim();
+// details: { callId, phone, amount, donorId, confirmationNumber, payerDonorId,
+//            payerPhone, identificationMethod, isSelfPayment }
+// donorId is always the BENEFICIARY (whose debt is paid) — unchanged meaning.
+function savePaymentInTransaction(details) {
+  const cid = String(details.callId).trim();
+  const ph  = String(details.phone).trim();
+  const amount               = details.amount;
+  const donorId              = details.donorId              || null;
+  const confirmationNumber   = details.confirmationNumber   || null;
+  const payerDonorId         = details.payerDonorId         || null;
+  const payerPhone           = details.payerPhone           || null;
+  const identificationMethod = details.identificationMethod || null;
+  const isSelfPayment        = details.isSelfPayment ? 1 : 0;
 
   try {
     db.exec("BEGIN");
@@ -449,16 +473,20 @@ function savePaymentInTransaction(callId, phone, amount, donorId, confirmationNu
     ).get(cid);
 
     if (!existingDonation) {
-      db.prepare(
-        "INSERT OR IGNORE INTO ivr_donations (callId, phone, amount, donorId, createdAt) VALUES (?, ?, ?, ?, ?)"
-      ).run(cid, ph, amount, donorId || null, nowIso());
+      db.prepare(`
+        INSERT OR IGNORE INTO ivr_donations
+          (callId, phone, amount, donorId, payerDonorId, payerPhone, identificationMethod, isSelfPayment, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(cid, ph, amount, donorId, payerDonorId, payerPhone, identificationMethod, isSelfPayment, nowIso());
     }
 
     if (!existingPayment) {
       const stamp = nowIso();
-      db.prepare(
-        "INSERT OR IGNORE INTO payments (callId, phone, donorId, amount, status, source, confirmationNumber, createdAt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run(cid, ph, donorId || null, amount, "success", "ivr", confirmationNumber || null, stamp, stamp);
+      db.prepare(`
+        INSERT OR IGNORE INTO payments
+          (callId, phone, donorId, amount, status, source, confirmationNumber, payerDonorId, payerPhone, identificationMethod, isSelfPayment, createdAt, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(cid, ph, donorId, amount, "success", "ivr", confirmationNumber, payerDonorId, payerPhone, identificationMethod, isSelfPayment, stamp, stamp);
     }
 
     db.exec("COMMIT");
@@ -690,6 +718,17 @@ function updateCallSessionDonor(callId, donorId, donorName) {
     SET donorId = ?, donorName = ?
     WHERE callId = ? AND donorId IS NULL
   `).run(donorId || null, donorName || null, String(callId).trim());
+}
+
+// Same idempotency pattern as updateCallSessionDonor — records who CALLED
+// and identified themselves (payer), independent of donorId which (as of
+// the caller-identification redesign) always means the BENEFICIARY.
+function updateCallSessionPayer(callId, payerDonorId, payerDonorName, payerIdentMethod) {
+  db.prepare(`
+    UPDATE ivr_call_sessions
+    SET payerDonorId = ?, payerDonorName = ?, payerIdentMethod = ?
+    WHERE callId = ? AND payerDonorId IS NULL
+  `).run(payerDonorId || null, payerDonorName || null, payerIdentMethod || null, String(callId).trim());
 }
 
 function endCallSession(callId, outcome, amountPaid) {
@@ -1547,6 +1586,7 @@ module.exports = {
   // Call Sessions
   startCallSession,
   updateCallSessionDonor,
+  updateCallSessionPayer,
   endCallSession,
   getCallSessions,
   getCallLogsByCallId,

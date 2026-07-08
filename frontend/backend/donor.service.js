@@ -46,21 +46,21 @@ function donorMatchesPhone(donor, normalizedPhone) {
   return getAllDonorPhones(donor).indexOf(normalizedPhone) !== -1;
 }
 
-function getDonorForIvr(phone) {
-  var normalizedPhone = normalizePhone(phone);
-  if (!normalizedPhone) return null;
+// Israeli teudat zehut is numeric — same digit-stripping approach as phones.
+function normalizeIdNumber(idNumber) {
+  if (idNumber === undefined || idNumber === null) return "";
+  return String(idNumber).trim().replace(/\D/g, "");
+}
 
-  // Search app_state JSON by ALL phone fields — this is the authoritative source.
-  var appDonors = getAppState("donors");
-  var appDonor  = null;
-  if (Array.isArray(appDonors)) {
-    appDonor = appDonors.find(function (d) {
-      return donorMatchesPhone(d, normalizedPhone);
-    }) || null;
-  }
+function donorMatchesIdNumber(donor, normalizedId) {
+  return !!normalizedId && normalizeIdNumber(donor.idNumber) === normalizedId;
+}
 
-  if (!appDonor) return null;
-
+// Converts a raw app_state donor record into the shape the IVR flow needs
+// (id/phone/fullName/currentDebt/previousDebts/publicPhoneNote/settings).
+// Extracted out of getDonorForIvr() so the new multi-match-aware lookups
+// below can build the exact same donor shape without duplicating this logic.
+function buildIvrDonorFromAppRecord(appDonor) {
   // Find the SQLite donors row (for id used in FK references).
   // Try the canonical primary phone first, then any of the donor's phones.
   var donor = findDonorByPhone(normalizePhone(appDonor.phone));
@@ -115,9 +115,95 @@ function getDonorForIvr(phone) {
   };
 }
 
+function getDonorForIvr(phone) {
+  var normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return null;
+
+  // Search app_state JSON by ALL phone fields — this is the authoritative source.
+  var appDonors = getAppState("donors");
+  var appDonor  = null;
+  if (Array.isArray(appDonors)) {
+    appDonor = appDonors.find(function (d) {
+      return donorMatchesPhone(d, normalizedPhone);
+    }) || null;
+  }
+
+  if (!appDonor) return null;
+
+  return buildIvrDonorFromAppRecord(appDonor);
+}
+
+// ── Caller-identification redesign: multi-match-aware lookups ────────────────
+//
+// getDonorForIvr() above is left completely untouched (still used by
+// /api/softphone/context) because it silently returns the FIRST matching
+// donor via Array.find() — acceptable for a human-facing softphone hint, but
+// not for an automated flow that authorizes a payment. The two functions
+// below are used only by the new IVR identification flow (ivr.service.js)
+// and never silently pick a donor when more than one matches.
+
+function allAppDonors() {
+  var appDonors = getAppState("donors");
+  return Array.isArray(appDonors) ? appDonors : [];
+}
+
+// Multi-match-aware Caller-ID (ANI) lookup — decision #7.
+function findDonorByAniSafe(phone) {
+  var normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return { outcome: "not_found" };
+
+  var matches = allAppDonors().filter(function (d) {
+    return donorMatchesPhone(d, normalizedPhone);
+  });
+
+  if (matches.length === 0) return { outcome: "not_found" };
+  if (matches.length > 1)   return { outcome: "multiple" };
+  return { outcome: "single", donor: buildIvrDonorFromAppRecord(matches[0]), method: "ani" };
+}
+
+// Combined phone-or-teudat-zehut lookup for manual identification (self
+// re-identification or "pay for someone else" search). Tries both fields
+// against the same input and de-dupes by donor identity — if the same donor
+// happens to match via both phone AND id number, that counts as ONE match,
+// not two (explicitly required: "אם אותה התאמה נמצאה גם לפי טלפון וגם לפי
+// מספר זהות אבל זה אותו תורם בדיוק — זה תקין").
+function findDonorByPhoneOrIdNumber(input) {
+  var normalizedPhone = normalizePhone(input);
+  var normalizedId    = normalizeIdNumber(input);
+
+  var donors = allAppDonors();
+  var byKey  = {}; // appDonor.id -> { donor, methods: Set-like array }
+
+  if (normalizedPhone) {
+    donors.forEach(function (d) {
+      if (!donorMatchesPhone(d, normalizedPhone)) return;
+      var entry = byKey[d.id] || (byKey[d.id] = { donor: d, methods: [] });
+      if (entry.methods.indexOf("phone") === -1) entry.methods.push("phone");
+    });
+  }
+  if (normalizedId) {
+    donors.forEach(function (d) {
+      if (!donorMatchesIdNumber(d, normalizedId)) return;
+      var entry = byKey[d.id] || (byKey[d.id] = { donor: d, methods: [] });
+      if (entry.methods.indexOf("idNumber") === -1) entry.methods.push("idNumber");
+    });
+  }
+
+  var uniqueKeys = Object.keys(byKey);
+  if (uniqueKeys.length === 0) return { outcome: "not_found" };
+  if (uniqueKeys.length > 1)   return { outcome: "multiple" };
+
+  var only   = byKey[uniqueKeys[0]];
+  var method = only.methods.length === 2 ? "both" : only.methods[0];
+  return { outcome: "single", donor: buildIvrDonorFromAppRecord(only.donor), method: method };
+}
+
 module.exports = {
   normalizePhone,
+  normalizeIdNumber,
   getAllDonorPhones,
   donorMatchesPhone,
   getDonorForIvr,
+  findDonorByAniSafe,
+  findDonorByPhoneOrIdNumber,
 };

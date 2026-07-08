@@ -13,13 +13,17 @@ function parsePositiveAmount(value) {
 }
 
 function saveIvrPaymentOnce(details) {
-  return savePaymentInTransaction(
-    details.callId,
-    details.phone,
-    details.amount,
-    details.donorId || null,
-    details.confirmationNumber || null
-  );
+  return savePaymentInTransaction({
+    callId:               details.callId,
+    phone:                details.phone,
+    amount:               details.amount,
+    donorId:              details.donorId              || null,
+    confirmationNumber:   details.confirmationNumber    || null,
+    payerDonorId:         details.payerDonorId          || null,
+    payerPhone:           details.payerPhone            || null,
+    identificationMethod: details.identificationMethod  || null,
+    isSelfPayment:        !!details.isSelfPayment,
+  });
 }
 
 module.exports = {

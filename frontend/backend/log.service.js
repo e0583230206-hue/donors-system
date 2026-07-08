@@ -2,6 +2,7 @@ const {
   insertCallLog,
   startCallSession,
   updateCallSessionDonor,
+  updateCallSessionPayer,
   endCallSession,
 } = require("./db");
 
@@ -60,6 +61,23 @@ function logUnknownCaller(callId, phone) {
 }
 
 /**
+ * Record who CALLED and identified themselves (payer) — independent of
+ * donorId, which is always the beneficiary. Safe to call multiple times
+ * (idempotent — only sets payerDonorId on the session while it is still NULL).
+ * method: "ani" | "phone" | "idNumber" | "both"
+ */
+function logPayerIdentified(callId, phone, payerDonorId, payerDonorName, method) {
+  try {
+    updateCallSessionPayer(callId, payerDonorId, payerDonorName, method);
+    insertCallLog(callId, phone, "payer_identified", {
+      payerDonorId: payerDonorId, payerDonorName: payerDonorName, method: method,
+    });
+  } catch (err) {
+    console.error("[IVR:log] logPayerIdentified failed:", err && err.message ? err.message : err);
+  }
+}
+
+/**
  * Record the end of a call, set endedAt and duration on the session row.
  * outcome: 'hangup' | 'payment_success' | 'payment_failed' | 'voice_message' |
  *          'debt_inquiry' | 'error'
@@ -81,5 +99,6 @@ module.exports = {
   logCallStart,
   logDonorIdentified,
   logUnknownCaller,
+  logPayerIdentified,
   logCallEnd,
 };

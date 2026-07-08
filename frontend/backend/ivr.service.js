@@ -1,14 +1,24 @@
-const { buildResponse } = require("./ivr");
-const { getDonorForIvr, normalizePhone } = require("./donor.service");
+const { buildResponse, buildIdentificationResponse } = require("./ivr");
+const {
+  normalizePhone,
+  findDonorByAniSafe,
+  findDonorByPhoneOrIdNumber,
+} = require("./donor.service");
 const {
   safeInsertCallLog,
   logCallStart,
   logDonorIdentified,
   logUnknownCaller,
+  logPayerIdentified,
   logCallEnd,
 } = require("./log.service");
 const { parsePositiveAmount, saveIvrPaymentOnce } = require("./payment.service");
 const { updateDonorDebtAfterPayment, insertAuditLog } = require("./db");
+
+// Caller-identification redesign: max failed attempts before falling back to
+// voicemail (decision #1/#2 — same cap for self-identification and
+// beneficiary search, counted independently per branch).
+var MAX_IDENT_ATTEMPTS = 3;
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -29,6 +39,15 @@ function lastParam(q, name) {
   var val = q[name];
   if (Array.isArray(val)) return val[val.length - 1];
   return val;
+}
+
+// Normalizes an accumulated param to an array (missing → [], scalar → [x]).
+// Used for identification DTMF fields, where the array's length doubles as
+// the attempt count — each retry adds one more entered value, mirroring how
+// Technoline already accumulates every other repeated param in this file.
+function asArray(val) {
+  if (val === undefined) return [];
+  return Array.isArray(val) ? val : [val];
 }
 
 // Omit the full raw query from logs — only keep the params that matter.
@@ -71,6 +90,20 @@ function detectIvrStep(q) {
   if (asText(q.PBXcallStatus) === "HANGUP") {
     console.log("[IVR] detectIvrStep => hangup | payment NOT in query");
     return "hangup";
+  }
+
+  // ── Identification gate (decision #6) ──────────────────────────────────────
+  // Until a beneficiary donor is confirmed, EVERY request is the
+  // "identification" step — mainChoice/payChoice/debtChoice are not even
+  // inspected below, regardless of what Technoline's accumulated query
+  // happens to contain. Debt is never read and payment never proceeds
+  // without a confirmed identification.
+  var identChoice  = lastParam(q, "identChoice");
+  var identConfirm = lastParam(q, "identConfirm");
+  var beneficiaryConfirmed = identChoice === "1" || identConfirm === "1";
+  if (!beneficiaryConfirmed) {
+    console.log("[IVR] detectIvrStep => identification | identChoice:", identChoice, "identConfirm:", identConfirm);
+    return "identification";
   }
 
   var main = lastParam(q, "mainChoice");
@@ -142,6 +175,169 @@ function resolvePaymentAmount(q, donor) {
   if (dtmf !== null) return dtmf;
 
   return null;
+}
+
+// ── Caller identification ───────────────────────────────────────────────────
+//
+// Resolves WHO is on the phone (payer) and, once identChoice/identConfirm
+// confirm it, WHOSE debt is being paid (beneficiary) — these can differ
+// ("pay for someone else"). Every function here is a pure re-derivation from
+// the accumulated query on this one stateless request; nothing is cached
+// across requests except what donor.service/db already persist.
+
+// No side effects (no logging) — used to re-derive the already-identified
+// payer on every request AFTER identification is confirmed, and internally
+// by resolveIdentificationState() below while identification is still in
+// progress.
+function resolvePayerSilent(q, phone) {
+  var aniResult = findDonorByAniSafe(phone);
+  if (aniResult.outcome === "single") {
+    return { donor: aniResult.donor, method: "ani" };
+  }
+
+  var selfArr = asArray(q.selfIdentInput);
+  if (selfArr.length === 0) return { donor: null, method: null };
+
+  var manualResult = findDonorByPhoneOrIdNumber(selfArr[selfArr.length - 1]);
+  return manualResult.outcome === "single"
+    ? { donor: manualResult.donor, method: manualResult.method }
+    : { donor: null, method: null };
+}
+
+// Beneficiary = whoever's debt is actually being paid. identChoice=1 (self)
+// → beneficiary is the payer. identConfirm=1 (confirmed a searched donor) →
+// beneficiary is that searched donor. No side effects.
+function resolveBeneficiary(q, phone) {
+  var identChoice  = lastParam(q, "identChoice");
+  var identConfirm = lastParam(q, "identConfirm");
+
+  if (identChoice === "1") {
+    return resolvePayerSilent(q, phone).donor;
+  }
+  if (identConfirm === "1") {
+    var benArr = asArray(q.beneficiaryIdentInput);
+    if (benArr.length === 0) return null;
+    var benResult = findDonorByPhoneOrIdNumber(benArr[benArr.length - 1]);
+    return benResult.outcome === "single" ? benResult.donor : null;
+  }
+  return null;
+}
+
+// Resolves both payer and beneficiary together — used once, at the moment a
+// payment is actually saved, so the payment record can capture who called
+// (payer) as well as whose debt was paid (beneficiary), and whether it was
+// a self-payment.
+function resolvePayerAndBeneficiary(q, phone) {
+  var identChoice = lastParam(q, "identChoice");
+  var payer = resolvePayerSilent(q, phone);
+  var beneficiaryDonor = identChoice === "1" ? payer.donor : resolveBeneficiary(q, phone);
+  return {
+    payerDonor:      payer.donor,
+    payerMethod:     payer.method,
+    beneficiaryDonor: beneficiaryDonor,
+    isSelfPayment:   identChoice === "1",
+  };
+}
+
+// The only function in this section WITH side effects (logging) — called
+// once per request while step === "identification", to decide exactly which
+// prompt to play next and record what happened along the way. Never reads or
+// exposes debt information (that only happens once a beneficiary is
+// confirmed and buildResponse() takes over).
+function resolveIdentificationState(q, phone, callId) {
+  var identChoice  = lastParam(q, "identChoice");
+  var identConfirm = lastParam(q, "identConfirm");
+
+  function logMultipleMatchesBlocked(context) {
+    try {
+      insertAuditLog({
+        action:     "ivr_multiple_matches_blocked",
+        entityType: "ivr_call",
+        entityId:   callId,
+        details:    context,
+        workerName: "IVR",
+      });
+    } catch (err) {
+      console.error("[IVR] Failed to write server_audit_log for ivr_multiple_matches_blocked:", err.message);
+    }
+  }
+
+  // ── "Pay for someone else" branch ──────────────────────────────────────────
+  if (identChoice === "2") {
+    if (identConfirm === "2") {
+      safeInsertCallLog(callId, phone, "beneficiary_search_retry", {});
+      return { kind: "beneficiary_input" };
+    }
+
+    var benArr = asArray(q.beneficiaryIdentInput);
+    if (benArr.length === 0) {
+      return { kind: "beneficiary_input" };
+    }
+
+    var benResult = findDonorByPhoneOrIdNumber(benArr[benArr.length - 1]);
+
+    if (benResult.outcome === "single") {
+      safeInsertCallLog(callId, phone, "beneficiary_confirmed", {
+        donorId: benResult.donor.id, donorName: benResult.donor.fullName, method: benResult.method,
+      });
+      return { kind: "beneficiary_confirm", donor: benResult.donor, method: benResult.method };
+    }
+
+    if (benResult.outcome === "multiple") {
+      logMultipleMatchesBlocked("חיפוש תורם עבור תשלום — נמצאו כמה התאמות, לא נבחר אוטומטית");
+      safeInsertCallLog(callId, phone, "beneficiary_multiple_matches", { attempt: benArr.length });
+    } else {
+      safeInsertCallLog(callId, phone, "beneficiary_not_found", { attempt: benArr.length });
+    }
+
+    if (benArr.length >= MAX_IDENT_ATTEMPTS) {
+      safeInsertCallLog(callId, phone, "identification_max_attempts", { branch: "beneficiary" });
+      return { kind: "max_attempts" };
+    }
+    return { kind: "beneficiary_input_retry", reason: benResult.outcome };
+  }
+
+  // ── Self branch (Caller ID, or manual self-identification) ─────────────────
+  var aniResult = findDonorByAniSafe(phone);
+
+  if (aniResult.outcome === "single") {
+    logPayerIdentified(callId, phone, aniResult.donor.id, aniResult.donor.fullName, "ani");
+    return { kind: "self_menu", donor: aniResult.donor, method: "ani" };
+  }
+
+  var selfArr = asArray(q.selfIdentInput);
+
+  // Log the Caller-ID outcome exactly once — the first time we fall through
+  // to manual self-identification for this call (selfArr still empty).
+  if (selfArr.length === 0) {
+    if (aniResult.outcome === "multiple") {
+      logMultipleMatchesBlocked("זיהוי לפי Caller ID — נמצאו כמה תורמים למספר הזה, לא נבחר אוטומטית");
+      safeInsertCallLog(callId, phone, "payer_ani_multiple_matches", { phone: phone });
+    } else {
+      safeInsertCallLog(callId, phone, "payer_unidentified", { phone: phone });
+    }
+    return { kind: "self_input" };
+  }
+
+  var selfResult = findDonorByPhoneOrIdNumber(selfArr[selfArr.length - 1]);
+
+  if (selfResult.outcome === "single") {
+    logPayerIdentified(callId, phone, selfResult.donor.id, selfResult.donor.fullName, selfResult.method);
+    return { kind: "self_menu", donor: selfResult.donor, method: selfResult.method };
+  }
+
+  if (selfResult.outcome === "multiple") {
+    logMultipleMatchesBlocked("זיהוי עצמי ידני — נמצאו כמה התאמות, לא נבחר אוטומטית");
+    safeInsertCallLog(callId, phone, "payer_multiple_matches", { attempt: selfArr.length });
+  } else {
+    safeInsertCallLog(callId, phone, "payer_not_found", { attempt: selfArr.length });
+  }
+
+  if (selfArr.length >= MAX_IDENT_ATTEMPTS) {
+    safeInsertCallLog(callId, phone, "identification_max_attempts", { branch: "self" });
+    return { kind: "max_attempts" };
+  }
+  return { kind: "self_input_retry", reason: selfResult.outcome };
 }
 
 // ── Step-level audit logging ──────────────────────────────────────────────────
@@ -245,8 +441,17 @@ function handleIvrQuery(query) {
   // ── Session start + call_start log (only on first request per callId) ─────
   var isFirstRequest = logCallStart(callId, phone);
 
-  // ── Donor lookup ──────────────────────────────────────────────────────────
-  var donor = getDonorForIvr(phone);
+  // ── Identification phase (decision #6) ─────────────────────────────────────
+  // No debt is ever read and no payment ever proceeds until a beneficiary is
+  // confirmed (identChoice=1 or identConfirm=1) — see detectIvrStep().
+  if (step === "identification") {
+    var identState = resolveIdentificationState(q, phone, callId);
+    return { response: buildIdentificationResponse(q, identState) };
+  }
+
+  // ── Beneficiary lookup (whose debt is being read/paid — may differ from
+  // the payer when identChoice=2 "pay for someone else" was used) ───────────
+  var donor = resolveBeneficiary(q, phone);
 
   if (isFirstRequest) {
     if (donor) {
@@ -317,9 +522,25 @@ function handleIvrQuery(query) {
       // Use lastParam for confirmation number in case it was also accumulated
       var confirmationNumber = asText(lastParam(q, "CONFIRM_payment")) || null;
 
+      // Payer (who called/identified themselves) vs beneficiary (donor, whose
+      // debt this payment reduces) — may differ under "pay for someone else".
+      var identInfo = resolvePayerAndBeneficiary(q, phone);
+
+      // Defensive backstop: logPayerIdentified() normally already ran during
+      // the identification phase (resolveIdentificationState), but re-assert
+      // it here too (it's idempotent — only sets the session field once) so
+      // the session's payer summary is never left blank even if this exact
+      // request happens to be the first one where all params are present.
+      if (identInfo.payerDonor) {
+        logPayerIdentified(callId, phone, identInfo.payerDonor.id, identInfo.payerDonor.fullName, identInfo.payerMethod);
+      }
+
       console.log("[IVR] payment=OK | amount:", mask(amount), "| confirmation:", mask(confirmationNumber),
                   "| donor:", donor ? mask(donor.fullName) : "unknown",
-                  "| donorId:", donor ? donor.id : null);
+                  "| donorId:", donor ? donor.id : null,
+                  "| payerDonorId:", identInfo.payerDonor ? identInfo.payerDonor.id : null,
+                  "| identMethod:", identInfo.payerMethod,
+                  "| isSelfPayment:", identInfo.isSelfPayment);
 
       // ── Save payment record ──────────────────────────────────────────────────
       var saveResult = { duplicate: false };
@@ -327,11 +548,15 @@ function handleIvrQuery(query) {
         console.log("[IVR] calling saveIvrPaymentOnce | callId:", callId,
                     "phone:", mask(phone), "amount:", mask(amount), "confirmation:", mask(confirmationNumber));
         saveResult = saveIvrPaymentOnce({
-          callId:             callId,
-          phone:              phone,
-          donorId:            donor ? donor.id : null,
-          amount:             amount,
-          confirmationNumber: confirmationNumber,
+          callId:               callId,
+          phone:                phone,
+          donorId:              donor ? donor.id : null,
+          amount:               amount,
+          confirmationNumber:   confirmationNumber,
+          payerDonorId:         identInfo.payerDonor ? identInfo.payerDonor.id : null,
+          payerPhone:           phone,
+          identificationMethod: identInfo.payerMethod,
+          isSelfPayment:        identInfo.isSelfPayment,
         });
         console.log("[IVR] Payment saved to DB. callId:", callId,
                     "| amount:", mask(amount), "| confirmation:", mask(confirmationNumber),
