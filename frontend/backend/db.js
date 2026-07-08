@@ -891,7 +891,8 @@ function getDashboardStats() {
     year: "numeric", month: "2-digit", day: "2-digit",
   }).format(new Date());
 
-  const donorRow        = db.prepare("SELECT COUNT(*) AS count FROM donors").get();
+  var _appDonors = getAppState("donors");
+  var _donorCount = Array.isArray(_appDonors) ? _appDonors.length : 0;
   const paymentRow      = db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount FROM payments WHERE status = 'success'").get();
   const legacyPayRow    = db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount FROM ivr_donations").get();
   const callsTodayRow   = db.prepare("SELECT COUNT(*) AS count FROM ivr_call_logs WHERE substr(COALESCE(timestamp, createdAt), 1, 10) = ? AND step != 'payment_success'").get(today);
@@ -921,7 +922,7 @@ function getDashboardStats() {
   const successCount       = successCallsRow.count || 0;
 
   return {
-    totalDonors:           donorRow.count || 0,
+    totalDonors:           _donorCount,
     totalPayments:         totalPayments,
     totalPaymentAmount:    totalPaymentAmount,
     callsToday:            callsTodayRow.count || 0,

@@ -134,10 +134,6 @@ async function updateServerDashboard() {
 
     const stats = await response.json();
 
-    if (stats && typeof stats.totalDonors === "number" && donors.length === 0) {
-      donorsTotal.innerText = stats.totalDonors;
-    }
-
     if (stats && typeof stats.totalPaymentAmount === "number" && donors.length === 0) {
       paidTotal.innerText = formatMoney(stats.totalPaymentAmount);
     }
