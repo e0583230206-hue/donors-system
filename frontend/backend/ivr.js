@@ -98,17 +98,34 @@ function simpleMenu(files, name, enabledKeys, times, timeout) {
   };
 }
 
-function getDTMF(name, files, max, min, timeout) {
-  return {
+// confirmType controls whether/how Technoline reads the collected digits
+// back to the caller before returning. Defaults to "number" (existing
+// behavior — correct for a payment amount, e.g. "500"). Pass confirmType:
+// null for identifier input (phone / teudat zehut) — reading a 9-digit ID
+// back as one giant number sounds wrong; omitting the field entirely
+// suppresses that readback.
+function getDTMF(name, files, max, min, timeout, confirmType) {
+  var mod = {
     type: "getDTMF",
     name: name,
     max: max || 6,
     min: min || 1,
     timeout: timeout || 7,
     skipKey: "#",
-    confirmType: "number",
     files: files,
   };
+  var effectiveConfirmType = confirmType !== undefined ? confirmType : "number";
+  if (effectiveConfirmType) mod.confirmType = effectiveConfirmType;
+  return mod;
+}
+
+// Splits a digit string into space-separated digits ("0501234567" ->
+// "0 5 0 1 2 3 4 5 6 7") so it CAN be read back digit-by-digit via TTS if a
+// future identification prompt ever needs to. Not currently used anywhere —
+// the identification flow prefers not reading the entered number back at
+// all (see getDTMF above) — kept ready in case that's needed later.
+function spellDigitsForTTS(input) {
+  return String(input || "").replace(/\D/g, "").split("").join(" ");
 }
 
 function record(name) {
@@ -186,20 +203,20 @@ function buildIdentificationResponse(query, identState) {
     case "self_input":
       return getDTMF("selfIdentInput",
         opening.concat([txt(T.IDENT_UNKNOWN_ANI), txt(T.ENTER_PHONE_OR_ID_SELF)]),
-        10, 5, 10);
+        10, 5, 10, null);
 
     case "self_input_retry":
       return getDTMF("selfIdentInput",
         [txt(retryText(identState.reason)), txt(T.ENTER_PHONE_OR_ID_SELF)],
-        10, 5, 10);
+        10, 5, 10, null);
 
     case "beneficiary_input":
-      return getDTMF("beneficiaryIdentInput", [txt(T.ENTER_PHONE_OR_ID_BENEFICIARY)], 10, 5, 10);
+      return getDTMF("beneficiaryIdentInput", [txt(T.ENTER_PHONE_OR_ID_BENEFICIARY)], 10, 5, 10, null);
 
     case "beneficiary_input_retry":
       return getDTMF("beneficiaryIdentInput",
         [txt(retryText(identState.reason)), txt(T.ENTER_PHONE_OR_ID_BENEFICIARY)],
-        10, 5, 10);
+        10, 5, 10, null);
 
     case "beneficiary_confirm":
       return simpleMenu(
