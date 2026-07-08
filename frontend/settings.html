@@ -85,6 +85,11 @@
             </div>
           </div>
 
+          <div class="ivr-sheet-tabs" id="ivrSheetTabs">
+            <button type="button" class="ivr-sheet-tab-btn active" data-sheet="sentences">📝 משפטים קבועים</button>
+            <button type="button" class="ivr-sheet-tab-btn" data-sheet="numbers">🔢 מספרים ומטבע</button>
+          </div>
+
           <div class="form-grid" style="margin-bottom:10px;">
             <input id="ivrAudioSearchInput" type="search" placeholder="🔍 חיפוש לפי Audio ID / טקסט / סטטוס..." />
             <select id="ivrAudioStatusFilter">
@@ -108,8 +113,8 @@
           </div>
           <p id="ivrAudioMessage" class="message"></p>
 
-          <div class="table-wrap">
-            <table>
+          <div class="table-wrap ivr-audio-table-wrap">
+            <table class="ivr-audio-table">
               <thead>
                 <tr>
                   <th>Audio ID</th>

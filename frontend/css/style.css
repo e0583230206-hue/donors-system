@@ -609,6 +609,221 @@ nav span {
 .ivr-audio-status-checked    { background: #e0e7ff; color: #4338ca; }
 .ivr-audio-status-approved   { background: var(--success-soft); color: var(--success); }
 
+/* ── IVR audio — internal sheet tabs (משפטים קבועים / מספרים ומטבע) ──── */
+.ivr-sheet-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ivr-sheet-tab-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 700;
+  padding: 8px 16px;
+  border-radius: 10px 10px 0 0;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.ivr-sheet-tab-btn:hover {
+  color: var(--text);
+  background: var(--primary-soft);
+}
+
+.ivr-sheet-tab-btn.active {
+  color: var(--primary-dark);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: 0 -2px 0 var(--gold) inset;
+}
+
+.ivr-sheet-tab-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ── IVR audio table — office-style, compact, Excel-like ──────────────── */
+.ivr-audio-table-wrap {
+  border-radius: 10px;
+}
+
+/* Office-365-style grid: thin gridlines on every side (not just row
+   underlines), a flat header bar, tight uniform row height. */
+table.ivr-audio-table {
+  min-width: 980px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table.ivr-audio-table th {
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary-dark);
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--border-strong);
+  border-inline-start: 1px solid var(--border);
+}
+
+table.ivr-audio-table th:first-child {
+  border-inline-start: none;
+}
+
+table.ivr-audio-table td {
+  padding: 3px 10px;
+  font-size: 13.5px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+  border-inline-start: 1px solid var(--border);
+  height: 38px;
+}
+
+table.ivr-audio-table td:first-child {
+  border-inline-start: none;
+}
+
+table.ivr-audio-table tbody tr:nth-child(odd)  { background: var(--surface); }
+table.ivr-audio-table tbody tr:nth-child(even) { background: var(--surface-subtle); }
+table.ivr-audio-table tbody tr:hover           { background: var(--gold-soft); }
+
+.ivr-audio-id-cell {
+  font-family: "Courier New", monospace;
+  font-weight: 700;
+  font-size: 12.5px;
+  white-space: nowrap;
+  color: var(--primary-dark);
+}
+
+/* Compact, auto-growing text field — starts at one line, expands with
+   content up to a comfortable cap, then scrolls internally. Replaces the
+   old always-tall textarea so short rows stay tight and long ones stay
+   readable instead of forcing every row to the height of the longest. */
+.ivr-audio-field {
+  display: block;
+  width: 100%;
+  min-width: 160px;
+  max-width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 5px 7px;
+  margin: 3px 0;
+  background: transparent;
+  resize: none;
+  overflow-y: hidden;
+  max-height: 140px;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.ivr-audio-field:hover {
+  background: var(--bg-soft);
+}
+
+/* "Selected cell" look, à la Excel/Office 365 — a solid brand-colored
+   border plus a soft outer ring instead of a generic browser outline. */
+.ivr-audio-field:focus {
+  outline: none;
+  border-color: var(--primary);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--gold-soft), 0 1px 3px rgba(0, 0, 0, 0.08);
+  overflow-y: auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── IVR audio — compact single-line per-slot audio cell ───────────────── */
+.ivr-audio-cell {
+  min-width: 168px;
+  max-width: 210px;
+}
+
+.ivr-audio-cell-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ivr-audio-filename {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.ivr-audio-icon-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.ivr-audio-icon-btn:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+.ivr-audio-icon-btn.danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.ivr-audio-icon-btn.playing {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.ivr-audio-upload-btn {
+  appearance: none;
+  border: 1px dashed var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  justify-content: center;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.ivr-audio-upload-btn:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+
 .panel {
   background: linear-gradient(180deg, #fffdf8, #f7f1e6);
   border: 1px solid var(--border);

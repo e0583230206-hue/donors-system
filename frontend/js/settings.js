@@ -1445,10 +1445,20 @@ reloadWorkers().then(function () { renderWorkers(); });
   var importFile   = document.getElementById("ivrAudioImportFile");
   var refreshBtn   = document.getElementById("ivrAudioRefreshBtn");
   var msgEl        = document.getElementById("ivrAudioMessage");
+  var sheetTabsEl  = document.getElementById("ivrSheetTabs");
 
   // Categories that belong on גיליון1 (fixed sentences) vs גיליון2 (numbers/
-  // currency) when exporting back to the exact Excel structure.
+  // currency) when exporting back to the exact Excel structure. Also used to
+  // split the two internal sheet-tabs in the UI itself.
   var SHEET1_CATEGORIES = ["open", "menu", "debt", "pay", "voicemail", "system", "purpose"];
+  var activeSheet = "sentences"; // "sentences" | "numbers"
+
+  // Fields that support Excel-style multi-cell paste, in on-screen column
+  // order. pasteMatrix[rowIndex][fieldIndex] holds the live <textarea> for
+  // that cell in the currently rendered (filtered) row order.
+  var PASTE_FIELDS = ["sourceTextHe", "translation", "usageDescription"];
+  var pasteMatrix = [];
+  var renderedRows = [];
 
   var statTotal      = document.getElementById("ivrAudioStatTotal");
   var statMissing     = document.getElementById("ivrAudioStatMissing");
@@ -1496,6 +1506,11 @@ reloadWorkers().then(function () { renderWorkers(); });
     if (statApproved)    statApproved.innerText    = counts["אושר"] || 0;
   }
 
+  function matchesSheet(rec) {
+    var inSheet1 = SHEET1_CATEGORIES.indexOf(rec.category) !== -1;
+    return activeSheet === "sentences" ? inSheet1 : !inSheet1;
+  }
+
   function matchesFilters(rec, query, status) {
     if (status && rec.status !== status) return false;
     if (!query) return true;
@@ -1507,29 +1522,37 @@ reloadWorkers().then(function () { renderWorkers(); });
   function render() {
     var query  = (searchInput  && searchInput.value.trim())  || "";
     var status = (statusFilter && statusFilter.value)        || "";
-    var rows = allRecordings.filter(function (r) { return matchesFilters(r, query, status); });
+    var rows = allRecordings
+      .filter(matchesSheet)
+      .filter(function (r) { return matchesFilters(r, query, status); });
+
+    renderedRows = rows;
+    pasteMatrix = rows.map(function () { return []; });
+
+    // Rows about to be discarded may hold a still-playing <audio> that isn't
+    // attached to the DOM (custom play button, not a native <audio> element)
+    // — stop it now or it would keep playing silently in the background.
+    if (activeAudioEl) { activeAudioEl.pause(); activeAudioEl = null; }
 
     tableBody.innerHTML = "";
     if (!rows.length) {
-      tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">אין הקלטות להצגה</td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">אין הקלטות להצגה בגליון זה</td></tr>';
       return;
     }
-    rows.forEach(function (rec) { tableBody.appendChild(buildRow(rec)); });
+    rows.forEach(function (rec, rowIdx) { tableBody.appendChild(buildRow(rec, rowIdx)); });
   }
 
-  function buildRow(rec) {
+  function buildRow(rec, rowIdx) {
     var tr = document.createElement("tr");
 
     var tdId = document.createElement("td");
-    tdId.style.fontFamily = "monospace";
-    tdId.style.fontWeight = "700";
-    tdId.style.whiteSpace = "nowrap";
+    tdId.className = "ivr-audio-id-cell";
     tdId.textContent = rec.audioId;
     tr.appendChild(tdId);
 
-    tr.appendChild(makeInputCell(rec, "sourceTextHe", "textarea"));
-    tr.appendChild(makeInputCell(rec, "translation", "textarea"));
-    tr.appendChild(makeInputCell(rec, "usageDescription", "textarea"));
+    tr.appendChild(makeInputCell(rec, "sourceTextHe", rowIdx, 0));
+    tr.appendChild(makeInputCell(rec, "translation", rowIdx, 1));
+    tr.appendChild(makeInputCell(rec, "usageDescription", rowIdx, 2));
     tr.appendChild(buildAudioCell(rec, 1));
     tr.appendChild(buildAudioCell(rec, 2));
     tr.appendChild(buildAudioCell(rec, 3));
@@ -1538,25 +1561,183 @@ reloadWorkers().then(function () { renderWorkers(); });
     return tr;
   }
 
-  function makeInputCell(rec, field, kind) {
+  // Cached height (in px) of a single-line .ivr-audio-field, used to tell
+  // whether a given field is currently showing just 1 visual line (the
+  // common case) or has grown to 2+ (long/wrapped content).
+  var singleLineHeightPx = null;
+  function getSingleLineHeight() {
+    if (singleLineHeightPx !== null) return singleLineHeightPx;
+    var probe = document.createElement("textarea");
+    probe.className = "ivr-audio-field";
+    probe.rows = 1;
+    probe.style.position = "absolute";
+    probe.style.visibility = "hidden";
+    document.body.appendChild(probe);
+    singleLineHeightPx = probe.scrollHeight;
+    document.body.removeChild(probe);
+    return singleLineHeightPx;
+  }
+
+  // A field showing only 1 visual line has no "up" or "down" caret position
+  // to move to within its own text, so Up/Down should leave the cell on the
+  // very first press — matching a single Excel keystroke. Multi-line /
+  // wrapped content (2+ visual lines) still gets natural in-text movement
+  // first (see handleCellKeydown), only leaving the cell once the caret is
+  // already at the text's absolute start/end.
+  function isSingleLine(el) {
+    return el.scrollHeight <= getSingleLineHeight() + 2;
+  }
+
+  // Auto-grows a compact textarea to fit its content (up to the CSS
+  // max-height cap, after which it scrolls internally) so short cells stay
+  // one line tall and long ones stay readable without a permanently tall row.
+  function autoGrow(el) {
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }
+
+  function makeInputCell(rec, field, rowIdx, fieldIdx) {
     var td = document.createElement("td");
-    var el = document.createElement(kind === "textarea" ? "textarea" : "input");
-    if (kind === "input") el.type = "text";
+    var el = document.createElement("textarea");
+    el.className = "ivr-audio-field";
+    el.rows = 1;
     el.value = rec[field] || "";
-    el.style.width = "100%";
-    el.style.minWidth = "140px";
-    el.style.font = "inherit";
-    el.style.fontSize = "13.5px";
-    el.style.border = "1px solid transparent";
-    el.style.borderRadius = "6px";
-    el.style.padding = "6px 8px";
-    el.style.background = "transparent";
-    if (kind === "textarea") { el.style.minHeight = "40px"; el.style.resize = "vertical"; }
-    el.addEventListener("focus", function () { el.style.borderColor = "var(--border)"; el.style.background = "var(--bg-soft)"; });
-    el.addEventListener("blur",  function () { el.style.borderColor = "transparent"; el.style.background = "transparent"; });
+    el.addEventListener("input", function () { autoGrow(el); });
+    el.addEventListener("focus", function () { autoGrow(el); });
     el.addEventListener("change", function () { saveField(rec.audioId, field, el.value); });
+    el.addEventListener("paste", function (e) { handlePaste(e, rowIdx, fieldIdx); });
+    el.addEventListener("keydown", function (e) { handleCellKeydown(e, el, rowIdx, fieldIdx); });
     td.appendChild(el);
+    pasteMatrix[rowIdx][fieldIdx] = el;
+    // Initial sizing happens after insertion (scrollHeight needs layout).
+    setTimeout(function () { autoGrow(el); }, 0);
     return td;
+  }
+
+  function getCell(rowIdx, fieldIdx) {
+    return pasteMatrix[rowIdx] && pasteMatrix[rowIdx][fieldIdx];
+  }
+
+  // Selecting all text on arrival mirrors Excel/Sheets, where landing on a
+  // cell via keyboard navigation shows it "selected" (ready to be typed over).
+  function focusCell(el) {
+    if (!el) return false;
+    el.focus();
+    el.select();
+    return true;
+  }
+
+  // Excel-style keyboard navigation between the editable text cells:
+  //  - Tab / Shift+Tab: next / previous cell, wrapping to the next/previous row.
+  //  - Enter: down one row, same column (Shift+Enter inserts a literal newline).
+  //  - Arrow keys: navigate to the adjacent cell, but ONLY when the native
+  //    arrow press has no effect on the caret — i.e. it's already at the edge
+  //    of the text in that direction. This is checked by letting the browser
+  //    handle the key normally first, then comparing the caret position a
+  //    tick later; if unchanged, the browser had nowhere left to move it, so
+  //    we treat the key as "leave the cell" instead. This correctly handles
+  //    multi-line/wrapped text and RTL bidi caret physics (in an RTL field,
+  //    the browser itself moves ArrowLeft toward the logical end and
+  //    ArrowRight toward the logical start) without us reimplementing it.
+  function handleCellKeydown(ev, el, rowIdx, fieldIdx) {
+    var numCols = PASTE_FIELDS.length;
+    var key = ev.key;
+
+    function go(r, f) {
+      var target = getCell(r, f);
+      if (!target) return false;
+      focusCell(target);
+      return true;
+    }
+
+    if (key === "Tab") {
+      ev.preventDefault();
+      if (ev.shiftKey) {
+        var pf = fieldIdx - 1, pr = rowIdx;
+        if (pf < 0) { pf = numCols - 1; pr = rowIdx - 1; }
+        go(pr, pf);
+      } else {
+        var nf = fieldIdx + 1, nr = rowIdx;
+        if (nf >= numCols) { nf = 0; nr = rowIdx + 1; }
+        go(nr, nf);
+      }
+      return;
+    }
+
+    if (key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      go(rowIdx + 1, fieldIdx);
+      return;
+    }
+
+    // A single-visual-line field has no "up"/"down" caret position to move
+    // to within its own text, so leave the cell on the very first press.
+    if ((key === "ArrowUp" || key === "ArrowDown") && isSingleLine(el)) {
+      ev.preventDefault();
+      go(key === "ArrowUp" ? rowIdx - 1 : rowIdx + 1, fieldIdx);
+      return;
+    }
+
+    // RTL table: visual-right ↔ previous column, visual-left ↔ next column.
+    var ARROW_TARGET = {
+      ArrowUp:    function () { return [rowIdx - 1, fieldIdx]; },
+      ArrowDown:  function () { return [rowIdx + 1, fieldIdx]; },
+      ArrowRight: function () {
+        var f = fieldIdx - 1, r = rowIdx;
+        if (f < 0) { f = numCols - 1; r = rowIdx - 1; }
+        return [r, f];
+      },
+      ArrowLeft: function () {
+        var f = fieldIdx + 1, r = rowIdx;
+        if (f >= numCols) { f = 0; r = rowIdx + 1; }
+        return [r, f];
+      },
+    }[key];
+
+    if (ARROW_TARGET) {
+      var beforeS = el.selectionStart, beforeE = el.selectionEnd;
+      setTimeout(function () {
+        if (el.selectionStart === beforeS && el.selectionEnd === beforeE) {
+          var rf = ARROW_TARGET();
+          go(rf[0], rf[1]);
+        }
+      }, 0);
+    }
+  }
+
+  // Excel-style multi-cell paste: a paste containing tabs/newlines is
+  // distributed across the grid starting at the focused cell instead of
+  // being dropped as one blob of text into a single field. A plain
+  // single-value paste (no \t or \n) is left to the browser's default
+  // behaviour so normal copy/paste of one cell still works as expected.
+  function handlePaste(e, rowIdx, fieldIdx) {
+    var clipboard = e.clipboardData || window.clipboardData;
+    if (!clipboard) return;
+    var text = clipboard.getData("text");
+    if (!text || (text.indexOf("\n") === -1 && text.indexOf("\t") === -1)) return;
+
+    e.preventDefault();
+    var lines = text.replace(/\r/g, "").split("\n");
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+
+    var touched = 0;
+    lines.forEach(function (line, li) {
+      var targetRow = rowIdx + li;
+      if (targetRow >= renderedRows.length) return;
+      var targetRec = renderedRows[targetRow];
+      line.split("\t").forEach(function (val, ci) {
+        var targetField = fieldIdx + ci;
+        if (targetField >= PASTE_FIELDS.length) return;
+        var targetEl = pasteMatrix[targetRow] && pasteMatrix[targetRow][targetField];
+        if (!targetEl) return;
+        targetEl.value = val;
+        autoGrow(targetEl);
+        targetRec[PASTE_FIELDS[targetField]] = val;
+        saveField(targetRec.audioId, PASTE_FIELDS[targetField], val);
+        touched++;
+      });
+    });
+    if (touched) showMsg("הודבקו " + touched + " תאים ✓");
   }
 
   function buildStatusCell(rec) {
@@ -1578,59 +1759,92 @@ reloadWorkers().then(function () { renderWorkers(); });
     return td;
   }
 
+  // Shared across all audio cells so starting one playback stops any other
+  // that might already be playing (avoids overlapping audio from 3 slots ×
+  // many rows).
+  var activeAudioEl = null;
+
   function buildAudioCell(rec, slot) {
     var field = "audioFile" + slot;
     var filename = rec[field];
     var td = document.createElement("td");
-    td.style.minWidth = "180px";
+    td.className = "ivr-audio-cell";
 
-    if (filename) {
-      var audio = document.createElement("audio");
-      audio.controls = true;
-      audio.style.width = "100%";
-      audio.style.height = "32px";
-      audio.style.display = "block";
-      audio.style.marginBottom = "4px";
-      audio.src = "/uploads/ivr-audio/" + encodeURIComponent(filename);
-      td.appendChild(audio);
-
-      var name = document.createElement("div");
-      name.style.fontSize = "11px";
-      name.style.color = "var(--muted)";
-      name.style.wordBreak = "break-all";
-      name.style.marginBottom = "4px";
-      name.textContent = filename;
-      td.appendChild(name);
-
-      var delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className = "danger-btn";
-      delBtn.style.fontSize = "12px";
-      delBtn.style.padding = "4px 10px";
-      delBtn.textContent = "🗑️ מחק";
-      delBtn.addEventListener("click", function () { deleteAudio(rec.audioId, slot); });
-      td.appendChild(delBtn);
+    if (!filename) {
+      var uploadLabel = document.createElement("label");
+      uploadLabel.className = "ivr-audio-upload-btn";
+      uploadLabel.textContent = "⬆️ העלה";
+      var uploadInput = document.createElement("input");
+      uploadInput.type = "file";
+      uploadInput.accept = "audio/*";
+      uploadInput.hidden = true;
+      uploadInput.addEventListener("change", function () {
+        if (uploadInput.files[0]) uploadAudio(rec.audioId, slot, uploadInput.files[0]);
+      });
+      uploadLabel.appendChild(uploadInput);
+      td.appendChild(uploadLabel);
+      return td;
     }
 
-    var label = document.createElement("label");
-    label.className = "secondary-btn";
-    label.style.display = "inline-flex";
-    label.style.alignItems = "center";
-    label.style.gap = "6px";
-    label.style.cursor = "pointer";
-    label.style.fontSize = "12px";
-    label.style.padding = "4px 10px";
-    label.textContent = filename ? "🔁 החלף" : "⬆️ העלה";
-    var input = document.createElement("input");
-    input.type = "file";
-    input.accept = "audio/*";
-    input.hidden = true;
-    input.addEventListener("change", function () {
-      if (input.files[0]) uploadAudio(rec.audioId, slot, input.files[0]);
-    });
-    label.appendChild(input);
-    td.appendChild(label);
+    // ▶ play / שם קובץ / ✏ החלף / 🗑 מחק — all in a single compact row.
+    var row = document.createElement("div");
+    row.className = "ivr-audio-cell-row";
 
+    var audioEl = new Audio("/uploads/ivr-audio/" + encodeURIComponent(filename));
+    var playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "ivr-audio-icon-btn";
+    playBtn.title = "נגן";
+    playBtn.textContent = "▶";
+    playBtn.addEventListener("click", function () {
+      if (audioEl.paused) {
+        if (activeAudioEl && activeAudioEl !== audioEl) activeAudioEl.pause();
+        activeAudioEl = audioEl;
+        // play() returns a promise that rejects for an unplayable/corrupted
+        // file — without a .catch() that surfaces as an uncaught rejection
+        // and leaves the ▶/⏸ icon stuck.
+        audioEl.play().catch(function () { showMsg("שגיאה בנגינת הקובץ", "error"); });
+      } else {
+        audioEl.pause();
+      }
+    });
+    audioEl.addEventListener("play",  function () { playBtn.textContent = "⏸"; playBtn.classList.add("playing"); });
+    audioEl.addEventListener("pause", function () { playBtn.textContent = "▶"; playBtn.classList.remove("playing"); });
+    audioEl.addEventListener("ended", function () { playBtn.textContent = "▶"; playBtn.classList.remove("playing"); });
+    row.appendChild(playBtn);
+
+    var name = document.createElement("span");
+    name.className = "ivr-audio-filename";
+    name.title = filename;
+    name.textContent = filename;
+    row.appendChild(name);
+
+    var replaceLabel = document.createElement("label");
+    replaceLabel.className = "ivr-audio-icon-btn";
+    replaceLabel.title = "החלף קובץ";
+    replaceLabel.textContent = "✏";
+    var replaceInput = document.createElement("input");
+    replaceInput.type = "file";
+    replaceInput.accept = "audio/*";
+    replaceInput.hidden = true;
+    replaceInput.addEventListener("change", function () {
+      if (replaceInput.files[0]) uploadAudio(rec.audioId, slot, replaceInput.files[0]);
+    });
+    replaceLabel.appendChild(replaceInput);
+    row.appendChild(replaceLabel);
+
+    var delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "ivr-audio-icon-btn danger";
+    delBtn.title = "מחק הקלטה";
+    delBtn.textContent = "🗑";
+    delBtn.addEventListener("click", function () {
+      if (activeAudioEl === audioEl) { audioEl.pause(); activeAudioEl = null; }
+      deleteAudio(rec.audioId, slot);
+    });
+    row.appendChild(delBtn);
+
+    td.appendChild(row);
     return td;
   }
 
@@ -1709,6 +1923,14 @@ reloadWorkers().then(function () { renderWorkers(); });
       });
       var data = await res.json();
       if (!res.ok) throw new Error(data.error || "שגיאה");
+      // New rows have no category yet — tag them into whichever sheet-tab
+      // is currently open (via the existing PUT endpoint) so the row shows
+      // up immediately instead of silently landing in the other sheet.
+      var newCategory = activeSheet === "sentences" ? "open" : "number";
+      await apiFetch("/api/admin/ivr-audio/" + encodeURIComponent(data.recording.audioId), {
+        method: "PUT",
+        body: JSON.stringify({ category: newCategory }),
+      });
       await loadRecordings();
       showMsg("נוספה שורה חדשה ✓");
     } catch (err) {
@@ -1778,6 +2000,18 @@ reloadWorkers().then(function () { renderWorkers(); });
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  if (sheetTabsEl) {
+    sheetTabsEl.addEventListener("click", function (e) {
+      var btn = e.target.closest(".ivr-sheet-tab-btn");
+      if (!btn) return;
+      activeSheet = btn.getAttribute("data-sheet");
+      sheetTabsEl.querySelectorAll(".ivr-sheet-tab-btn").forEach(function (b) {
+        b.classList.toggle("active", b === btn);
+      });
+      render();
+    });
   }
 
   if (searchInput)   searchInput.addEventListener("input", render);
