@@ -165,7 +165,24 @@ app.use(
 );
 
 // ── Body parsing ─────────────────────────────────────────────────────────────
-app.use(express.json({ limit: "5mb" }));
+// Per-route limits instead of one blanket 5mb for every endpoint (#34).
+// A path-scoped express.json() that successfully parses a body sets an
+// internal req._body flag — a later express.json() covering the same
+// request (the general default below) sees that flag and skips re-parsing,
+// so registering the larger-limit bulk-import parsers first and a smaller
+// default afterward is safe and doesn't double-parse (verified empirically
+// against this Express/body-parser version before relying on it here).
+//
+// Bulk data import — donors/tasks/logs/settings/approvals blobs and CSV
+// donor-list imports can legitimately be a few MB; unchanged from before.
+app.use("/api/data", express.json({ limit: "5mb" }));
+app.use("/api/sync/preview", express.json({ limit: "5mb" }));
+app.use("/api/sync/apply", express.json({ limit: "5mb" }));
+// Everything else — regular API calls (login, worker/task/reminder CRUD,
+// campaign triggers, sip-config, etc.) never legitimately need more than a
+// few KB; 256kb leaves generous headroom without leaving every endpoint as
+// open to a multi-MB request body as the bulk-import routes above.
+app.use(express.json({ limit: "256kb" }));
 
 // ── Request logging ───────────────────────────────────────────────────────────
 app.use(function (req, res, next) {
@@ -2511,7 +2528,12 @@ app.use(function (req, res) {
 // redacted here (its shape is unknown ahead of time), only classified.
 app.use(function (err, req, res, _next) {
   logger.error("Server", "Unhandled error on " + req.method + " " + req.path + ":", err);
-  res.status(500).json({ error: "Internal server error" });
+  // body-parser's "request entity too large" (from the new per-route limits,
+  // #34) sets its own status/statusCode (413) — preserve that instead of
+  // always answering 500, so an oversized request gets an accurate error.
+  // Falls back to 500 for every other kind of error exactly as before.
+  var status = (err && (err.status || err.statusCode)) || 500;
+  res.status(status).json({ error: status === 413 ? "הבקשה גדולה מדי" : "Internal server error" });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

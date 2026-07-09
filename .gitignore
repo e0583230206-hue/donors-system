@@ -15,6 +15,10 @@ npm-debug.log
 # Server-generated backups (גיבויים אוטומטיים + גיבויי migration — מכילים נתוני משתמשים)
 frontend/backend/backups/
 
+# Ad-hoc exports for review/sharing (מכיל בעבר סודות + node_modules + גיבויים —
+# ראו ממצא #2/#31/#32 בדוח האבטחה) — לעולם לא לשלוח ZIP מהתיקייה החיה
+*.zip
+
 # Logs
 logs/
 *.log
