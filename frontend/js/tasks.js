@@ -10,7 +10,6 @@ const prioritySelect = document.getElementById("prioritySelect");
 const statusSelect = document.getElementById("statusSelect");
 const descriptionInput = document.getElementById("descriptionInput");
 const addTaskButton = document.getElementById("addTaskButton");
-const messageBox = document.getElementById("messageBox");
 
 const openTasksTable = document.getElementById("openTasksTable");
 const doneTasksTable = document.getElementById("doneTasksTable");
@@ -28,39 +27,12 @@ function saveTasks() {
   Database.save("tasks", tasks);
 }
 
-function showMessage(text, type = "success") {
-  messageBox.innerText = text;
-  messageBox.className = "message show " + type;
-
-  setTimeout(function () {
-    messageBox.innerText = "";
-    messageBox.className = "message";
-  }, 3000);
-}
+// showMessage, formatDateTime, fillWorkerSelect, downloadXLSX are defined in
+// utils.js (shared — see #28)
 
 function formatDate(dateString) {
   if (!dateString) return "לא נקבע";
   return new Date(dateString).toLocaleDateString("he-IL");
-}
-
-function formatDateTime(dateString) {
-  if (!dateString) return "";
-  return new Date(dateString).toLocaleString("he-IL");
-}
-
-function fillWorkerSelect() {
-  workerSelect.innerHTML = `<option value="">בחר מטפל</option>`;
-
-  workers
-    .filter(function (worker) {
-      return worker.status === "פעיל";
-    })
-    .forEach(function (worker) {
-      const option = document.createElement("option");
-      option.value = worker.name;
-      option.innerText = worker.name + " - " + worker.role;
-      workerSelect.appendChild(option);
-    });
 }
 
 function fillDonorSelect() {
@@ -365,21 +337,6 @@ function renderTasks() {
   renderDoneTasks(doneTasks);
 }
 
-function downloadXLSX(filename, sheetName, rows) {
-  var safe = rows.map(function (row) {
-    return row.map(function (cell) {
-      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
-      return cell;
-    });
-  });
-  var workbook = XLSX.utils.book_new();
-  var worksheet = XLSX.utils.aoa_to_sheet(safe);
-  worksheet["!cols"] = safe[0].map(function () { return { wch: 22 }; });
-  worksheet["!rtl"] = true;
-  workbook.Workbook = { Views: [{ RTL: true }] };
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, filename);
-}
 
 function exportTasksExcel() {
   var exportable = tasks.filter(function (task) {
@@ -439,7 +396,7 @@ Database.whenReady(function () {
   donors  = Database.get("donors");
   tasks   = Database.get("tasks");
   workers = Database.get("workers");
-  fillWorkerSelect();
+  fillWorkerSelect(workers);
   fillDonorSelect();
   renderTasks();
 });

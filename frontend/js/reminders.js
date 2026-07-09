@@ -6,7 +6,6 @@ const timeInput = document.getElementById("timeInput");
 const prioritySelect = document.getElementById("prioritySelect");
 const descriptionInput = document.getElementById("descriptionInput");
 const addReminderButton = document.getElementById("addReminderButton");
-const messageBox = document.getElementById("messageBox");
 
 const openRemindersTable = document.getElementById("openRemindersTable");
 const doneRemindersTable = document.getElementById("doneRemindersTable");
@@ -25,42 +24,7 @@ function saveDonors() {
   Database.save("donors", donors);
 }
 
-function showMessage(text, type = "success") {
-  messageBox.innerText = text;
-  messageBox.className = "message show " + type;
-
-  setTimeout(function () {
-    messageBox.innerText = "";
-    messageBox.className = "message";
-  }, 3000);
-}
-
-function getTodayString() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Jerusalem",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const values = {};
-  parts.forEach(function (part) {
-    values[part.type] = part.value;
-  });
-
-  return values.year + "-" + values.month + "-" + values.day;
-}
-
-function fillDonorSelect() {
-  donorSelect.innerHTML = `<option value="">בחר תורם</option>`;
-
-  donors.forEach(function (donor) {
-    const option = document.createElement("option");
-    option.value = donor.id;
-    option.innerText = donor.fullName + " - " + donor.phone;
-    donorSelect.appendChild(option);
-  });
-}
+// showMessage, getTodayString, fillDonorSelect are defined in utils.js (shared — see #28)
 
 function ensureReminderArrays() {
   donors.forEach(function (donor) {
@@ -384,21 +348,6 @@ function renderReminders() {
   renderDoneReminders(doneReminders);
 }
 
-function downloadXLSX(filename, sheetName, rows) {
-  var safe = rows.map(function (row) {
-    return row.map(function (cell) {
-      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
-      return cell;
-    });
-  });
-  var workbook = XLSX.utils.book_new();
-  var worksheet = XLSX.utils.aoa_to_sheet(safe);
-  worksheet["!cols"] = safe[0].map(function () { return { wch: 22 }; });
-  worksheet["!rtl"] = true;
-  workbook.Workbook = { Views: [{ RTL: true }] };
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, filename);
-}
 
 function exportRemindersExcel() {
   var exportable = getAllReminders();
@@ -448,6 +397,6 @@ if (reminderSearchInput) {
 Database.whenReady(function () {
   donors = Database.get("donors");
   ensureReminderArrays();
-  fillDonorSelect();
+  fillDonorSelect(donors);
   renderReminders();
 });

@@ -7,7 +7,6 @@ const prioritySelect = document.getElementById("prioritySelect");
 const sourceSelect = document.getElementById("sourceSelect");
 const reasonInput = document.getElementById("reasonInput");
 const addCallbackButton = document.getElementById("addCallbackButton");
-const messageBox = document.getElementById("messageBox");
 
 const openCallbacksTable = document.getElementById("openCallbacksTable");
 const doneCallbacksTable = document.getElementById("doneCallbacksTable");
@@ -26,46 +25,8 @@ function saveDonors() {
   Database.save("donors", donors);
 }
 
-function showMessage(text, type = "success") {
-  messageBox.innerText = text;
-  messageBox.className = "message show " + type;
-
-  setTimeout(function () {
-    messageBox.innerText = "";
-    messageBox.className = "message";
-  }, 3000);
-}
-
-function formatDateTime(dateString) {
-  if (!dateString) return "";
-  return new Date(dateString).toLocaleString("he-IL");
-}
-
-function fillDonorSelect() {
-  donorSelect.innerHTML = `<option value="">בחר תורם</option>`;
-
-  donors.forEach(function (donor) {
-    const option = document.createElement("option");
-    option.value = donor.id;
-    option.innerText = donor.fullName + " - " + donor.phone;
-    donorSelect.appendChild(option);
-  });
-}
-
-function fillWorkerSelect() {
-  workerSelect.innerHTML = `<option value="">בחר מטפל</option>`;
-
-  workers
-    .filter(function (worker) {
-      return worker.status === "פעיל";
-    })
-    .forEach(function (worker) {
-      const option = document.createElement("option");
-      option.value = worker.name;
-      option.innerText = worker.name + " - " + worker.role;
-      workerSelect.appendChild(option);
-    });
-}
+// showMessage, formatDateTime, fillDonorSelect, fillWorkerSelect, downloadXLSX
+// are defined in utils.js (shared — see #28)
 
 function ensureCallbackArrays() {
   var changed = false;
@@ -409,21 +370,6 @@ function renderCallbacks() {
   renderDoneCallbacks(doneCallbacks);
 }
 
-function downloadXLSX(filename, sheetName, rows) {
-  var safe = rows.map(function (row) {
-    return row.map(function (cell) {
-      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
-      return cell;
-    });
-  });
-  var workbook = XLSX.utils.book_new();
-  var worksheet = XLSX.utils.aoa_to_sheet(safe);
-  worksheet["!cols"] = safe[0].map(function () { return { wch: 22 }; });
-  worksheet["!rtl"] = true;
-  workbook.Workbook = { Views: [{ RTL: true }] };
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, filename);
-}
 
 function exportCallbacksExcel() {
   var exportable = getAllCallbacks();
@@ -475,7 +421,7 @@ Database.whenReady(function () {
   donors  = Database.get("donors");
   workers = Database.get("workers");
   ensureCallbackArrays();
-  fillDonorSelect();
-  fillWorkerSelect();
+  fillDonorSelect(donors);
+  fillWorkerSelect(workers);
   renderCallbacks();
 });

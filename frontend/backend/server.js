@@ -9,6 +9,7 @@ const multer      = require("multer");
 
 const fs     = require("fs");
 const crypto = require("crypto");
+const logger = require("./logger");
 
 const {
   DB_PATH,
@@ -990,13 +991,13 @@ app.post(
         ringSec:    30,
       });
 
-      // Log exactly what we send (apiKey masked)
-      console.log("[Click2Call] → Technoline request:", JSON.stringify({
+      // Log exactly what we send (apiKey + donor phone/name redacted)
+      logger.info("Click2Call", "→ Technoline request:", JSON.stringify({
         action:     "click2call",
         apiKey:     maskSecret(apiKey),
         extension:  extension,
-        target:     phone,
-        targetName: donorName || phone,
+        target:     logger.redact(phone),
+        targetName: logger.redact(donorName || phone),
         ringSec:    30,
       }));
 
@@ -1054,7 +1055,7 @@ app.post(
         return res.status(400).json({ error: "טכנוליין: " + errMsg });
       }
 
-      console.log("[Click2Call] initiated | donor:", donorName, "| phone:", phone,
+      logger.info("Click2Call", "initiated | donor:", logger.redact(donorName), "| phone:", logger.redact(phone),
                   "| ext:", extension, "| callId:", techBody.callId);
       return res.json({ ok: true, callId: techBody.callId, extension: extension, target: techBody.target });
     } catch (err) {
@@ -1501,9 +1502,15 @@ app.post(
       }
 
       var urlParams = new URLSearchParams(params);
-      var logParamsManual = Object.assign({}, params, { apiKey: maskSecret(params.apiKey) });
-      console.log("[Campaign/Manual] → URL: https://app.ipsales.co.il/campaignApi.php");
-      console.log("[Campaign/Manual] → payload:", JSON.stringify(logParamsManual));
+      // apiKey + the donor phone (both the "phones" field and the title,
+      // which embeds it too) are redacted in the logged copy only.
+      var logParamsManual = Object.assign({}, params, {
+        apiKey: maskSecret(params.apiKey),
+        phones: logger.redact(params.phones),
+        title:  logger.redact(params.title),
+      });
+      logger.info("Campaign/Manual", "→ URL: https://app.ipsales.co.il/campaignApi.php");
+      logger.info("Campaign/Manual", "→ payload:", JSON.stringify(logParamsManual));
 
       var techRes  = await fetch("https://app.ipsales.co.il/campaignApi.php", {
         method:  "POST",
@@ -1633,10 +1640,15 @@ app.post(
       }
 
       var urlParams = new URLSearchParams(params);
-      var logParamsCampaign = Object.assign({}, params, { apiKey: maskSecret(params.apiKey) });
-      console.log("[Campaign] → URL: https://app.ipsales.co.il/campaignApi.php");
-      console.log("[Campaign] → payload:", JSON.stringify(logParamsCampaign));
-      console.log("[Campaign] launching", phones.length, "phones | title:", title, "| kind:", messageKind,
+      // apiKey + the full recipient phone list are redacted in the logged
+      // copy only — this can be the entire campaign's donor phone numbers.
+      var logParamsCampaign = Object.assign({}, params, {
+        apiKey: maskSecret(params.apiKey),
+        phones: logger.redact(params.phones),
+      });
+      logger.info("Campaign", "→ URL: https://app.ipsales.co.il/campaignApi.php");
+      logger.info("Campaign", "→ payload:", JSON.stringify(logParamsCampaign));
+      logger.info("Campaign", "launching", phones.length, "phones | title:", title, "| kind:", messageKind,
         listResult.fallbackPhoneCount > 0 ? "| fallback phones: " + listResult.fallbackPhoneCount : "");
 
       var techRes  = await fetch("https://app.ipsales.co.il/campaignApi.php", {
@@ -2493,9 +2505,12 @@ app.use(function (req, res) {
 });
 
 // ── Global error handler ──────────────────────────────────────────────────────
+// Catches errors from every route in the app (donor/payment/worker/IVR data
+// included) — routed through the logger at ERROR level for consistency with
+// the rest of the "sensitive places" clean-up (#30). The error itself is not
+// redacted here (its shape is unknown ahead of time), only classified.
 app.use(function (err, req, res, _next) {
-  const ts = new Date().toISOString();
-  console.error("[" + ts + "] Unhandled error on " + req.method + " " + req.path + ":", err);
+  logger.error("Server", "Unhandled error on " + req.method + " " + req.path + ":", err);
   res.status(500).json({ error: "Internal server error" });
 });
 

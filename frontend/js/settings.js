@@ -4,7 +4,6 @@ const workerNameInput   = document.getElementById("workerNameInput");
 const workerRoleInput   = document.getElementById("workerRoleInput");
 const workerStatusInput = document.getElementById("workerStatusInput");
 const addWorkerButton   = document.getElementById("addWorkerButton");
-const messageBox        = document.getElementById("messageBox");
 
 const workersTable = document.getElementById("workersTable");
 const workersCount = document.getElementById("workersCount");
@@ -30,15 +29,7 @@ async function reloadWorkers() {
   } catch (_) {}
 }
 
-function showMessage(text, type = "success") {
-  messageBox.innerText = text;
-  messageBox.className = "message show " + type;
-
-  setTimeout(function () {
-    messageBox.innerText = "";
-    messageBox.className = "message";
-  }, 3000);
-}
+// showMessage is defined in utils.js (shared — see #28)
 
 function formatDate(dateString) {
   return new Date(dateString).toLocaleDateString("he-IL");

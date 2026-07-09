@@ -4,7 +4,6 @@ let approvals = Database.get("approvals");
 
 const createDraftButton = document.getElementById("createDraftButton");
 const approverSelect = document.getElementById("approverSelect");
-const messageBox = document.getElementById("messageBox");
 
 const draftCount = document.getElementById("draftCount");
 const approvedCount = document.getElementById("approvedCount");
@@ -19,22 +18,8 @@ function saveApprovals() {
   Database.save("approvals", approvals);
 }
 
-function showMessage(text, type = "success") {
-  messageBox.innerText = text;
-  messageBox.className = "message show " + type;
-
-  setTimeout(function () {
-    messageBox.innerText = "";
-    messageBox.className = "message";
-  }, 3000);
-}
-
 // formatMoney is defined globally in database.js
-
-function formatDateTime(dateString) {
-  if (!dateString) return "";
-  return new Date(dateString).toLocaleString("he-IL");
-}
+// showMessage and formatDateTime are defined in utils.js (shared — see #28)
 
 function fillApproverSelect() {
   approverSelect.innerHTML = `<option value="">בחר עובד מאשר</option>`;
@@ -384,21 +369,7 @@ function renderApprovals() {
   });
 }
 
-function downloadXLSX(filename, sheetName, rows) {
-  var safe = rows.map(function (row) {
-    return row.map(function (cell) {
-      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
-      return cell;
-    });
-  });
-  var workbook = XLSX.utils.book_new();
-  var worksheet = XLSX.utils.aoa_to_sheet(safe);
-  worksheet["!cols"] = safe[0].map(function () { return { wch: 22 }; });
-  worksheet["!rtl"] = true;
-  workbook.Workbook = { Views: [{ RTL: true }] };
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, filename);
-}
+// downloadXLSX is defined in utils.js (shared — see #28)
 
 function exportApprovalsExcel() {
   if (approvals.length === 0) {

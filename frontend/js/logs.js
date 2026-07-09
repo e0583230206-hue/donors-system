@@ -65,21 +65,7 @@ function clearLogs() {
   renderLogs();
 }
 
-function downloadXLSX(filename, sheetName, rows) {
-  var safe = rows.map(function (row) {
-    return row.map(function (cell) {
-      if (typeof cell === "string" && /^[=+\-@|]/.test(cell)) return "'" + cell;
-      return cell;
-    });
-  });
-  var workbook = XLSX.utils.book_new();
-  var worksheet = XLSX.utils.aoa_to_sheet(safe);
-  worksheet["!cols"] = safe[0].map(function () { return { wch: 22 }; });
-  worksheet["!rtl"] = true;
-  workbook.Workbook = { Views: [{ RTL: true }] };
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, filename);
-}
+// downloadXLSX is defined in utils.js (shared — see #28)
 
 function exportLogsExcel() {
   if (logs.length === 0) {

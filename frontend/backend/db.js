@@ -4,6 +4,7 @@ const fs     = require("fs");
 const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const bcrypt = require("bcryptjs");
+const logger = require("./logger");
 
 const SESSION_TIMEOUT_HOURS = Number(process.env.SESSION_TIMEOUT_HOURS || 8);
 
@@ -787,7 +788,7 @@ function logClick2Call({ pbxCallId, workerId, workerName, donorId, donorName, do
       if (byPhone) {
         safeDonorId = byPhone.id;
       } else {
-        console.log("[DB] logClick2Call: donor not found by id=" + donorId + " or phone=" + donorPhone + " (app-level id, not synced to SQLite) — FK stored as NULL");
+        logger.warn("DB", "logClick2Call: donor not found by id=" + donorId + " or phone=" + logger.redact(donorPhone) + " (app-level id, not synced to SQLite) — FK stored as NULL");
       }
     } else {
       console.log("[DB] logClick2Call: donorId " + donorId + " not in donors table and no phone provided — FK stored as NULL");

@@ -9,7 +9,6 @@ const notesInput = document.getElementById("notesInput");
 const addDonorButton = document.getElementById("addDonorButton");
 const donorsList = document.getElementById("donorsList");
 const searchInput = document.getElementById("searchInput");
-const messageBox = document.getElementById("messageBox");
 const namesList = document.getElementById("namesList");
 const pendingDonorDeletions = {};
 var donorPage = 0;
@@ -52,27 +51,10 @@ function saveDonors() {
   updateNamesList();
 }
 
-function showMessage(text, type = "success") {
-  messageBox.innerText = text;
-  messageBox.className = "message show " + type;
-
-  setTimeout(function () {
-    messageBox.className = "message";
-    messageBox.innerText = "";
-  }, 3000);
-}
+// showMessage, normalizePhoneLocal are defined in utils.js (shared — see #28)
 
 function createDonorId() {
   return Date.now();
-}
-
-function normalizePhoneLocal(p) {
-  var digits = String(p === undefined || p === null ? "" : p).trim().replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (digits.startsWith("972") && digits.length >= 11) return "0" + digits.slice(3);
-  if (digits.length === 9 && !digits.startsWith("0")) return "0" + digits;
-  return digits;
 }
 
 function getCurrentHebrewYear() {

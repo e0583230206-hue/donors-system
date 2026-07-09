@@ -53,21 +53,7 @@ function getAllCallbacks() {
   return callbacks;
 }
 
-function getTodayString() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Jerusalem",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const values = {};
-  parts.forEach(function (part) {
-    values[part.type] = part.value;
-  });
-
-  return values.year + "-" + values.month + "-" + values.day;
-}
+// getTodayString is defined in utils.js (shared — see #28)
 
 function updateDashboard() {
   const donations = getAllDonations();

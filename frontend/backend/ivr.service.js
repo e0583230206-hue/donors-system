@@ -412,7 +412,10 @@ function handleIvrQuery(query) {
   var rawCallId = asText(q.PBXcallId);
   var callId    = rawCallId || ("phone-" + asText(q.PBXphone));
   if (!rawCallId) {
-    console.warn("[IVR] PBXcallId missing — using phone-based fallback callId", { callId: callId });
+    // callId embeds the raw phone in this fallback branch — mask it in the
+    // log the same way every other phone/amount value in this file is
+    // masked (see mask() above), this line was just missed previously.
+    console.warn("[IVR] PBXcallId missing — using phone-based fallback callId", { callId: mask(callId) });
   }
   var phone  = normalizePhone(q.PBXphone);
   var step   = detectIvrStep(q);
