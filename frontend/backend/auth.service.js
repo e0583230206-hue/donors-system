@@ -113,13 +113,6 @@ function requireRole(allowedRoles) {
   ];
 }
 
-function requireAdmin(req, res, next) {
-  if (!req.user || req.userRole !== ROLES.ADMIN) {
-    return res.status(403).json({ error: "Admin access required" });
-  }
-  next();
-}
-
 module.exports = {
   ROLES,
   normalizeRole,
@@ -128,5 +121,4 @@ module.exports = {
   comparePassword,
   requireAuth,
   requireRole,
-  requireAdmin,
 };

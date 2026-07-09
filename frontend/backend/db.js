@@ -18,6 +18,12 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+// Single source of truth for the seeded/reset default password by role —
+// was previously duplicated (db.js x2, server.js) with the same ternary.
+function defaultPasswordForRole(role) {
+  return role === "מנהל" ? "1234" : "1111";
+}
+
 function initDatabase() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS workers (
@@ -236,7 +242,7 @@ function initDatabase() {
   // ── Default admin worker ─────────────────────────────────────────
   const defaultWorker = db.prepare("SELECT id FROM workers WHERE name = ? LIMIT 1").get("מנהל מערכת");
   if (!defaultWorker) {
-    const hash = bcrypt.hashSync("1234", SALT_ROUNDS);
+    const hash = bcrypt.hashSync(defaultPasswordForRole("מנהל"), SALT_ROUNDS);
     const now = nowIso();
     db.prepare(
       "INSERT INTO workers (name, role, status, passwordHash, must_change_password, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -249,7 +255,7 @@ function initDatabase() {
   ).all();
 
   for (const worker of workersWithoutBcrypt) {
-    const defaultPass = worker.role === "מנהל" ? "1234" : "1111";
+    const defaultPass = defaultPasswordForRole(worker.role);
     const hash = bcrypt.hashSync(defaultPass, SALT_ROUNDS);
     db.prepare("UPDATE workers SET passwordHash = ?, updatedAt = ? WHERE id = ?")
       .run(hash, nowIso(), worker.id);
@@ -261,7 +267,7 @@ function initDatabase() {
   ).all();
 
   for (const w of workersToCheck) {
-    const defaultPass = w.role === "מנהל" ? "1234" : "1111";
+    const defaultPass = defaultPasswordForRole(w.role);
     if (w.passwordHash && bcrypt.compareSync(defaultPass, w.passwordHash)) {
       db.prepare("UPDATE workers SET must_change_password = 1, updatedAt = ? WHERE id = ?")
         .run(nowIso(), w.id);
@@ -897,7 +903,16 @@ function getAppStateUpdatedAt(key) {
 // ── Backup ───────────────────────────────────────────────────────────────────
 
 function backupDatabase(destPath) {
-  db.exec("VACUUM INTO '" + String(destPath).replace(/'/g, "''") + "'");
+  // SQLite has no parameterized form of VACUUM INTO, so the path must be
+  // interpolated into the SQL string — quote-escaping alone prevents breaking
+  // out of the string, but this also rejects anything that isn't a plain
+  // absolute .sqlite path, so a future caller can't pass through something
+  // unexpected (e.g. a raw request param) without it being caught here too.
+  const resolved = path.resolve(String(destPath));
+  if (!resolved.endsWith(".sqlite") || resolved.indexOf("\0") !== -1) {
+    throw new Error("backupDatabase: invalid destPath");
+  }
+  db.exec("VACUUM INTO '" + resolved.replace(/'/g, "''") + "'");
 }
 
 // Opens srcPath as a read-only SQLite DB and copies every app_state row into
@@ -1558,6 +1573,7 @@ initDatabase();
 
 module.exports = {
   DB_PATH,
+  defaultPasswordForRole,
   // Workers
   getWorkers,
   findWorkerById,

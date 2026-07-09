@@ -95,8 +95,8 @@ function renderDebts() {
 
   const filteredDebts = allDebts.filter(function (debt) {
     const matchesSearch =
-      debt.donorName.toLowerCase().includes(searchText) ||
-      debt.phone.includes(searchText);
+      (debt.donorName || "").toLowerCase().includes(searchText) ||
+      (debt.phone || "").includes(searchText);
 
     const matchesPurpose =
       selectedPurpose === "all" ||

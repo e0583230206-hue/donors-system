@@ -81,7 +81,7 @@ function getDonorName(donorId) {
     return item.id === Number(donorId);
   });
 
-  return donor ? donor.fullName : "לא נמצא";
+  return (donor && donor.fullName) || "לא נמצא";
 }
 
 function getPriorityClass(priority) {

@@ -407,7 +407,7 @@
       }
 
       function selectSessionById(callId) {
-        var tr = document.querySelector('[data-callid="' + callId + '"]');
+        var tr = document.querySelector('[data-callid="' + CSS.escape(String(callId)) + '"]');
         if (tr) selectSession(tr, callId);
         else loadDebug(callId);
       }

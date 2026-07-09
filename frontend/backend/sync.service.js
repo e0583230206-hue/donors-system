@@ -31,10 +31,34 @@ function parseRow(line) {
   return fields;
 }
 
+// Splits raw CSV text into logical rows, respecting quoted fields — a plain
+// text.split("\n") would break a row apart wherever a quoted field happens
+// to contain an embedded newline. Quote-toggling per character is enough to
+// track this correctly even through doubled "" (escaped quote) sequences,
+// since two toggles cancel out and leave the in/out-of-quotes state correct.
+function splitCsvRows(text) {
+  var rows = [], current = "", inQuotes = false;
+  for (var i = 0; i < text.length; i++) {
+    var ch = text[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+    } else if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && text[i + 1] === "\n") i++; // swallow the \n half of \r\n
+      rows.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  rows.push(current);
+  return rows;
+}
+
 function parseCsv(text) {
   // Strip UTF-8 BOM
   text = text.replace(/^﻿/, "");
-  var lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  var lines = splitCsvRows(text);
   if (!lines.length) return { rows: [], errors: ["הקובץ ריק"] };
 
   var header = parseRow(lines[0]);

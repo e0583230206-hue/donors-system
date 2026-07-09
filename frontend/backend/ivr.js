@@ -24,6 +24,7 @@ var T = {
   MENU_WITH_PREV_DEBTS:    " למעבר לתשלום הקישו 1. לשמיעת חובות קודמים הקישו 2. להשארת הודעה הקישו 3.",
   MENU_WITHOUT_PREV_DEBTS: " למעבר לתשלום הקישו 1. להשארת הודעה הקישו 3.",
   MENU_DONATION_ONLY:      " לתרומה הקישו 1. להשארת הודעה הקישו 3.",
+  MENU_DONATION_WITH_PREV_DEBTS: " לתרומה הקישו 1. לשמיעת חובות קודמים הקישו 2. להשארת הודעה הקישו 3.",
   MENU_MESSAGE_ONLY:       " להשארת הודעה הקישו 3.",
 
   // ── Payment sub-menu ───────────────────────────────────────────────────────
@@ -415,9 +416,16 @@ function buildResponse(query, donor) {
       enabledKeys = canCallback ? "1,3" : "1";
     }
   } else if (donorName && canPay) {
-    greeting    = T.GREETING_KNOWN(donorName) + noteSegment + T.NO_OPEN_DEBT;
-    menuText    = canCallback ? T.MENU_DONATION_ONLY : " לתרומה הקישו 1.";
-    enabledKeys = canCallback ? "1,3" : "1";
+    greeting = T.GREETING_KNOWN(donorName) + noteSegment + T.NO_OPEN_DEBT;
+    // A donor with no CURRENT debt can still have previous (already-closed
+    // or older) debts worth offering — key 2 must not depend on currentDebt.
+    if (canPrevDebt) {
+      menuText    = canCallback ? T.MENU_DONATION_WITH_PREV_DEBTS : " לתרומה הקישו 1. לשמיעת חובות קודמים הקישו 2.";
+      enabledKeys = canCallback ? "1,2,3" : "1,2";
+    } else {
+      menuText    = canCallback ? T.MENU_DONATION_ONLY : " לתרומה הקישו 1.";
+      enabledKeys = canCallback ? "1,3" : "1";
+    }
   } else if (canCallback) {
     greeting    = donorName ? T.GREETING_KNOWN(donorName) + noteSegment : T.GREETING_UNKNOWN;
     menuText    = T.MENU_MESSAGE_ONLY;

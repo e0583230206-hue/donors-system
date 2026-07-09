@@ -12,6 +12,7 @@ const crypto = require("crypto");
 
 const {
   DB_PATH,
+  defaultPasswordForRole,
   getWorkers,
   findWorkerById,
   createWorkerInDb,
@@ -642,7 +643,7 @@ app.post("/api/workers", requireRole([ROLES.ADMIN]), async function (req, res, n
       return res.status(409).json({ error: "Worker with this name already exists" });
     }
 
-    const defaultPass = role === "מנהל" ? "1234" : "1111";
+    const defaultPass = defaultPasswordForRole(role);
     const passToHash  = password ? String(password) : defaultPass;
     const passwordHash = await hashPassword(passToHash);
 
@@ -2461,7 +2462,7 @@ app.post(
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
       const dest  = path.join(BACKUP_DIR, "data-" + stamp + ".sqlite");
       backupDatabase(dest);
-      insertAuditLog({ action: "BACKUP_RUN", entityType: "system", entityId: "", entityName: "manual backup", details: dest, workerName: req.worker ? req.worker.name : "admin" });
+      insertAuditLog({ action: "BACKUP_RUN", entityType: "system", entityId: "", entityName: "manual backup", details: dest, workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip });
       res.json({ ok: true, name: path.basename(dest) });
     } catch (err) { next(err); }
   }
@@ -2480,7 +2481,7 @@ app.post(
       const srcPath = path.join(BACKUP_DIR, filename);
       if (!fs.existsSync(srcPath)) return res.status(404).json({ error: "גיבוי לא נמצא" });
       const restored = restoreFromBackup(srcPath);
-      insertAuditLog({ action: "BACKUP_RESTORED", entityType: "system", entityId: "", entityName: filename, details: restored + " keys restored", workerName: req.worker ? req.worker.name : "admin" });
+      insertAuditLog({ action: "BACKUP_RESTORED", entityType: "system", entityId: "", entityName: filename, details: restored + " keys restored", workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip });
       res.json({ ok: true, restored: restored });
     } catch (err) { next(err); }
   }
@@ -2506,8 +2507,23 @@ app.listen(PORT, function () {
 
 // ── Daily SQLite backup ───────────────────────────────────────────────────────
 (function scheduleDailyBackup() {
-  const BACKUP_DIR  = path.join(__dirname, "backups");
-  const MAX_BACKUPS = 30;
+  const BACKUP_DIR   = path.join(__dirname, "backups");
+  const MAX_AGE_DAYS = 30; // README_PRODUCTION.md documents "~30 days" of backups
+
+  function todayDateStamp() {
+    return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  }
+
+  // A frequent restart/deploy day used to create a fresh backup every single
+  // time (this function also runs once immediately on startup, below) — skip
+  // if today's backup already exists instead of piling up several per day.
+  function hasBackupForToday() {
+    if (!fs.existsSync(BACKUP_DIR)) return false;
+    const today = todayDateStamp();
+    return fs.readdirSync(BACKUP_DIR).some(function (f) {
+      return f.indexOf("data-" + today) === 0 && f.endsWith(".sqlite");
+    });
+  }
 
   function runBackup() {
     if (!fs.existsSync(BACKUP_DIR)) {
@@ -2517,23 +2533,36 @@ app.listen(PORT, function () {
       }
     }
 
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
-    const dest  = path.join(BACKUP_DIR, "data-" + stamp + ".sqlite");
-
-    try {
-      backupDatabase(dest);
-      console.log("[Backup] Created:", dest);
-
-      // Prune oldest backups, keep MAX_BACKUPS most recent
-      const files = fs.readdirSync(BACKUP_DIR)
-        .filter(function (f) { return f.endsWith(".sqlite"); })
-        .sort();
-
-      while (files.length > MAX_BACKUPS) {
-        try { fs.unlinkSync(path.join(BACKUP_DIR, files.shift())); } catch (_) {}
+    if (hasBackupForToday()) {
+      console.log("[Backup] Already have a backup for today — skipping.");
+    } else {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
+      const dest  = path.join(BACKUP_DIR, "data-" + stamp + ".sqlite");
+      try {
+        backupDatabase(dest);
+        console.log("[Backup] Created:", dest);
+      } catch (e) {
+        console.error("[Backup] Failed:", e.message);
       }
+    }
+
+    // Prune by age (matches the ~30-days retention already documented in
+    // README_PRODUCTION.md), not by file count — a count-based prune deletes
+    // backups faster than 30 calendar days on any day with several restarts.
+    try {
+      const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+      fs.readdirSync(BACKUP_DIR)
+        .filter(function (f) { return f.endsWith(".sqlite"); })
+        .forEach(function (f) {
+          const full = path.join(BACKUP_DIR, f);
+          let stat;
+          try { stat = fs.statSync(full); } catch (_) { return; }
+          if (stat.mtimeMs < cutoff) {
+            try { fs.unlinkSync(full); } catch (_) {}
+          }
+        });
     } catch (e) {
-      console.error("[Backup] Failed:", e.message);
+      console.error("[Backup] Prune failed:", e.message);
     }
   }
 

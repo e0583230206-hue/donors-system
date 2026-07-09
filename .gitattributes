@@ -1,0 +1,13 @@
+# Normalize line endings for text files so LF/CRLF stop mixing across commits
+# and platforms. Existing already-committed files are unaffected until they're
+# next touched/renormalized — this only governs new content going forward.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.sqlite binary
+*.woff binary
+*.woff2 binary
