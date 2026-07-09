@@ -174,8 +174,15 @@ function findDonorByPhoneOrIdNumber(input) {
   var donors = allAppDonors();
   var byKey  = {}; // appDonor.id -> { donor, methods: Set-like array }
 
+  // Donors with no valid id must never be matched here — this function backs
+  // an automated payment/identification flow, and `byKey[d.id]` would merge
+  // every id-less donor into a single "undefined" bucket, letting two
+  // different people be treated as one confirmed match.
+  function hasValidId(d) { return d.id !== undefined && d.id !== null && d.id !== ""; }
+
   if (normalizedPhone) {
     donors.forEach(function (d) {
+      if (!hasValidId(d)) return;
       if (!donorMatchesPhone(d, normalizedPhone)) return;
       var entry = byKey[d.id] || (byKey[d.id] = { donor: d, methods: [] });
       if (entry.methods.indexOf("phone") === -1) entry.methods.push("phone");
@@ -183,6 +190,7 @@ function findDonorByPhoneOrIdNumber(input) {
   }
   if (normalizedId) {
     donors.forEach(function (d) {
+      if (!hasValidId(d)) return;
       if (!donorMatchesIdNumber(d, normalizedId)) return;
       var entry = byKey[d.id] || (byKey[d.id] = { donor: d, methods: [] });
       if (entry.methods.indexOf("idNumber") === -1) entry.methods.push("idNumber");

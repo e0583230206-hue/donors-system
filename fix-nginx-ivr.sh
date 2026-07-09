@@ -88,11 +88,13 @@ else:
 PYEOF
 
 # ── בדיקה ────────────────────────────────────────────────────────────────────
+# nginx -t is the condition of this if — under `set -e`, a command tested
+# directly as an if-condition is exempt from triggering an immediate exit on
+# failure (only running it as its own statement first, then checking $?,
+# would abort here before the rollback in the else branch ever ran).
 echo ""
 echo "בודק תקינות nginx..."
-nginx -t
-
-if [ $? -eq 0 ]; then
+if nginx -t; then
   echo ""
   echo "מטעין nginx מחדש..."
   systemctl reload nginx

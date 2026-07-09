@@ -452,7 +452,7 @@ footer.foot kbd{
   var hasToken = !!sessionStorage.getItem('authToken');
   var spToken  = localStorage.getItem('_sp_token');
   console.log('[SP:1] sessionStorage.authToken לפני bridge:', hasToken ? 'יש' : 'אין');
-  console.log('[SP:1] localStorage._sp_token:', spToken ? 'יש (' + spToken.slice(0,20) + '...)' : 'אין');
+  console.log('[SP:1] localStorage._sp_token:', spToken ? 'יש' : 'אין');
 
   if (!hasToken) {
     if (spToken) {
@@ -466,6 +466,11 @@ footer.foot kbd{
   } else {
     console.log('[SP:1] טוקן כבר ב-sessionStorage, אין צורך ב-bridge.');
   }
+  // One-shot bridge only — sidebar.js writes these just before opening this
+  // tab; they must never linger in localStorage past this point (logout
+  // also clears them, in case this tab is never opened at all).
+  localStorage.removeItem('_sp_token');
+  localStorage.removeItem('_sp_user');
 }());
 </script>
 <script src="js/auth.js"></script>
@@ -475,7 +480,7 @@ footer.foot kbd{
 async function fetchSipConfig() {
   var token = sessionStorage.getItem('authToken') || '';
   console.log('[SP:2] fetchSipConfig: apiFetch מוגדר =', typeof apiFetch === 'function');
-  console.log('[SP:2] fetchSipConfig: טוקן ב-sessionStorage =', token ? 'יש (' + token.slice(0,20) + '...)' : 'חסר!');
+  console.log('[SP:2] fetchSipConfig: טוקן ב-sessionStorage =', token ? 'יש' : 'חסר!');
   if (!token) {
     console.warn('[SP:2] אין טוקן — לא שולח בקשה ל-/api/sip-config');
     return null;

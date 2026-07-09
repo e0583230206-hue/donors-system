@@ -27,7 +27,10 @@ function getDonorStats(donor) {
   const openDebts = donations.filter(d => num(d.remainingDebt) > 0);
   const paid      = donations.filter(d => d.paid);
   const totalDebt = openDebts.reduce((s, d) => s + num(d.remainingDebt), 0);
-  const totalPaid = paid.reduce((s, d) => s + num(d.amount) - num(d.remainingDebt), 0);
+  // Over ALL donations, not just fully-paid ones — a donation with
+  // paid===false but remainingDebt < amount (partially paid) already
+  // contributed real money that must count toward totalPaid too.
+  const totalPaid = donations.reduce((s, d) => s + num(d.amount) - num(d.remainingDebt), 0);
   const sorted    = donations.slice().sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
   const lastDate  = sorted[0] ? sorted[0].date : null;
   const allAmts   = donations.map(d => num(d.amount));

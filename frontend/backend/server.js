@@ -120,7 +120,35 @@ app.set("trust proxy", 1);
 // ── Security headers ─────────────────────────────────────────────────────────
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    // A real (non-false) CSP. The frontend still relies on inline <script>
+    // blocks/onclick handlers and inline style="" across ~20 legacy pages
+    // (no nonces), so script-src/style-src keep 'unsafe-inline' rather than
+    // breaking every page — a full nonce-based rewrite is a separate,
+    // larger effort. What this DOES lock down: no plugins (object-src),
+    // no framing by other sites (frame-ancestors), no unexpected <base>
+    // hijack (base-uri), and no resource loading from arbitrary origins
+    // except the specific external hosts the app actually uses today
+    // (Google Fonts on softphone.html, the jsDelivr CDN fallback for
+    // jssip/jquery, and the SIP server's own wss:// endpoint, which is
+    // admin-configurable and not known in advance).
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc:     ["'self'"],
+        scriptSrc:      ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+        // helmet defaults script-src-attr to 'none' regardless of script-src
+        // — would silently block every onclick="..." attribute in the app
+        // (confirmed present, e.g. ivr-monitor.html) if left unset here.
+        scriptSrcAttr:  ["'unsafe-inline'"],
+        styleSrc:       ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc:        ["'self'", "https://fonts.gstatic.com", "data:"],
+        imgSrc:         ["'self'", "data:"],
+        connectSrc:     ["'self'", "wss:", "https:"],
+        objectSrc:      ["'none'"],
+        baseUri:        ["'self'"],
+        frameAncestors: ["'self'"],
+        formAction:     ["'self'"],
+      },
+    },
     crossOriginEmbedderPolicy: false,
   })
 );
@@ -160,6 +188,16 @@ const _noCacheHeaders = function (res) {
 
 app.use("/js",  express.static(path.join(FRONTEND_DIR, "js"),  { setHeaders: _noCacheHeaders }));
 app.use("/css", express.static(path.join(FRONTEND_DIR, "css"), { setHeaders: _noCacheHeaders }));
+
+// FRONTEND_DIR is the parent of this very folder (frontend/), so the blanket
+// express.static below would otherwise also serve frontend/backend/* itself —
+// source code, data.sqlite, .env, backups. Block it before the static handler
+// ever sees a /backend request. (Legitimate public assets — /js, /css, /lib,
+// /uploads/ivr-audio — are all mounted on their own explicit routes and are
+// unaffected by this.)
+app.use("/backend", function (req, res) {
+  res.status(404).json({ error: "Not found" });
+});
 
 app.use(express.static(FRONTEND_DIR, {
   setHeaders(res, filePath) {
@@ -231,10 +269,37 @@ function timingSafeEq(a, b) {
   }
 }
 
+// Set IVR_DEBUG=true in .env to see raw (unmasked) IVR query params in logs
+// without changing NODE_ENV — same escape hatch ivr.service.js already uses.
+const IVR_DEBUG = process.env.IVR_DEBUG === "true";
+const IVR_LOG_SENSITIVE_KEYS = ["ivrKey", "PBXphone", "selfIdentInput", "beneficiaryIdentInput", "amount", "CONFIRM_payment"];
+
+// Every IVR request/rejection used to be logged with the full raw query
+// string (phones, ivrKey, amounts, confirmation numbers) — this redacts the
+// sensitive fields before anything reaches server logs / PM2 logs, since
+// nginx's `access_log off` for /ivr only protects the nginx log, not this one.
+function sanitizeIvrQueryForLog(query) {
+  var isProd = process.env.NODE_ENV === "production" && !IVR_DEBUG;
+  if (!isProd) return query;
+  var out = {};
+  Object.keys(query || {}).forEach(function (key) {
+    out[key] = IVR_LOG_SENSITIVE_KEYS.indexOf(key) !== -1 ? "[REDACTED]" : query[key];
+  });
+  return out;
+}
+
 function requireIvrKey(req, res, next) {
   if (!IVR_KEY) {
-    console.warn("[IVR] IVR_KEY not configured — access is unrestricted. Set IVR_KEY in .env.");
-    return next();
+    // Fail closed: an unset IVR_KEY must never mean "let everyone through".
+    // The startup check above only guarantees IVR_KEY when NODE_ENV is
+    // exactly "production" — any other/misconfigured NODE_ENV value used to
+    // fall through here and accept every request unauthenticated.
+    if (process.env.ALLOW_INSECURE_IVR === "true") {
+      console.warn("[IVR] IVR_KEY not configured — ALLOW_INSECURE_IVR=true, allowing unrestricted access. Never use this outside local testing.");
+      return next();
+    }
+    console.error("[IVR] IVR_KEY not configured — rejecting all IVR requests. Set IVR_KEY in .env (or ALLOW_INSECURE_IVR=true for local testing only).");
+    return res.status(503).json({ error: "IVR not configured" });
   }
   // Technoline sends the key as a query param (ivrKey=...).
   // Also accept it from the x-ivr-key header for direct API calls.
@@ -245,7 +310,8 @@ function requireIvrKey(req, res, next) {
       hasQueryKey: !!req.query.ivrKey,
       provided:    maskSecret(provided),
       expected:    maskSecret(IVR_KEY),
-      originalUrl: req.originalUrl,
+      path:        req.path,
+      query:       sanitizeIvrQueryForLog(req.query),
     });
     return res.status(403).json({ error: "Invalid IVR key" });
   }
@@ -467,7 +533,12 @@ var ivrAudioUpload = multer({
     destination: function (req, file, cb) { cb(null, IVR_AUDIO_UPLOADS_DIR); },
     filename: function (req, file, cb) {
       var ext = path.extname(file.originalname) || ".mp3";
-      cb(null, sanitizeAudioIdForFilename(req.params.id) + "-" + req.params.slot + ext);
+      // Random suffix so filenames aren't guessable from the (public,
+      // human-readable) audioId — this endpoint is served by express.static
+      // with no auth (native <audio> playback in settings.js can't send a
+      // Bearer token), so unguessable names are the access control here.
+      var rand = crypto.randomBytes(8).toString("hex");
+      cb(null, sanitizeAudioIdForFilename(req.params.id) + "-" + req.params.slot + "-" + rand + ext);
     },
   }),
   limits: { fileSize: 50 * 1024 * 1024 },
@@ -772,16 +843,24 @@ app.post("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function
       if (approvalsErr) return res.status(400).json({ error: approvalsErr });
     }
 
-    // Lost-update visibility only — compares against what the client last read
-    // (if it sent that back) and logs a warning; the save always proceeds.
+    // Optimistic concurrency check — if the client tells us what version it
+    // last read (X-Expected-Updated-At) and the stored data has moved on
+    // since, reject the save instead of silently overwriting whatever the
+    // other session wrote. The client (js/database.js _pushToServer) treats
+    // this the same way it already treats a failed push: log a warning and
+    // refresh its local copy, no blocking UI.
     var expectedUpdatedAt = req.get("X-Expected-Updated-At");
     if (expectedUpdatedAt) {
       var currentUpdatedAt = getAppStateUpdatedAt(key);
       if (currentUpdatedAt && currentUpdatedAt !== expectedUpdatedAt) {
         console.warn("[LostUpdate] key=" + key +
           " worker=" + (req.user && req.user.name || "?") +
-          " saved over a newer version — expected updatedAt " + expectedUpdatedAt +
-          " but found " + currentUpdatedAt + ". Another session may have overwritten concurrent changes.");
+          " rejected stale save — expected updatedAt " + expectedUpdatedAt +
+          " but found " + currentUpdatedAt + ". Another session saved first.");
+        return res.status(409).json({
+          error:            "הנתונים השתנו בשרת מאז שנטענו — רענן ונסה שוב",
+          currentUpdatedAt: currentUpdatedAt,
+        });
       }
     }
 
@@ -1887,7 +1966,7 @@ app.get("/api/softphone/context", requireAuth, function (req, res, next) {
 // The route stays stateless: only req.query and SQLite are used.
 app.get("/ivr", ivrLimiter, requireIvrKey, function (req, res) {
   try {
-    console.log("[IVR] QUERY:", JSON.stringify(req.query));
+    console.log("[IVR] QUERY:", JSON.stringify(sanitizeIvrQueryForLog(req.query)));
     console.log("[IVR] mainChoice =", req.query.mainChoice, "| payChoice =", req.query.payChoice, "| debtChoice =", req.query.debtChoice);
     var q      = req.query || {};
     var result = handleIvrQuery(q);
@@ -2345,12 +2424,10 @@ app.post(
   }
 );
 
-// ── 404 ───────────────────────────────────────────────────────────────────────
-app.use(function (req, res) {
-  res.status(404).json({ error: "Not found" });
-});
-
 // ── Server backup management (admin only) ────────────────────────────────────
+// Must stay registered before the catch-all 404 below — Express matches
+// routes in registration order, so anything placed after the 404 handler
+// is unreachable dead code.
 
 const BACKUP_DIR = path.join(__dirname, "backups");
 
@@ -2408,6 +2485,11 @@ app.post(
     } catch (err) { next(err); }
   }
 );
+
+// ── 404 ───────────────────────────────────────────────────────────────────────
+app.use(function (req, res) {
+  res.status(404).json({ error: "Not found" });
+});
 
 // ── Global error handler ──────────────────────────────────────────────────────
 app.use(function (err, req, res, _next) {

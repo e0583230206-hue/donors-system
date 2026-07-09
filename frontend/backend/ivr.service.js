@@ -575,8 +575,13 @@ function handleIvrQuery(query) {
       }
 
       // ── Update donor's open debt in app_state ────────────────────────────────
-      console.log("[IVR] calling updateDonorDebtAfterPayment | phone:", mask(phone), "amount:", mask(amount));
-      var debtResult = updateDonorDebtAfterPayment(phone, amount);
+      // Must reduce the BENEFICIARY's debt, not the caller's — under "pay for
+      // someone else" (identChoice=2), `phone` is the payer's own number and
+      // may not even belong to any donor record, or worse, may belong to a
+      // different donor than the one whose debt this payment is for.
+      var beneficiaryPhone = (donor && donor.phone) ? donor.phone : phone;
+      console.log("[IVR] calling updateDonorDebtAfterPayment | beneficiaryPhone:", mask(beneficiaryPhone), "amount:", mask(amount));
+      var debtResult = updateDonorDebtAfterPayment(beneficiaryPhone, amount);
       console.log("[IVR] updateDonorDebtAfterPayment returned:", JSON.stringify(debtResult));
 
       if (debtResult.updated) {

@@ -144,7 +144,11 @@ function extractEntities(q) {
   const mMatch = q.match(/(\d+)\s*חודש/);
   if (mMatch) entities.months = parseInt(mMatch[1]);
   if (/חצי שנה/.test(q)) entities.months = 6;
-  if (/\bשנה\b/.test(q) && !entities.months) entities.months = 12;
+  // \b is a no-op around Hebrew letters (they aren't \w in JS regex), so
+  // /\bשנה\b/ never matched at all — not even "לפני שנה". Use explicit
+  // non-Hebrew-letter boundaries instead, so "שנה" alone still matches but
+  // "ישנה" (old, fem.) or "השנה" (this year — handled separately below) don't.
+  if (/(^|[^א-ת])שנה([^א-ת]|$)/.test(q) && !entities.months) entities.months = 12;
   if (/שנתיים/.test(q)) entities.months = 24;
   if (entities.months) entities.thresholdDays = entities.months * 30;
 

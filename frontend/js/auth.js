@@ -172,6 +172,11 @@ function logout() {
   ["donors", "tasks", "logs", "settings", "approvals", "workers"].forEach(function (k) {
     localStorage.removeItem(k);
   });
+  // sidebar.js bridges the JWT through localStorage._sp_token/_sp_user so a
+  // softphone.html opened in a new tab can authenticate itself — must be
+  // cleared on logout too, otherwise the token outlives the session.
+  localStorage.removeItem("_sp_token");
+  localStorage.removeItem("_sp_user");
   window.location.href = "login.html";
 }
 

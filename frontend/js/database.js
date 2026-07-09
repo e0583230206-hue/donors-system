@@ -251,6 +251,14 @@ const Database = {
       headers: pushHeaders,
       body: JSON.stringify(data),
     }).then(function (res) {
+      if (res.status === 409) {
+        // Someone else saved this key first — our copy was rejected rather
+        // than silently overwriting theirs. Refresh so the next push (and
+        // _lastKnownUpdatedAt) is based on the current server version.
+        console.warn("[DB] Server rejected stale save for key '" + key + "' (409) — refreshing local copy.");
+        self.refreshFromServer(key);
+        return;
+      }
       var stamp = res.headers.get("X-Data-Updated-At");
       if (stamp) self._lastKnownUpdatedAt[key] = stamp;
       if (key !== "donors") return;
