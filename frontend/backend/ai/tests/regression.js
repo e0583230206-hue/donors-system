@@ -43,11 +43,13 @@ try {
 }
 
 // ─── Mock contexts ────────────────────────────────────────────────────────────
+// Shared by both mock builders below — was previously defined identically
+// twice (once per function).
+function fmtMoney(n) { return "₪" + Number(n || 0); }
+function fmtDate(d) { return d ? String(d) : "לא ידוע"; }
+function daysSince(d) { if (!d) return Infinity; return Math.floor((Date.now() - new Date(d)) / 86400000); }
 
 function mockGlobalCtx() {
-  function fmtMoney(n) { return "₪" + Number(n || 0); }
-  function fmtDate(d) { return d ? String(d) : "לא ידוע"; }
-  function daysSince(d) { if (!d) return Infinity; return Math.floor((Date.now() - new Date(d)) / 86400000); }
   function getDonorStats(d) {
     var donations = d.donations || [];
     var openDebts = donations.filter(function (x) { return Number(x.remainingDebt || 0) > 0; });
@@ -75,9 +77,6 @@ function mockGlobalCtx() {
 }
 
 function mockDonorCtx() {
-  function fmtMoney(n) { return "₪" + Number(n || 0); }
-  function fmtDate(d) { return d ? String(d) : "לא ידוע"; }
-  function daysSince(d) { if (!d) return Infinity; return Math.floor((Date.now() - new Date(d)) / 86400000); }
   var donor = { id: 1, fullName: "ראובן לוי", phone: "050-1234567", city: "ירושלים", tags: [], notes: "", donations: [], ivrApprovedPhones: [] };
   return {
     type: "donor",

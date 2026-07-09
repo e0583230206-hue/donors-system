@@ -1,3 +1,13 @@
+// error_file/out_file below point at ../logs (frontend/logs) — that
+// directory is gitignored and was never created anywhere, so a fresh
+// `git pull` deploy had nowhere for pm2 to write until something else
+// happened to create it. pm2 loads this file as plain Node, so ensure the
+// directory exists before pm2 needs it.
+const fs   = require("fs");
+const path = require("path");
+const LOGS_DIR = path.join(__dirname, "..", "logs");
+if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+
 module.exports = {
   apps: [
     {

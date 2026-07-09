@@ -64,6 +64,7 @@ PLAIN_TMP=$(mktemp /tmp/crm_backup_XXXXXX.sqlite)
 ENCRYPTED_OUT="$BACKUP_DIR/backup_${TIMESTAMP}.sqlite.enc"
 
 trap 'rm -f "$PLAIN_TMP"' EXIT   # ניקוי קובץ זמני תמיד
+chmod 600 "$PLAIN_TMP"          # DB גולמי לא מוצפן — לוודא שרק הבעלים יכול לקרוא, גם אם umask/TMPDIR משותפים
 
 # SQLite online backup (safe while server is running — no downtime needed)
 sqlite3 "$DB_PATH" "VACUUM INTO '$PLAIN_TMP';"
