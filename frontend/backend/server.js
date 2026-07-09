@@ -1028,12 +1028,12 @@ app.post(
 
       var techHttpStatus = techRes.status;
       var rawText = await techRes.text();
-      console.log("[Click2Call] ← Technoline HTTP", techHttpStatus, "| body:", rawText);
+      logger.info("Click2Call", "← Technoline HTTP", techHttpStatus, "| body:", logger.redact(rawText));
       var techBody;
       try {
         techBody = JSON.parse(rawText);
       } catch (_) {
-        console.error("[Click2Call] ← תגובה לא-JSON מטכנוליין:", rawText.slice(0, 500));
+        logger.error("Click2Call", "← תגובה לא-JSON מטכנוליין:", logger.redact(rawText.slice(0, 500)));
         return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
       }
 
@@ -1536,12 +1536,12 @@ app.post(
         signal:  AbortSignal.timeout(30000),
       });
       var rawTextManual = await techRes.text();
-      console.log("[Campaign/Manual] ← HTTP", techRes.status, "| body:", rawTextManual);
+      logger.info("Campaign/Manual", "← HTTP", techRes.status, "| body:", logger.redact(rawTextManual));
       var techBody;
       try {
         techBody = JSON.parse(rawTextManual);
       } catch (_) {
-        console.error("[Campaign/Manual] ← תגובה לא-JSON מטכנוליין:", rawTextManual.slice(0, 500));
+        logger.error("Campaign/Manual", "← תגובה לא-JSON מטכנוליין:", logger.redact(rawTextManual.slice(0, 500)));
         return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
       }
 
@@ -1675,12 +1675,12 @@ app.post(
         signal:  AbortSignal.timeout(30000),
       });
       var rawTextCampaign = await techRes.text();
-      console.log("[Campaign] ← HTTP", techRes.status, "| body:", rawTextCampaign);
+      logger.info("Campaign", "← HTTP", techRes.status, "| body:", logger.redact(rawTextCampaign));
       var techBody;
       try {
         techBody = JSON.parse(rawTextCampaign);
       } catch (_) {
-        console.error("[Campaign] ← תגובה לא-JSON מטכנוליין:", rawTextCampaign.slice(0, 500));
+        logger.error("Campaign", "← תגובה לא-JSON מטכנוליין:", logger.redact(rawTextCampaign.slice(0, 500)));
         return res.status(502).json({ error: "תגובה לא תקינה מטכנוליין (לא JSON). בדוק לוגי שרת." });
       }
 
