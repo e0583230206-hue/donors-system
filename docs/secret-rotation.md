@@ -28,7 +28,7 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 עדכן את הערך ב-`.env` בסביבת הייצור (לא בקוד, לא ב-git), ואז:
 
 ```bash
-pm2 restart donors-server
+pm2 restart donors
 ```
 
 **תופעת לוואי צפויה:** כל מי שמחובר כרגע ינותק ויצטרך להתחבר מחדש. מומלץ לבצע בשעה שקטה.
@@ -37,7 +37,7 @@ pm2 restart donors-server
 
 1. צור ערך חדש: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 2. פנה לאיש הקשר בטכנוליין ותאם חלון זמן קצר להחלפת ה-IVR Key/API Key בצד שלהם.
-3. רק לאחר אישור מהם שהם עדכנו — עדכן את `IVR_KEY` (ו/או `TECHNOLINE_API_KEY`) ב-`.env` בייצור ובצע `pm2 restart donors-server`.
+3. רק לאחר אישור מהם שהם עדכנו — עדכן את `IVR_KEY` (ו/או `TECHNOLINE_API_KEY`) ב-`.env` בייצור ובצע `pm2 restart donors`.
 4. ודא מיד אחרי: `curl "http://localhost:3000/ivr?ivrKey=<המפתח_החדש>&PBXphone=0521234567&PBXcallId=rotation-test"` מחזיר תשובת IVR תקינה (לא 403).
 5. אם טכנוליין מתעדכנים במועד מאוחר יותר מכם — **אל תחליפו את הצד שלכם קודם**, אחרת כל שיחה חיה תיכשל בינתיים.
 

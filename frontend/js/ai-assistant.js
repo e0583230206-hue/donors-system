@@ -1,6 +1,11 @@
 // ai-assistant.js — AI Assistant v3.0 (Read Only)
 // pageContext detection, debug mode (?aiDebug=1), rich ResponseObject rendering
-console.log("[AI] ai-assistant.js v3 loaded");
+// This runs before the IIFE below (and its _debugMode variable) exist at all,
+// so ?aiDebug=1 is checked inline here — the only line in the file that
+// duplicates that check instead of reading _debugMode.
+if (new URLSearchParams(window.location.search).get("aiDebug") === "1") {
+  console.log("[AI] ai-assistant.js v3 loaded");
+}
 
 (function () {
   "use strict";
@@ -343,10 +348,16 @@ console.log("[AI] ai-assistant.js v3 loaded");
 
   function init() {
     try {
-      console.log("[AI] init() v3 starting, readyState=" + document.readyState);
-
+      // _debugMode is only known once detectPageContext() has parsed
+      // ?aiDebug=1 from the URL — both startup logs below are gated on it
+      // and therefore moved after this call (previously the first log ran
+      // before _debugMode was set at all, so it printed unconditionally
+      // for every visitor, not just when debug mode is on).
       _pageContext = detectPageContext();
-      console.log("[AI] pageContext=" + _pageContext + ", donorId=" + _donorId + ", debug=" + _debugMode);
+      if (_debugMode) {
+        console.log("[AI] init() v3 starting, readyState=" + document.readyState);
+        console.log("[AI] pageContext=" + _pageContext + ", donorId=" + _donorId + ", debug=" + _debugMode);
+      }
 
       var fab   = buildFab();
       var panel = buildPanel();

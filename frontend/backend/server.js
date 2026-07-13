@@ -1161,7 +1161,7 @@ app.post(
       });
       var techBody = await techRes.json();
 
-      console.log("[MailingList] response:", JSON.stringify(techBody));
+      console.log("[MailingList] response:", logger.redact(JSON.stringify(techBody)));
 
       return res.json({
         ok:     true,

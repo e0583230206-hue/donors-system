@@ -43,7 +43,7 @@ cd frontend/backend
 npm install --production
 
 # הפעל מחדש את השרת
-pm2 restart donors-server
+pm2 restart donors
 ```
 
 ---
@@ -52,9 +52,9 @@ pm2 restart donors-server
 
 ### עם PM2 (מומלץ)
 ```bash
-pm2 restart donors-server
+pm2 restart donors
 pm2 status
-pm2 logs donors-server --lines 50
+pm2 logs donors --lines 50
 ```
 
 ### ידני (בלי PM2)
@@ -89,13 +89,13 @@ cp frontend/backend/data.sqlite frontend/backend/backups/manual-$(date +%Y%m%d-%
 ### שחזור מגיבוי
 ```bash
 # עצור שרת קודם!
-pm2 stop donors-server
+pm2 stop donors
 
 # שחזר
 cp frontend/backend/backups/data-YYYY-MM-DDTHH-MM-SSZ.sqlite frontend/backend/data.sqlite
 
 # הפעל מחדש
-pm2 start donors-server
+pm2 start donors
 ```
 
 ### גיבוי לענן (מומלץ)
@@ -198,7 +198,7 @@ curl -H "Authorization: Bearer <TOKEN>" http://localhost:3000/api/admin/audit-lo
 
 ```bash
 # צפה בלוגים חיים
-pm2 logs donors-server
+pm2 logs donors
 
 # בדוק שימוש ב-CPU/זיכרון
 pm2 monit

@@ -71,6 +71,19 @@ var IVR_DEBUG = process.env.IVR_DEBUG === "true";
 var _isProd   = process.env.NODE_ENV === "production" && !IVR_DEBUG;
 function mask(v) { return _isProd ? "[REDACTED]" : v; }
 
+// Console-only variant of sanitizeQuery() — sanitizeQuery() itself still
+// returns real values (used as-is for ivr_call_logs DB storage, where an
+// admin investigating a call legitimately needs to see the real phone/amount);
+// this additionally masks the two fields its name implied were already safe
+// but weren't (PBXphone, amount) before printing to console in production.
+function sanitizeQueryForConsole(q) {
+  var s = sanitizeQuery(q);
+  return Object.assign({}, s, {
+    PBXphone: mask(s.PBXphone),
+    amount:   mask(s.amount),
+  });
+}
+
 // ── Step detection ────────────────────────────────────────────────────────────
 
 function detectIvrStep(q) {
@@ -421,7 +434,7 @@ function handleIvrQuery(query) {
   var step   = detectIvrStep(q);
 
   console.log("[IVR] step:", step,
-              "| callId:", callId,
+              "| callId:", mask(callId),
               "| phone:", mask(phone),
               "| params:", Object.keys(q).join(","),
               "| payment raw:", q.payment !== undefined ? JSON.stringify(q.payment) : "absent",
@@ -509,7 +522,7 @@ function handleIvrQuery(query) {
       var alreadySaved = findPaymentByCallId(callId) || findIvrDonationByCallId(callId);
       if (alreadySaved) {
         console.log("[IVR] payment=OK is a duplicate resend of an already-saved payment (caught before amount resolution) — skipping.",
-                    "| callId:", callId, "| donorId:", donor ? donor.id : null, "| amount:", mask(alreadySaved.amount));
+                    "| callId:", mask(callId), "| donorId:", donor ? donor.id : null, "| amount:", mask(alreadySaved.amount));
         safeInsertCallLog(callId, phone, "payment_duplicate_ignored", {
           donorId:            donor ? donor.id   : null,
           donorName:          donor ? donor.fullName : null,
@@ -527,12 +540,12 @@ function handleIvrQuery(query) {
                 "| raw q.payment:", JSON.stringify(q.payment),
                 "| paymentArr:", JSON.stringify(paymentArr),
                 "| resolved paymentStatus:", paymentStatus,
-                "| resolved amount:", amount,
-                "| callId:", callId, "| phone:", phone);
+                "| resolved amount:", mask(amount),
+                "| callId:", mask(callId), "| phone:", mask(phone));
     console.log("[IVR] payment context | payChoice:", lastParam(q, "payChoice"),
                 "| debtChoice:", lastParam(q, "debtChoice"),
-                "| amount param:", lastParam(q, "amount"),
-                "| CONFIRM_payment:", lastParam(q, "CONFIRM_payment"),
+                "| amount param:", mask(lastParam(q, "amount")),
+                "| CONFIRM_payment:", mask(lastParam(q, "CONFIRM_payment")),
                 "| PBXcallStatus:", q.PBXcallStatus || "absent");
 
     if (paymentStatus === "OK") {
@@ -542,7 +555,7 @@ function handleIvrQuery(query) {
                       "| donor:", donor ? mask(donor.fullName) : "unknown",
                       "| currentDebt:", donor && donor.currentDebt ? (mask(donor.currentDebt.amount) + " " + (donor.currentDebt.currency || "")) : "none",
                       "| prevDebtsCount:", donor ? (donor.previousDebts || []).length : "N/A",
-                      "| sanitized query:", JSON.stringify(sanitizeQuery(q)));
+                      "| sanitized query:", JSON.stringify(sanitizeQueryForConsole(q)));
         safeInsertCallLog(callId, phone, "error", {
           reason: "payment_ok_but_no_amount",
           params: sanitizeQuery(q),
@@ -558,7 +571,7 @@ function handleIvrQuery(query) {
         console.error("[IVR] payment=OK but amount exceeds MAX_PAYMENT_AMOUNT — refusing to update debt.",
                       "| amount:", mask(amount), "| cap:", MAX_PAYMENT_AMOUNT,
                       "| donor:", donor ? mask(donor.fullName) : "unknown",
-                      "| sanitized query:", JSON.stringify(sanitizeQuery(q)));
+                      "| sanitized query:", JSON.stringify(sanitizeQueryForConsole(q)));
         safeInsertCallLog(callId, phone, "error", {
           reason: "payment_ok_amount_exceeds_cap",
           amount:  amount,
@@ -595,7 +608,7 @@ function handleIvrQuery(query) {
       // ── Save payment record ──────────────────────────────────────────────────
       var saveResult = { duplicate: false };
       try {
-        console.log("[IVR] calling saveIvrPaymentOnce | callId:", callId,
+        console.log("[IVR] calling saveIvrPaymentOnce | callId:", mask(callId),
                     "phone:", mask(phone), "amount:", mask(amount), "confirmation:", mask(confirmationNumber));
         saveResult = saveIvrPaymentOnce({
           callId:               callId,
@@ -608,12 +621,12 @@ function handleIvrQuery(query) {
           identificationMethod: identInfo.payerMethod,
           isSelfPayment:        identInfo.isSelfPayment,
         });
-        console.log("[IVR] Payment saved to DB. callId:", callId,
+        console.log("[IVR] Payment saved to DB. callId:", mask(callId),
                     "| amount:", mask(amount), "| confirmation:", mask(confirmationNumber),
                     "| duplicate:", saveResult.duplicate);
       } catch (saveErr) {
         console.error("[IVR] CRITICAL: failed to save payment record.",
-                      "| callId:", callId, "| amount:", mask(amount),
+                      "| callId:", mask(callId), "| amount:", mask(amount),
                       "| phone:", mask(phone), "| confirmation:", mask(confirmationNumber),
                       "| error:", saveErr.message || saveErr);
         safeInsertCallLog(callId, phone, "error", {
@@ -632,7 +645,7 @@ function handleIvrQuery(query) {
         // success/audit event should be recorded — otherwise a single real
         // charge would reduce the donor's debt twice.
         console.log("[IVR] payment=OK is a duplicate resend of an already-saved payment — skipping debt update and audit log.",
-                    "| callId:", callId, "| donorId:", donor ? donor.id : null, "| amount:", mask(amount));
+                    "| callId:", mask(callId), "| donorId:", donor ? donor.id : null, "| amount:", mask(amount));
         safeInsertCallLog(callId, phone, "payment_duplicate_ignored", {
           donorId:            donor ? donor.id   : null,
           donorName:          donor ? donor.fullName : null,
@@ -700,7 +713,7 @@ function handleIvrQuery(query) {
       console.log("[IVR] paymentStatus is not OK:", paymentStatus,
                   "— entering failure branch",
                   "| raw q.payment:", JSON.stringify(q.payment),
-                  "| callId:", callId);
+                  "| callId:", mask(callId));
       safeInsertCallLog(callId, phone, "payment_failed", {
         result:    paymentStatus,
         rawPayment: JSON.stringify(q.payment),

@@ -21,7 +21,7 @@
 #
 #   # לאחר מכן שנה את שם הקובץ לשם המקורי והפעל מחדש את השרת:
 #   cp /tmp/restore.sqlite /var/www/donors-system/frontend/backend/data.sqlite
-#   pm2 restart crm-ivr-server
+#   pm2 restart donors
 #
 # ─── אימות תקינות ──────────────────────────────────────────────────────────
 #

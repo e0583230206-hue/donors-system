@@ -11,7 +11,12 @@ if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
 module.exports = {
   apps: [
     {
-      name: "crm-ivr-server",
+      // Official, single PM2 process name — must match exactly what
+      // .github/workflows/deploy.yml and README_PRODUCTION.md use in their
+      // `pm2 restart/stop/start/logs donors` commands. A mismatch here means
+      // the automated deploy's `pm2 restart donors` silently fails to find
+      // the process (confirmed against the live server — "donors" is correct).
+      name: "donors",
       script: "server.js",
       cwd: __dirname,
       instances: 1,
