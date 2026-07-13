@@ -106,6 +106,11 @@ function buildIvrDonorFromAppRecord(appDonor) {
 
   return {
     id:              donor ? donor.id : null,
+    // Identity of this exact record in app_state.donors (a different id space
+    // than the SQLite `donors` table row above) — kept alongside `id` so debt
+    // updates can target this precise donor instead of re-matching by phone,
+    // which can hit a different donor when a phone number is shared.
+    appDonorId:      (appDonor.id !== undefined && appDonor.id !== null && appDonor.id !== "") ? appDonor.id : null,
     phone:           donor ? donor.phone : appDonor.phone,
     fullName:        donor ? donor.fullName : (appDonor.fullName || ""),
     currentDebt:     openDebts[0]  || null,

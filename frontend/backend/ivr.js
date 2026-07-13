@@ -443,4 +443,4 @@ function buildResponse(query, donor) {
   return simpleMenu([txt(greeting + menuText)], "mainChoice", enabledKeys, 3, 5);
 }
 
-module.exports = { buildResponse, buildIdentificationResponse };
+module.exports = { buildResponse, buildIdentificationResponse, MAX_PAYMENT_AMOUNT };

@@ -564,10 +564,15 @@ function getPaymentStats() {
 // After Technoline confirms a successful charge, reduce the donor's open debts
 // in app_state (newest first — same order the IVR presents to the caller).
 // Returns { donorFound, updated, affectedDebts?, reason? } for logging.
-
-function updateDonorDebtAfterPayment(phone, paidAmount) {
+//
+// appDonorId: the exact app_state.donors[].id already resolved during caller
+// identification (donor.service.js's appDonorId) — preferred over phone
+// matching so this never touches a different donor that happens to share the
+// same phone number. phone is kept only as a fallback for the rare case no
+// donorId could be resolved upstream (e.g. legacy record with no id field).
+function updateDonorDebtAfterPayment(appDonorId, phone, paidAmount) {
   var normalizedPhone = normalizePhoneForDb(phone);
-  if (!normalizedPhone || !(paidAmount > 0)) {
+  if (!(paidAmount > 0)) {
     return { donorFound: false, updated: false, reason: "invalid_args" };
   }
 
@@ -576,28 +581,43 @@ function updateDonorDebtAfterPayment(phone, paidAmount) {
     return { donorFound: false, updated: false, reason: "no_donors_in_state" };
   }
 
-  // Match by ANY phone field: phone, phone2, phone3, phone4, phones[], ivrApprovedPhones[]
-  function donorHasPhone(d, n) {
-    var fields = [d.phone, d.phone2, d.phone3, d.phone4];
-    for (var fi = 0; fi < fields.length; fi++) {
-      if (normalizePhoneForDb(fields[fi]) === n) return true;
+  var hasAppDonorId = appDonorId !== null && appDonorId !== undefined && appDonorId !== "";
+  var donorIdx = -1;
+
+  if (hasAppDonorId) {
+    for (var dj = 0; dj < donors.length; dj++) {
+      if (donors[dj].id === appDonorId) {
+        donorIdx = dj;
+        break;
+      }
     }
-    var extra = (d.phones || []).concat(d.ivrApprovedPhones || []);
-    for (var ei = 0; ei < extra.length; ei++) {
-      if (normalizePhoneForDb(extra[ei]) === n) return true;
+  } else {
+    // Fallback only when no donorId was resolved upstream at all — matches
+    // by ANY phone field: phone, phone2, phone3, phone4, phones[], ivrApprovedPhones[]
+    if (!normalizedPhone) {
+      return { donorFound: false, updated: false, reason: "invalid_args" };
     }
-    return false;
+    function donorHasPhone(d, n) {
+      var fields = [d.phone, d.phone2, d.phone3, d.phone4];
+      for (var fi = 0; fi < fields.length; fi++) {
+        if (normalizePhoneForDb(fields[fi]) === n) return true;
+      }
+      var extra = (d.phones || []).concat(d.ivrApprovedPhones || []);
+      for (var ei = 0; ei < extra.length; ei++) {
+        if (normalizePhoneForDb(extra[ei]) === n) return true;
+      }
+      return false;
+    }
+    for (var di = 0; di < donors.length; di++) {
+      if (donorHasPhone(donors[di], normalizedPhone)) {
+        donorIdx = di;
+        break;
+      }
+    }
   }
 
-  var donorIdx = -1;
-  for (var di = 0; di < donors.length; di++) {
-    if (donorHasPhone(donors[di], normalizedPhone)) {
-      donorIdx = di;
-      break;
-    }
-  }
   if (donorIdx === -1) {
-    return { donorFound: false, updated: false, reason: "donor_not_in_state" };
+    return { donorFound: false, updated: false, reason: hasAppDonorId ? "donor_id_not_in_state" : "donor_not_in_state" };
   }
 
   var donor = donors[donorIdx];

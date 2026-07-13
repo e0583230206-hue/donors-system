@@ -1,4 +1,4 @@
-const { buildResponse, buildIdentificationResponse } = require("./ivr");
+const { buildResponse, buildIdentificationResponse, MAX_PAYMENT_AMOUNT } = require("./ivr");
 const {
   normalizePhone,
   findDonorByAniSafe,
@@ -13,7 +13,7 @@ const {
   logCallEnd,
 } = require("./log.service");
 const { parsePositiveAmount, saveIvrPaymentOnce } = require("./payment.service");
-const { updateDonorDebtAfterPayment, insertAuditLog } = require("./db");
+const { updateDonorDebtAfterPayment, insertAuditLog, findPaymentByCallId, findIvrDonationByCallId } = require("./db");
 
 // Caller-identification redesign: max failed attempts before falling back to
 // voicemail (decision #1/#2 — same cap for self-identification and
@@ -492,6 +492,35 @@ function handleIvrQuery(query) {
     var paymentStatus = paymentArr.some(function (v) { return v === "OK"; }) ? "OK"
                        : asText(lastParam(q, "payment"));
 
+    // ── Duplicate-resend short-circuit (must run BEFORE amount resolution) ──
+    // Technoline can resend payment=OK for a call whose payment was already
+    // saved (the final HANGUP often still carries payment=OK — see the
+    // detectIvrStep comment above). For a "pay full debt" (payChoice=1) or
+    // "pay all debts" (debtChoice=1) charge, the debt is already closed by
+    // the first successful payment, so resolvePaymentAmount() finds no
+    // currentDebt/previousDebts left and returns null — which used to fall
+    // into the "amount could not be resolved" error branch below, before
+    // ever reaching the dedup check that already existed further down (after
+    // saveIvrPaymentOnce). Checking callId/confirmation for an already-saved
+    // payment FIRST — before any amount is resolved — recognizes a resend
+    // regardless of which payment path produced it, without recomputing an
+    // amount, touching the debt, or creating a new payment/audit row.
+    if (paymentStatus === "OK") {
+      var alreadySaved = findPaymentByCallId(callId) || findIvrDonationByCallId(callId);
+      if (alreadySaved) {
+        console.log("[IVR] payment=OK is a duplicate resend of an already-saved payment (caught before amount resolution) — skipping.",
+                    "| callId:", callId, "| donorId:", donor ? donor.id : null, "| amount:", mask(alreadySaved.amount));
+        safeInsertCallLog(callId, phone, "payment_duplicate_ignored", {
+          donorId:            donor ? donor.id   : null,
+          donorName:          donor ? donor.fullName : null,
+          amount:             alreadySaved.amount,
+          confirmationNumber: asText(lastParam(q, "CONFIRM_payment")) || null,
+        });
+        logCallEnd(callId, phone, "payment_success", alreadySaved.amount);
+        return { response: buildResponse(q, donor) };
+      }
+    }
+
     var amount = resolvePaymentAmount(q, donor);
 
     console.log("[IVR] >>> payment handler entered",
@@ -517,6 +546,24 @@ function handleIvrQuery(query) {
         safeInsertCallLog(callId, phone, "error", {
           reason: "payment_ok_but_no_amount",
           params: sanitizeQuery(q),
+        });
+        logCallEnd(callId, phone, "error");
+        return { response: ivrErrorResponse() };
+      }
+
+      // Defense in depth: the IVR screens already refuse to present a charge
+      // above MAX_PAYMENT_AMOUNT, but this is the layer that actually reduces
+      // a real debt — it must not trust an externally-supplied amount blindly.
+      if (amount > MAX_PAYMENT_AMOUNT) {
+        console.error("[IVR] payment=OK but amount exceeds MAX_PAYMENT_AMOUNT — refusing to update debt.",
+                      "| amount:", mask(amount), "| cap:", MAX_PAYMENT_AMOUNT,
+                      "| donor:", donor ? mask(donor.fullName) : "unknown",
+                      "| sanitized query:", JSON.stringify(sanitizeQuery(q)));
+        safeInsertCallLog(callId, phone, "error", {
+          reason: "payment_ok_amount_exceeds_cap",
+          amount:  amount,
+          cap:     MAX_PAYMENT_AMOUNT,
+          donorId: donor ? donor.id : null,
         });
         logCallEnd(callId, phone, "error");
         return { response: ivrErrorResponse() };
@@ -577,55 +624,76 @@ function handleIvrQuery(query) {
         });
       }
 
-      // ── Update donor's open debt in app_state ────────────────────────────────
-      // Must reduce the BENEFICIARY's debt, not the caller's — under "pay for
-      // someone else" (identChoice=2), `phone` is the payer's own number and
-      // may not even belong to any donor record, or worse, may belong to a
-      // different donor than the one whose debt this payment is for.
-      var beneficiaryPhone = (donor && donor.phone) ? donor.phone : phone;
-      console.log("[IVR] calling updateDonorDebtAfterPayment | beneficiaryPhone:", mask(beneficiaryPhone), "amount:", mask(amount));
-      var debtResult = updateDonorDebtAfterPayment(beneficiaryPhone, amount);
-      console.log("[IVR] updateDonorDebtAfterPayment returned:", JSON.stringify(debtResult));
-
-      if (debtResult.updated) {
-        console.log("[IVR] Donor debt updated. phone:", mask(phone),
-                    "| paid:", mask(amount), "| affectedDebts:", debtResult.affectedDebts);
-      } else {
-        console.warn("[IVR] Donor debt NOT updated after payment.",
-                     "| phone:", mask(phone), "| amount:", mask(amount),
-                     "| reason:", debtResult.reason);
-        if (!debtResult.donorFound || debtResult.reason === "no_open_debts") {
-          safeInsertCallLog(callId, phone, "error", {
-            reason:        "debt_update_failed",
-            debtResult:    debtResult,
-            amount:        amount,
-          });
-        }
-      }
-
-      safeInsertCallLog(callId, phone, "payment_success", {
-        donorId:            donor ? donor.id   : null,
-        donorName:          donor ? donor.fullName : null,
-        amount:             amount,
-        confirmationNumber: confirmationNumber,
-        duplicate:          saveResult.duplicate,
-        debtUpdated:        debtResult.updated,
-      });
-      logCallEnd(callId, phone, "payment_success", amount);
-
-      try {
-        insertAuditLog({
-          action:     "ivr_payment_success",
-          entityType: "donor",
-          entityId:   donor ? donor.id : null,
-          entityName: donor ? donor.fullName : null,
-          details:    "תשלום IVR התקבל בסך " + amount + " ₪" +
-                      (confirmationNumber ? " (אישור " + confirmationNumber + ")" : "") +
-                      (saveResult.duplicate ? " — כפול, לא נספר פעמיים" : ""),
-          workerName: "IVR",
+      if (saveResult.duplicate) {
+        // Technoline resent payment=OK for a call whose payment was already
+        // saved (see the detectIvrStep comment above — the final HANGUP often
+        // still carries payment=OK). saveIvrPaymentOnce did not insert a new
+        // row, so the debt must NOT be reduced again and no second
+        // success/audit event should be recorded — otherwise a single real
+        // charge would reduce the donor's debt twice.
+        console.log("[IVR] payment=OK is a duplicate resend of an already-saved payment — skipping debt update and audit log.",
+                    "| callId:", callId, "| donorId:", donor ? donor.id : null, "| amount:", mask(amount));
+        safeInsertCallLog(callId, phone, "payment_duplicate_ignored", {
+          donorId:            donor ? donor.id   : null,
+          donorName:          donor ? donor.fullName : null,
+          amount:             amount,
+          confirmationNumber: confirmationNumber,
         });
-      } catch (auditErr) {
-        console.error("[IVR] Failed to write server_audit_log for payment_success:", auditErr.message);
+        logCallEnd(callId, phone, "payment_success", amount);
+      } else {
+        // ── Update donor's open debt in app_state ──────────────────────────────
+        // Must reduce the BENEFICIARY's debt, not the caller's — under "pay for
+        // someone else" (identChoice=2), `phone` is the payer's own number and
+        // may not even belong to any donor record. Prefer the exact donor
+        // already resolved during identification (appDonorId) over a fresh
+        // phone-based match, which could hit a different donor that shares
+        // the same phone number.
+        var beneficiaryAppDonorId = donor ? donor.appDonorId : null;
+        var beneficiaryPhone      = (donor && donor.phone) ? donor.phone : phone;
+        console.log("[IVR] calling updateDonorDebtAfterPayment | beneficiaryAppDonorId:", beneficiaryAppDonorId,
+                    "| beneficiaryPhone:", mask(beneficiaryPhone), "amount:", mask(amount));
+        var debtResult = updateDonorDebtAfterPayment(beneficiaryAppDonorId, beneficiaryPhone, amount);
+        console.log("[IVR] updateDonorDebtAfterPayment returned:", JSON.stringify(debtResult));
+
+        if (debtResult.updated) {
+          console.log("[IVR] Donor debt updated. phone:", mask(phone),
+                      "| paid:", mask(amount), "| affectedDebts:", debtResult.affectedDebts);
+        } else {
+          console.warn("[IVR] Donor debt NOT updated after payment.",
+                       "| phone:", mask(phone), "| amount:", mask(amount),
+                       "| reason:", debtResult.reason);
+          if (!debtResult.donorFound || debtResult.reason === "no_open_debts") {
+            safeInsertCallLog(callId, phone, "error", {
+              reason:        "debt_update_failed",
+              debtResult:    debtResult,
+              amount:        amount,
+            });
+          }
+        }
+
+        safeInsertCallLog(callId, phone, "payment_success", {
+          donorId:            donor ? donor.id   : null,
+          donorName:          donor ? donor.fullName : null,
+          amount:             amount,
+          confirmationNumber: confirmationNumber,
+          duplicate:          saveResult.duplicate,
+          debtUpdated:        debtResult.updated,
+        });
+        logCallEnd(callId, phone, "payment_success", amount);
+
+        try {
+          insertAuditLog({
+            action:     "ivr_payment_success",
+            entityType: "donor",
+            entityId:   donor ? donor.id : null,
+            entityName: donor ? donor.fullName : null,
+            details:    "תשלום IVR התקבל בסך " + amount + " ₪" +
+                        (confirmationNumber ? " (אישור " + confirmationNumber + ")" : ""),
+            workerName: "IVR",
+          });
+        } catch (auditErr) {
+          console.error("[IVR] Failed to write server_audit_log for payment_success:", auditErr.message);
+        }
       }
 
     } else {
