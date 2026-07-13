@@ -401,20 +401,38 @@ var donorAllPhones = function (d) {
   return [d.phone, d.phone2, d.phone3, d.phone4].map(normPhone).filter(Boolean);
 };
 
-function findExistingDonor(rowPhones, rowIdNumber, existingDonors) {
+// Precomputes idNumber/phone → donor lookup maps once per import instead of
+// rescanning existingDonors (and rebuilding donorAllPhones(d) each time) for
+// every phone of every imported row — that was O(rows * donors), and a real
+// import (thousands of rows against thousands of donors) could freeze the
+// tab for many seconds. Preserves the original "first match in array order
+// wins" semantics since earlier donors are never overwritten in the map.
+function buildDonorLookupMaps(existingDonors) {
+  var byIdNumber = Object.create(null);
+  var byPhone    = Object.create(null);
+  for (var i = 0; i < existingDonors.length; i++) {
+    var d = existingDonors[i];
+    if (d.idNumber) {
+      var idKey = String(d.idNumber).replace(/\D/g, "");
+      if (idKey && !(idKey in byIdNumber)) byIdNumber[idKey] = d;
+    }
+    var phones = donorAllPhones(d);
+    for (var j = 0; j < phones.length; j++) {
+      if (!(phones[j] in byPhone)) byPhone[phones[j]] = d;
+    }
+  }
+  return { byIdNumber: byIdNumber, byPhone: byPhone };
+}
+
+function findExistingDonor(rowPhones, rowIdNumber, existingDonors, lookupMaps) {
+  var maps = lookupMaps || buildDonorLookupMaps(existingDonors);
   if (rowIdNumber) {
-    var byId = existingDonors.find(function (d) {
-      return d.idNumber && String(d.idNumber).replace(/\D/g, "") === rowIdNumber.replace(/\D/g, "");
-    });
-    if (byId) return byId;
+    var idKey = rowIdNumber.replace(/\D/g, "");
+    if (idKey && maps.byIdNumber[idKey]) return maps.byIdNumber[idKey];
   }
   for (var ri = 0; ri < rowPhones.length; ri++) {
     var rp = normPhone(rowPhones[ri]);
-    if (!rp) continue;
-    var found = existingDonors.find(function (d) {
-      return donorAllPhones(d).indexOf(rp) !== -1;
-    });
-    if (found) return found;
+    if (rp && maps.byPhone[rp]) return maps.byPhone[rp];
   }
   return null;
 }
@@ -423,6 +441,7 @@ function buildExcelPreview(rows, existingDonors) {
   var idBase = Date.now();
   var idSeq  = 0;
   var toCreate = [], toUpdate = [], toSkip = [];
+  var lookupMaps = buildDonorLookupMaps(existingDonors);
 
   rows.forEach(function (row, rowIndex) {
     var firstName  = colVal(row, ["שם פרטי","שם","firstName"]);
@@ -460,7 +479,7 @@ function buildExcelPreview(rows, existingDonors) {
     }
 
     var rowPhones = [phone, phone2, phone3, phone4].filter(Boolean);
-    var existing  = findExistingDonor(rowPhones, idNumber, existingDonors);
+    var existing  = findExistingDonor(rowPhones, idNumber, existingDonors, lookupMaps);
     var tags      = tagsRaw ? tagsRaw.split(/[,;,]/).map(function(t){ return t.trim(); }).filter(Boolean) : [];
     var hasDebt   = !isNaN(amount) && amount > 0;
 

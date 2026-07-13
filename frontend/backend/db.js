@@ -334,7 +334,19 @@ function findDonorByPhone(phone) {
     ? "972" + normalized.slice(1)
     : null;
 
-  // Primary phone column
+  // Fast path: upsertDonor always stores phone already stripped of separators,
+  // so a plain equality check matches the vast majority of rows and can use
+  // idx_donors_phone. Wrapping the column in REPLACE() (below) is not
+  // sargable — SQLite can't use the index and falls back to a full table
+  // scan on every call, which matters here because this runs on every single
+  // IVR call to identify the caller. Try the indexed lookup first and only
+  // pay for the full-scan fallback for legacy rows that predate normalization.
+  var fast = intl
+    ? db.prepare("SELECT id, phone, fullName FROM donors WHERE phone IN (?,?) LIMIT 1").get(normalized, intl)
+    : db.prepare("SELECT id, phone, fullName FROM donors WHERE phone = ? LIMIT 1").get(normalized);
+  if (fast) return fast;
+
+  // Primary phone column (fallback for rows stored with separators)
   var row = intl
     ? db.prepare("SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " IN (?,?) LIMIT 1").get(normalized, intl)
     : db.prepare("SELECT id, phone, fullName FROM donors WHERE " + STRIP_PHONE_SQL + " = ? LIMIT 1").get(normalized);

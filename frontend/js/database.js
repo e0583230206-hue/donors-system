@@ -363,6 +363,11 @@ const Database = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Capped so this array (rewritten in full on every single addLog() call,
+// across every screen in the app) doesn't grow forever — oldest entries drop
+// off once the cap is hit, same as a simple log-rotation policy.
+var MAX_LOG_ENTRIES = 2000;
+
 function addLog(text) {
   var logs = Database.get("logs");
   logs.push({
@@ -370,6 +375,9 @@ function addLog(text) {
     text: text,
     date: new Date().toISOString(),
   });
+  if (logs.length > MAX_LOG_ENTRIES) {
+    logs = logs.slice(logs.length - MAX_LOG_ENTRIES);
+  }
   Database.save("logs", logs);
 }
 
