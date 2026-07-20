@@ -15,7 +15,7 @@
 // above the max), returns {ok:false} with no audioIds at all — callers must
 // fall back to speaking the WHOLE amount via TTS, never a partial sequence.
 
-const { MAX_PAYMENT_AMOUNT } = require("./ivr");
+const { MAX_PAYMENT_AMOUNT } = require("./ivr-constants");
 
 function pad3(n) {
   return String(n).padStart(3, "0");

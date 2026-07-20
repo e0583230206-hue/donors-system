@@ -1,4 +1,5 @@
 const { buildResponse, buildIdentificationResponse, MAX_PAYMENT_AMOUNT } = require("./ivr");
+const { buildAudioContext } = require("./ivr-audio-context.service");
 const {
   normalizePhone,
   findDonorByAniSafe,
@@ -418,59 +419,6 @@ function logStepDetails(callId, phone, step, q, donor) {
   }
 }
 
-// ── Hidden trial-audio bypass (temporary, disable anytime) ──────────────────
-//
-// Live diagnosis found that shouldTriggerTrialTransfer() itself fires
-// correctly (trial_transfer_triggered appears in the PM2 log), but
-// audio_endpoint_reached on the /ivr-audio-trial route never does — so
-// Technoline either isn't performing the goTo transfer or isn't calling that
-// extension's Remote URL. To isolate the fileLink/fileName playback question
-// from the goTo/extension-transfer question, this TEMPORARILY plays the
-// trial recording directly from /ivr instead of transferring anywhere —
-// ONLY for IVR_AUDIO_TRIAL_CALLER_PHONE, on the first request. Both env vars
-// are blank by default — with no configuration this predicate always returns
-// false on the very first check (short-circuit), so every other call is
-// completely unaffected. Never logs the phone number, callId, or raw query —
-// callers only log the fixed marker "trial_audio_direct_triggered".
-//
-// All four conditions are required together:
-//   1. IVR_AUDIO_TRIAL_CALLER_PHONE and TECHNOLINE_IVR_TRIAL_EXTENSION are set.
-//   2. This is the first request of the call (isFirstRequest, same definition
-//      logCallStart()/startCallSession() already use elsewhere in this file).
-//   3. PBXcallStatus is not HANGUP.
-//   4. The caller's normalized phone exactly matches the normalized trial
-//      phone (same normalizePhone() already used for donor matching).
-function shouldTriggerTrialTransfer(q, phone, isFirstRequest) {
-  var trialPhoneRaw = process.env.IVR_AUDIO_TRIAL_CALLER_PHONE || "";
-  var trialExt       = process.env.TECHNOLINE_IVR_TRIAL_EXTENSION || "";
-  if (!trialPhoneRaw || !trialExt) return false;
-  if (!isFirstRequest) return false;
-  if (asText(q.PBXcallStatus) === "HANGUP") return false;
-  return phone === normalizePhone(trialPhoneRaw);
-}
-
-// Pure builder — kept separate from the predicate so both are independently
-// testable without touching handleIvrQuery or the database.
-// IMPORTANT: a single module must be a bare object, never array-wrapped —
-// matches every other single-module return in ivr.js (e.g. simpleMenu(),
-// getDTMF()). An array here is only for chaining multiple modules, and an
-// unrecognized top-level shape makes the PBX silently retreat to the
-// previous menu (see PBX_DOCUMENTATION_CENTER.md §2.3) — this was the
-// original bug when this played a goTo instead of audio directly.
-function buildTrialTransferResponse() {
-  return {
-    response: {
-      type: "simpleMessage",
-      files: [
-        {
-          fileLink: "https://30206.co.il/uploads/ivr-audio/DEBT-002-1-1e99e92b65be9e6e.wav",
-          fileName: "TRIAL-debt002-pcm-v1",
-        },
-      ],
-    },
-  };
-}
-
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 function handleIvrQuery(query) {
@@ -510,19 +458,20 @@ function handleIvrQuery(query) {
   // ── Session start + call_start log (only on first request per callId) ─────
   var isFirstRequest = logCallStart(callId, phone);
 
-  // ── Hidden trial-audio bypass — see shouldTriggerTrialTransfer() ───────────
-  // Inert (always false) unless both trial env vars are explicitly set.
-  if (shouldTriggerTrialTransfer(q, phone, isFirstRequest)) {
-    console.log("[IVR] trial_audio_direct_triggered");
-    return buildTrialTransferResponse();
-  }
+  // ── Pre-recorded audio, if enabled for this call (IVR_AUDIO_MODE) ─────────
+  // Built once per request. Defaults to a plain-TTS passthrough whenever
+  // audio is off/not applicable to this caller — see
+  // ivr-audio-context.service.js. buildResponse()/buildIdentificationResponse()
+  // in ivr.js both accept this as an optional 3rd argument and fall back to
+  // the exact same TTS behavior as before if it's ever omitted.
+  var audio = buildAudioContext(phone);
 
   // ── Identification phase (decision #6) ─────────────────────────────────────
   // No debt is ever read and no payment ever proceeds until a beneficiary is
   // confirmed (identChoice=1 or identConfirm=1) — see detectIvrStep().
   if (step === "identification") {
     var identState = resolveIdentificationState(q, phone, callId);
-    return { response: buildIdentificationResponse(q, identState) };
+    return { response: buildIdentificationResponse(q, identState, audio) };
   }
 
   // ── Beneficiary lookup (whose debt is being read/paid — may differ from
@@ -553,7 +502,7 @@ function handleIvrQuery(query) {
     safeInsertCallLog(callId, phone, "voice_message_received",
       { donorId: donor ? donor.id : null });
     logCallEnd(callId, phone, "voice_message");
-    return { response: buildResponse(q, donor) };
+    return { response: buildResponse(q, donor, audio) };
   }
 
   // ── Payment result ────────────────────────────────────────────────────────
@@ -590,7 +539,7 @@ function handleIvrQuery(query) {
           confirmationNumber: asText(lastParam(q, "CONFIRM_payment")) || null,
         });
         logCallEnd(callId, phone, "payment_success", alreadySaved.amount);
-        return { response: buildResponse(q, donor) };
+        return { response: buildResponse(q, donor, audio) };
       }
     }
 
@@ -795,11 +744,11 @@ function handleIvrQuery(query) {
       }
     }
 
-    return { response: buildResponse(q, donor) };
+    return { response: buildResponse(q, donor, audio) };
   }
 
   // ── Normal flow step (menu, sub-menus, DTMF entry) ───────────────────────
-  return { response: buildResponse(q, donor) };
+  return { response: buildResponse(q, donor, audio) };
 }
 
 module.exports = {
@@ -807,6 +756,4 @@ module.exports = {
   detectIvrStep,
   handleIvrQuery,
   ivrErrorResponse,
-  shouldTriggerTrialTransfer,
-  buildTrialTransferResponse,
 };

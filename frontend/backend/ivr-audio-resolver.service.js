@@ -2,9 +2,17 @@
 //
 // Resolves one IVR audioId to either a Technoline fileLink/fileName pointing
 // at an approved, physically-present WAV recording, or a {text} fallback for
-// TTS — never both, never throws, never leaves a call without something to
-// say. Not wired into ivr.js yet (see ivr-audio-mode.service.js) — this file
-// only builds the resolver itself.
+// TTS — never both, never throws, NEVER returns an empty/silent fallback,
+// never leaves a call without something real to say.
+//
+// resolveAudio(audioId, fallbackText) takes the caller-supplied fallbackText
+// as the PRIMARY fallback — every live call site passes the exact original
+// message text that would have played before audio existed, so a failed
+// resolution always degrades to that same original wording. The resolver's
+// own canonical-text map (built from db.js's IVR_AUDIO_CANONICAL_RECORDINGS)
+// is only a secondary safety net for a caller that forgets to pass one, and
+// a fixed generic sentence (itself an already-approved recording, SYS-002)
+// is the last-resort tertiary net — {text:""} is never returned.
 //
 // No DB writes anywhere. No ffprobe/ffmpeg at request time — format
 // correctness was already verified once, offline, by
@@ -28,6 +36,12 @@ const { computeDerivedFilename, isPathContained } = require("./scripts/convert-i
 const DEFAULT_BASE_URL = "https://30206.co.il/uploads/ivr-audio";
 const APPROVED_STATUS = "אושר";
 
+// SYS-002's own approved wording — reused verbatim as the absolute last
+// resort, never invented text. Duplicated here (not imported from db.js) so
+// this file's pure createAudioResolver() core stays DB-free; the value is
+// asserted against the live db.js entry in the test file so it can't drift.
+const GENERIC_FALLBACK_TEXT = "אירעה שגיאה. אנא נסו שוב מאוחר יותר.";
+
 function stripExtension(filename) {
   return filename.replace(/\.[^./\\]+$/, "");
 }
@@ -39,31 +53,40 @@ function toPublicResult(baseUrl, filename) {
   };
 }
 
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
 // deps (all required — this is the pure, dependency-injected core; see
-// createProductionAudioResolver() below for the real wiring):
+// getProductionResolver()/resolveAudioForProduction() below for the real
+// wiring):
 //   getRecordByAudioId(audioId) -> { status, audioFile1 } | null | undefined
 //   fileExists(absolutePath) -> boolean
 //   uploadDir -> absolute (or resolvable) upload directory path
 //   baseUrl -> public base URL, no trailing slash required
 //   fallbackTextByAudioId -> { [audioId]: string } — canonical Hebrew text,
-//     used only when the audio itself can't be used for any reason.
+//     secondary safety net only (see module comment above).
 function createAudioResolver(deps) {
   const uploadDir = path.resolve(deps.uploadDir);
   const baseUrl = String(deps.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
   const fallbackTextByAudioId = deps.fallbackTextByAudioId || {};
 
-  function fallback(audioId) {
-    const text = Object.prototype.hasOwnProperty.call(fallbackTextByAudioId, audioId)
-      ? fallbackTextByAudioId[audioId]
-      : "";
-    return { text: text };
+  function fallback(audioId, callerFallbackText) {
+    if (isNonEmptyString(callerFallbackText)) {
+      return { text: callerFallbackText };
+    }
+    const canonical = fallbackTextByAudioId[audioId];
+    if (isNonEmptyString(canonical)) {
+      return { text: canonical };
+    }
+    return { text: GENERIC_FALLBACK_TEXT };
   }
 
-  return function resolveAudio(audioId) {
+  return function resolveAudio(audioId, fallbackText) {
     try {
       const row = deps.getRecordByAudioId(audioId);
       if (!row || row.status !== APPROVED_STATUS || !row.audioFile1) {
-        return fallback(audioId);
+        return fallback(audioId, fallbackText);
       }
 
       // audioFile1 עצמו חייב להיות שם קובץ בטוח (בתוך uploadDir) לפני שנגזר
@@ -73,7 +96,7 @@ function createAudioResolver(deps) {
       // האמיתית חייבת להיות על audioFile1 הגולמי, לפני כל חישוב.
       const sourceContainment = isPathContained(uploadDir, row.audioFile1);
       if (!sourceContainment.ok) {
-        return fallback(audioId);
+        return fallback(audioId, fallbackText);
       }
 
       // 1. נגזרת תקינה (PCM/mono/8000) — תמיד מועדפת אם קיימת.
@@ -89,9 +112,9 @@ function createAudioResolver(deps) {
         return toPublicResult(baseUrl, row.audioFile1);
       }
 
-      return fallback(audioId);
+      return fallback(audioId, fallbackText);
     } catch (e) {
-      return fallback(audioId);
+      return fallback(audioId, fallbackText);
     }
   };
 }
@@ -120,8 +143,8 @@ function getProductionResolver() {
   return productionResolver;
 }
 
-function resolveAudioForProduction(audioId) {
-  return getProductionResolver()(audioId);
+function resolveAudioForProduction(audioId, fallbackText) {
+  return getProductionResolver()(audioId, fallbackText);
 }
 
 module.exports = {
@@ -129,4 +152,5 @@ module.exports = {
   resolveAudioForProduction,
   stripExtension,
   DEFAULT_BASE_URL,
+  GENERIC_FALLBACK_TEXT,
 };

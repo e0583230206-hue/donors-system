@@ -5,7 +5,7 @@
 
 const assert = require("assert");
 const { amountToAudioIds, composeTwoDigitGroup, composeThousandsGroup } = require("./ivr-number-compose.service");
-const { MAX_PAYMENT_AMOUNT } = require("./ivr");
+const { MAX_PAYMENT_AMOUNT } = require("./ivr-constants");
 
 const results = [];
 function check(name, fn) {
