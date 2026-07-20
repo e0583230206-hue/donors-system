@@ -10,14 +10,24 @@
 // ivr-audio-resolver.service.js, which it wraps) is the only place that
 // does.
 //
-// The exact-text reverse lookup (Hebrew sentence -> audioId) is built once
-// from db.js's IVR_AUDIO_CANONICAL_RECORDINGS — the canonical, already-
-// approved 83-row list — never guessed or duplicated by hand here. Any T.*
-// string in ivr.js that doesn't byte-for-byte match (after trim) a
-// canonical sourceTextHe simply won't be found and stays TTS automatically
-// — this is how dynamic/no-recording texts (donor-name greetings, etc.)
-// safely fall through without special-casing them here.
-
+// resolveOrText's exact-text reverse lookup (Hebrew sentence -> audioId) is
+// now a SECONDARY mechanism only — ivr.js uses explicit rid(audio, audioId,
+// fallbackText) calls for every message with a known audioId (see the fix
+// for the IDENT-002 bug below). resolveOrText still exists for the small
+// number of genuinely open-ended cases (e.g. a donor's free-text purpose
+// that might coincidentally equal an approved phrase like "כללי"), so it's
+// still built here — from BOTH real sources, not guessed:
+//   - db.js's IVR_AUDIO_CANONICAL_RECORDINGS (73 rows: 29 fixed phrases +
+//     44 number/currency).
+//   - seed-ident-audio.js's IDENT_RECORDINGS (10 rows) — a SEPARATE array
+//     that IVR_AUDIO_CANONICAL_RECORDINGS never included. This was the
+//     actual root cause of the IDENT-002 bug: resolveOrText("...
+//     למישהו אחר הקישו 2.") could never find IDENT-002 no matter how
+//     exactly the text matched, because the array it searched structurally
+//     never contained any IDENT-* row at all. Fixed here for defense in
+//     depth (e.g. the purpose-text fallback could legitimately need an
+//     IDENT-* match some day) even though ivr.js no longer depends on this
+//     lookup for anything that already has a known, hardcoded audioId.
 const { parseAudioMode, shouldUseAudioForCall } = require("./ivr-audio-mode.service");
 const { resolveAudioForProduction } = require("./ivr-audio-resolver.service");
 const { normalizePhone } = require("./donor.service");
@@ -27,15 +37,10 @@ let textToAudioIdCache = null;
 function textToAudioIdMap() {
   if (!textToAudioIdCache) {
     const db = require("./db");
-    textToAudioIdCache = {};
-    db.IVR_AUDIO_CANONICAL_RECORDINGS.forEach(function (rec) {
-      const key = String(rec.sourceTextHe || "").trim();
-      // הראשון בכל התנגשות טקסט זוכה (לא אמורה לקרות ב-83 הרשומות הנוכחיות,
-      // אבל עדיפות דטרמיניסטית ולא "האחרון מנצח" עדיפה כברירת מחדל בטוחה).
-      if (key && textToAudioIdCache[key] === undefined) {
-        textToAudioIdCache[key] = rec.audioId;
-      }
-    });
+    const { IDENT_RECORDINGS } = require("./seed-ident-audio");
+    textToAudioIdCache = textToAudioIdFrom(
+      db.IVR_AUDIO_CANONICAL_RECORDINGS.concat(IDENT_RECORDINGS)
+    );
   }
   return textToAudioIdCache;
 }

@@ -1,5 +1,6 @@
 const { buildResponse, buildIdentificationResponse, MAX_PAYMENT_AMOUNT } = require("./ivr");
 const { buildAudioContext } = require("./ivr-audio-context.service");
+const { parseAudioMode } = require("./ivr-audio-mode.service");
 const {
   normalizePhone,
   findDonorByAniSafe,
@@ -419,6 +420,28 @@ function logStepDetails(callId, phone, step, q, donor) {
   }
 }
 
+// ── TEMPORARY diagnostic wrapper (see handleIvrQuery) ──────────────────────
+// Logs one line per SUCCESSFUL audio resolution (a real fileLink was
+// produced) — never the phone/callId/query, never a failure/fallback
+// (those already look exactly like plain TTS and aren't the thing being
+// diagnosed). Wrapping here means every existing buildResponse()/
+// buildIdentificationResponse() call site below picks this up automatically
+// without being touched individually.
+function wrapAudioForDiagnosticLog(realAudio) {
+  return {
+    resolveOrText: function (text) {
+      var result = realAudio.resolveOrText(text);
+      if (result && result.fileLink) console.log("[IVR-DIAG] audio_selected=(text-match)");
+      return result;
+    },
+    resolveAudioId: function (audioId, fallbackText) {
+      var result = realAudio.resolveAudioId(audioId, fallbackText);
+      if (result && result.fileLink) console.log("[IVR-DIAG] audio_selected=" + audioId);
+      return result;
+    },
+  };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 function handleIvrQuery(query) {
@@ -465,6 +488,17 @@ function handleIvrQuery(query) {
   // in ivr.js both accept this as an optional 3rd argument and fall back to
   // the exact same TTS behavior as before if it's ever omitted.
   var audio = buildAudioContext(phone);
+
+  // ── TEMPORARY diagnostic log — safe fields ONLY (no phone/callId/query/
+  // donor data), added to empirically confirm whether Technoline resends
+  // PBXphone/PBXcallId on every follow-up request of a call (not just the
+  // first), and which mode/audioIds actually got used. Remove once
+  // confirmed via a real trial call. See ivr-audio-mode.service.js for mode
+  // semantics.
+  console.log("[IVR-DIAG] PBXphone_present=" + (q.PBXphone !== undefined) +
+              " PBXcallId_present=" + (q.PBXcallId !== undefined) +
+              " audio_mode=" + parseAudioMode(process.env.IVR_AUDIO_MODE));
+  audio = wrapAudioForDiagnosticLog(audio);
 
   // ── Identification phase (decision #6) ─────────────────────────────────────
   // No debt is ever read and no payment ever proceeds until a beneficiary is
@@ -756,4 +790,7 @@ module.exports = {
   detectIvrStep,
   handleIvrQuery,
   ivrErrorResponse,
+  // זמני — לבדיקה בלבד (ivr-audio-diagnostic-log.test.js), ראו ההערה מעל
+  // ההגדרה. יוסר יחד עם שאר הלוג האבחוני כשהוא כבר לא נדרש.
+  wrapAudioForDiagnosticLog,
 };

@@ -151,37 +151,35 @@ check("4. mode=on: שם התורם עדיין נשאר {text}, לעולם לא f
 
 // ═══ 5. שם תורם: הקלטה + {text:name} + הקלטה, בסדר הנכון ══════════════════════
 
-check("5. self_menu (identKnown): IDENT-001 (audio) → {text:name} → IDENT_SELF_OR_OTHER_MENU (audio)", function () {
+check("5. self_menu (identKnown): IDENT-001 (audio) → {text:name} → IDENT-002 (audio, rid מפורש — לא עוד TXT-MATCH)", function () {
   var identState = { kind: "self_menu", donor: { fullName: "רבקה כהן" } };
   var res = ivr.buildIdentificationResponse({ identChoice: "x" }, identState, makeAlwaysResolvingAudio());
   var files = res.files; // אין opening (לא first turn, כי identChoice מוגדר)
   assert.strictEqual(files.length, 3);
   assert.strictEqual(files[0].fileName, "IDENT-001");
   assert.deepStrictEqual(files[1], { text: "רבקה כהן" });
-  assert.ok(hasFileLink(files[2]), "IDENT_SELF_OR_OTHER_MENU אמור להיפתר לאודיו גם הוא");
+  assert.strictEqual(files[2].fileName, "IDENT-002");
 });
 
-check("5. beneficiary_confirm (identBeneficiaryFound): IDENT-006 (audio) → {text:name} → CONFIRM_OR_RESEARCH_MENU (audio)", function () {
+check("5. beneficiary_confirm (identBeneficiaryFound): IDENT-006 (audio) → {text:name} → IDENT-007 (audio, rid מפורש)", function () {
   var identState = { kind: "beneficiary_confirm", donor: { fullName: "משה גולד" } };
   var res = ivr.buildIdentificationResponse({}, identState, makeAlwaysResolvingAudio());
   assert.strictEqual(res.files.length, 3);
   assert.strictEqual(res.files[0].fileName, "IDENT-006");
   assert.deepStrictEqual(res.files[1], { text: "משה גולד" });
-  assert.ok(hasFileLink(res.files[2]), "CONFIRM_OR_RESEARCH_MENU אמור להיפתר לאודיו גם הוא");
+  assert.strictEqual(res.files[2].fileName, "IDENT-007");
 });
 
-check('5. self_menu בתור first turn: OPENING (audio) → IDENT-001 (audio) → {text:name} → תפריט (audio)', function () {
+check('5. (דרישה 7 — הבאג האמפירי) self_menu בתור first turn: בדיוק 4 איברים בסדר הנכון — OPEN-001, IDENT-001, {text:name}, IDENT-002', function () {
   var identState = { kind: "self_menu", donor: { fullName: "רבקה כהן" } };
   var res = ivr.buildIdentificationResponse({}, identState, makeAlwaysResolvingAudio());
   var files = res.files;
   assert.strictEqual(files.length, 4);
-  // OPENING עובר rtxt (חיפוש טקסט), לא rid — עם ה-fake "מצליח תמיד" הוא
-  // מחזיר fileName גנרי ("TXT-MATCH"), לא בהכרח "OPEN-001" עצמו; מה שחשוב
-  // כאן הוא שזה fileLink אמיתי, לא שהמזהה נראה כמו OPEN-001.
-  assert.ok(hasFileLink(files[0]), "OPENING אמור להיפתר לאודיו");
-  assert.strictEqual(files[1].fileName, "IDENT-001");
-  assert.deepStrictEqual(files[2], { text: "רבקה כהן" });
-  assert.ok(hasFileLink(files[3]));
+  assert.strictEqual(files[0].fileName, "OPEN-001", "פריט 1 חייב להיות fileLink של OPEN-001");
+  assert.strictEqual(files[1].fileName, "IDENT-001", "פריט 2 חייב להיות fileLink של IDENT-001");
+  assert.deepStrictEqual(files[2], { text: "רבקה כהן" }, "פריט 3 חייב להיות {text: donorName}");
+  assert.strictEqual(files[3].fileName, "IDENT-002", "פריט 4 חייב להיות fileLink של IDENT-002, לא {text:...} — זה בדיוק הבאג שתוקן");
+  assert.ok(hasFileLink(files[3]), "IDENT-002 חייב fileLink — הבדיקה נכשלת אם הוא חוזר כ-{text:...}");
 });
 
 check('5. PAYMENT_SUCCESS עם שם: {text:"תודה {name}. "} ואז PAY-006 (audio) — לא הקלטה נפרדת ל"תודה", לפי העיצוב', function () {
