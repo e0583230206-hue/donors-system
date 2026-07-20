@@ -78,6 +78,11 @@ const {
 const { handleIvrQuery, ivrErrorResponse } = require("./ivr.service");
 const { getDonorForIvr, normalizePhone }   = require("./donor.service");
 
+// Isolated Technoline fileLink/fileName trial (OPEN-001 experiment) — see
+// ivr-audio-trial.route.js header. Deliberately does NOT touch ivr.js,
+// ivr.service.js, donor.service.js, or any DB/donor/payment code path.
+const { trialHandler: ivrAudioTrialHandler } = require("./ivr-audio-trial.route");
+
 // settings.html "ניהול הקלטות" tab — staging/management tool only. Does NOT
 // touch ivr.js / ivr.service.js / Technoline; see ivr-audio.service.js header.
 const {
@@ -2022,6 +2027,13 @@ app.get("/ivr", ivrLimiter, requireIvrKey, function (req, res) {
       .json(ivrErrorResponse());
   }
 });
+
+// ── IVR Audio trial (Technoline fileLink/fileName experiment) ─────────────────
+// Isolated, temporary, self-contained — see ivr-audio-trial.route.js header
+// for the full auth/scenario design. Does not touch /ivr, extension 9263,
+// ivr.js, ivr.service.js, donors, payments, or the ivr_audio_recordings table.
+// Reuses the same ivrLimiter as the production /ivr route.
+app.get("/ivr-audio-trial", ivrLimiter, ivrAudioTrialHandler);
 
 // ── Address-book sync (admin only) ───────────────────────────────────────────
 
