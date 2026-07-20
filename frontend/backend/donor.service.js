@@ -98,8 +98,12 @@ function buildIvrDonorFromAppRecord(appDonor) {
       })
       .map(function (d) {
         return {
-          amount:  Math.round(Number(d.remainingDebt) * 100) / 100,
-          purpose: String(d.finalPurpose || d.purpose || "כללי").trim(),
+          amount:      Math.round(Number(d.remainingDebt) * 100) / 100,
+          purpose:     String(d.finalPurpose || d.purpose || "כללי").trim(),
+          // הערך הגולמי מהטופס — קבוצה סגורה: "גליון מתאחדת" / "פרנס" / "אחר"
+          // (ראו debts.html/donor.html) — נדרש למיפוי PURP-001..004 בעת חיבור
+          // ה-Audio Resolver ל-IVR; שדה תוסף בלבד, לא משנה שום צרכן קיים.
+          purposeType: String(d.purposeType || "").trim(),
         };
       });
   }
@@ -216,6 +220,7 @@ module.exports = {
   normalizeIdNumber,
   getAllDonorPhones,
   donorMatchesPhone,
+  buildIvrDonorFromAppRecord,
   getDonorForIvr,
   findDonorByAniSafe,
   findDonorByPhoneOrIdNumber,
