@@ -92,15 +92,15 @@ check('type הוא "simpleMessage" (עוקף goTo זמנית לצורך בדיק
   assert.strictEqual(res.response.type, "simpleMessage");
 });
 
-check("files מכיל בדיוק איבר אחד עם fileLink ו-fileName הנדרשים", function () {
+check("files מכיל בדיוק איבר אחד עם fileLink ו-fileName הנדרשים (DEBT-002 WAV, fileName חדש לעקיפת cache)", function () {
   const res = buildTrialTransferResponse();
   assert.deepStrictEqual(res, {
     response: {
       type: "simpleMessage",
       files: [
         {
-          fileLink: "https://30206.co.il/uploads/ivr-audio/TRIAL-open001-v1.mp3",
-          fileName: "TRIAL-open001-v1",
+          fileLink: "https://30206.co.il/uploads/ivr-audio/DEBT-002-1-1e99e92b65be9e6e.wav",
+          fileName: "TRIAL-debt002-pcm-v1",
         },
       ],
     },
@@ -115,7 +115,7 @@ check('גוף ה-HTTP הסופי אחרי res.json(result.response) הוא בד�
   const httpBody = JSON.stringify(res.response);
   assert.strictEqual(
     httpBody,
-    '{"type":"simpleMessage","files":[{"fileLink":"https://30206.co.il/uploads/ivr-audio/TRIAL-open001-v1.mp3","fileName":"TRIAL-open001-v1"}]}'
+    '{"type":"simpleMessage","files":[{"fileLink":"https://30206.co.il/uploads/ivr-audio/DEBT-002-1-1e99e92b65be9e6e.wav","fileName":"TRIAL-debt002-pcm-v1"}]}'
   );
 });
 

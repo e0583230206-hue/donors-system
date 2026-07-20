@@ -463,8 +463,8 @@ function buildTrialTransferResponse() {
       type: "simpleMessage",
       files: [
         {
-          fileLink: "https://30206.co.il/uploads/ivr-audio/TRIAL-open001-v1.mp3",
-          fileName: "TRIAL-open001-v1",
+          fileLink: "https://30206.co.il/uploads/ivr-audio/DEBT-002-1-1e99e92b65be9e6e.wav",
+          fileName: "TRIAL-debt002-pcm-v1",
         },
       ],
     },
