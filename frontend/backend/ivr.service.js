@@ -418,6 +418,37 @@ function logStepDetails(callId, phone, step, q, donor) {
   }
 }
 
+// ── Hidden trial-extension transfer (temporary, disable anytime) ────────────
+//
+// Silently redirects ONLY IVR_AUDIO_TRIAL_CALLER_PHONE to the trial extension
+// (TECHNOLINE_IVR_TRIAL_EXTENSION) via a `goTo` module response. Both env vars
+// are blank by default — with no configuration this predicate always returns
+// false on the very first check (short-circuit), so every other call is
+// completely unaffected. Never logs the phone number, callId, or raw query —
+// callers only log the fixed marker "trial_transfer_triggered".
+//
+// All four conditions are required together:
+//   1. IVR_AUDIO_TRIAL_CALLER_PHONE and TECHNOLINE_IVR_TRIAL_EXTENSION are set.
+//   2. This is the first request of the call (isFirstRequest, same definition
+//      logCallStart()/startCallSession() already use elsewhere in this file).
+//   3. PBXcallStatus is not HANGUP.
+//   4. The caller's normalized phone exactly matches the normalized trial
+//      phone (same normalizePhone() already used for donor matching).
+function shouldTriggerTrialTransfer(q, phone, isFirstRequest) {
+  var trialPhoneRaw = process.env.IVR_AUDIO_TRIAL_CALLER_PHONE || "";
+  var trialExt       = process.env.TECHNOLINE_IVR_TRIAL_EXTENSION || "";
+  if (!trialPhoneRaw || !trialExt) return false;
+  if (!isFirstRequest) return false;
+  if (asText(q.PBXcallStatus) === "HANGUP") return false;
+  return phone === normalizePhone(trialPhoneRaw);
+}
+
+// Pure builder — kept separate from the predicate so both are independently
+// testable without touching handleIvrQuery or the database.
+function buildTrialTransferResponse() {
+  return { response: [{ type: "goTo", goTo: String(process.env.TECHNOLINE_IVR_TRIAL_EXTENSION) }] };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 function handleIvrQuery(query) {
@@ -456,6 +487,13 @@ function handleIvrQuery(query) {
 
   // ── Session start + call_start log (only on first request per callId) ─────
   var isFirstRequest = logCallStart(callId, phone);
+
+  // ── Hidden trial-extension transfer — see shouldTriggerTrialTransfer() ─────
+  // Inert (always false) unless both trial env vars are explicitly set.
+  if (shouldTriggerTrialTransfer(q, phone, isFirstRequest)) {
+    console.log("[IVR] trial_transfer_triggered");
+    return buildTrialTransferResponse();
+  }
 
   // ── Identification phase (decision #6) ─────────────────────────────────────
   // No debt is ever read and no payment ever proceeds until a beneficiary is
@@ -747,4 +785,6 @@ module.exports = {
   detectIvrStep,
   handleIvrQuery,
   ivrErrorResponse,
+  shouldTriggerTrialTransfer,
+  buildTrialTransferResponse,
 };
