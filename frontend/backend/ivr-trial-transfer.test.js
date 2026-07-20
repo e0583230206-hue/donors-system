@@ -77,28 +77,46 @@ check("PBXcallStatus=HANGUP (גם עם מספר תואם + ראשונה) → fal
   assert.strictEqual(shouldTriggerTrialTransfer({ PBXcallStatus: "HANGUP" }, TEST_TRIAL_PHONE, true), false);
 });
 
-// ── 5. מספר תואם בבקשה ראשונה → goTo ────────────────────────────────────────
+// ── 5. מספר תואם בבקשה ראשונה → השמעה ישירה (עוקף goTo זמנית) ────────────────
 check("כל התנאים מתקיימים → true", function () {
   assert.strictEqual(shouldTriggerTrialTransfer({}, TEST_TRIAL_PHONE, true), true);
 });
 
-check("result.response אינו Array (תיקון הבאג — לא עוד עטיפת מערך למודול בודד)", function () {
+check("result.response אינו Array (אותו עיקרון כמו בתיקון הקודם — מודול בודד = אובייקט חשוף)", function () {
   const res = buildTrialTransferResponse();
   assert.strictEqual(Array.isArray(res.response), false, "result.response לא אמור להיות מערך");
 });
 
-check('result.response שווה בדיוק {type:"goTo", goTo:"9999"} — אובייקט חשוף', function () {
+check('type הוא "simpleMessage" (עוקף goTo זמנית לצורך בדיקת ההקלטה ישירות)', function () {
   const res = buildTrialTransferResponse();
-  assert.deepStrictEqual(res, { response: { type: "goTo", goTo: "9999" } });
+  assert.strictEqual(res.response.type, "simpleMessage");
 });
 
-check('גוף ה-HTTP הסופי אחרי res.json(result.response) הוא בדיוק {"type":"goTo","goTo":"9999"}', function () {
+check("files מכיל בדיוק איבר אחד עם fileLink ו-fileName הנדרשים", function () {
+  const res = buildTrialTransferResponse();
+  assert.deepStrictEqual(res, {
+    response: {
+      type: "simpleMessage",
+      files: [
+        {
+          fileLink: "https://30206.co.il/uploads/ivr-audio/TRIAL-open001-v1.mp3",
+          fileName: "TRIAL-open001-v1",
+        },
+      ],
+    },
+  });
+});
+
+check('גוף ה-HTTP הסופי אחרי res.json(result.response) הוא בדיוק המבנה הנדרש', function () {
   // server.js:2021 עושה res.json(result.response) — Express's res.json()
   // ללא "json spaces"/"json replacer" מוגדרים (נבדק ב-server.js) שקול
   // ל-JSON.stringify(obj) פשוט. מדמים את זה בדיוק, בלי לגעת ב-Express/רשת.
   const res = buildTrialTransferResponse();
   const httpBody = JSON.stringify(res.response);
-  assert.strictEqual(httpBody, '{"type":"goTo","goTo":"9999"}');
+  assert.strictEqual(
+    httpBody,
+    '{"type":"simpleMessage","files":[{"fileLink":"https://30206.co.il/uploads/ivr-audio/TRIAL-open001-v1.mp3","fileName":"TRIAL-open001-v1"}]}'
+  );
 });
 
 // ── 6. פורמטים ישראליים שונים מנורמלים נכון (אותו מספר, ייצוגים שונים) ──────
@@ -140,10 +158,10 @@ check("מספר עם מקפים/רווחים → מנורמל ותואם", funct
 // את הטלפון היום, לכל שיחה, ללא שום קשר לשינוי הזה. הבדיקה הזו לא טוענת
 // ולא בודקת "המספר אף פעם לא נשמר בשום מקום" — זו טענה שגויה. היא מוכיחה
 // טענה מצומצמת ומדויקת יותר: הקוד *החדש* שנוסף (predicate + buildTrialTransferResponse
-// + שורת הלוג הקבועה trial_transfer_triggered ב-call site) לא מוסיף אף לוג
+// + שורת הלוג הקבועה trial_audio_direct_triggered ב-call site) לא מוסיף אף לוג
 // נוסף שמכיל מספר טלפון, callId או query — בדיוק כפי שהוא כתוב בפועל.
 // מנגנון הלוג הקיים (logCallStart) אינו נבדק כאן ואינו משתנה — ראו ה-diff.
-check("trial_transfer_triggered אינו מכיל מספר טלפון/callId/query — הקוד החדש לא מוסיף חשיפה", function () {
+check("trial_audio_direct_triggered אינו מכיל מספר טלפון/callId/query — הקוד לא מוסיף חשיפה", function () {
   const captured = [];
   const originalLog = console.log, originalWarn = console.warn, originalError = console.error;
   console.log = function () { captured.push(Array.from(arguments).join(" ")); };
@@ -155,7 +173,7 @@ check("trial_transfer_triggered אינו מכיל מספר טלפון/callId/que
     // (ivr.service.js) — predicate → לוג הסמן הקבוע → builder — בלי להפעיל
     // את שאר handleIvrQuery (logCallStart/DB) שאינו חלק מהשינוי הזה.
     if (shouldTriggerTrialTransfer(q, TEST_TRIAL_PHONE, true)) {
-      console.log("[IVR] trial_transfer_triggered"); // בדיוק כמו ב-call site האמיתי — אין ארגומנט נוסף
+      console.log("[IVR] trial_audio_direct_triggered"); // בדיוק כמו ב-call site האמיתי — אין ארגומנט נוסף
       buildTrialTransferResponse();
     }
   } finally {
@@ -166,7 +184,7 @@ check("trial_transfer_triggered אינו מכיל מספר טלפון/callId/que
   // בדיקה מדויקת, לא רק "includes": בדיוק לוג אחד, בדיוק המחרוזת הקבועה —
   // בלי מספר טלפון, בלי callId, בלי שום נתון מ-q.
   assert.strictEqual(captured.length, 1, "אמור להיות בדיוק לוג אחד (הסמן הקבוע), לא יותר");
-  assert.strictEqual(captured[0], "[IVR] trial_transfer_triggered");
+  assert.strictEqual(captured[0], "[IVR] trial_audio_direct_triggered");
   assert.ok(!captured[0].includes(TEST_TRIAL_PHONE));
   assert.ok(!captured[0].includes("fake-call-id-should-never-appear"));
 });

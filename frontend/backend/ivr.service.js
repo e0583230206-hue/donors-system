@@ -418,14 +418,20 @@ function logStepDetails(callId, phone, step, q, donor) {
   }
 }
 
-// ── Hidden trial-extension transfer (temporary, disable anytime) ────────────
+// ── Hidden trial-audio bypass (temporary, disable anytime) ──────────────────
 //
-// Silently redirects ONLY IVR_AUDIO_TRIAL_CALLER_PHONE to the trial extension
-// (TECHNOLINE_IVR_TRIAL_EXTENSION) via a `goTo` module response. Both env vars
+// Live diagnosis found that shouldTriggerTrialTransfer() itself fires
+// correctly (trial_transfer_triggered appears in the PM2 log), but
+// audio_endpoint_reached on the /ivr-audio-trial route never does — so
+// Technoline either isn't performing the goTo transfer or isn't calling that
+// extension's Remote URL. To isolate the fileLink/fileName playback question
+// from the goTo/extension-transfer question, this TEMPORARILY plays the
+// trial recording directly from /ivr instead of transferring anywhere —
+// ONLY for IVR_AUDIO_TRIAL_CALLER_PHONE, on the first request. Both env vars
 // are blank by default — with no configuration this predicate always returns
 // false on the very first check (short-circuit), so every other call is
 // completely unaffected. Never logs the phone number, callId, or raw query —
-// callers only log the fixed marker "trial_transfer_triggered".
+// callers only log the fixed marker "trial_audio_direct_triggered".
 //
 // All four conditions are required together:
 //   1. IVR_AUDIO_TRIAL_CALLER_PHONE and TECHNOLINE_IVR_TRIAL_EXTENSION are set.
@@ -450,12 +456,17 @@ function shouldTriggerTrialTransfer(q, phone, isFirstRequest) {
 // getDTMF()). An array here is only for chaining multiple modules, and an
 // unrecognized top-level shape makes the PBX silently retreat to the
 // previous menu (see PBX_DOCUMENTATION_CENTER.md §2.3) — this was the
-// original bug: goTo never actually transferred the call.
+// original bug when this played a goTo instead of audio directly.
 function buildTrialTransferResponse() {
   return {
     response: {
-      type: "goTo",
-      goTo: String(process.env.TECHNOLINE_IVR_TRIAL_EXTENSION),
+      type: "simpleMessage",
+      files: [
+        {
+          fileLink: "https://30206.co.il/uploads/ivr-audio/TRIAL-open001-v1.mp3",
+          fileName: "TRIAL-open001-v1",
+        },
+      ],
     },
   };
 }
@@ -499,10 +510,10 @@ function handleIvrQuery(query) {
   // ── Session start + call_start log (only on first request per callId) ─────
   var isFirstRequest = logCallStart(callId, phone);
 
-  // ── Hidden trial-extension transfer — see shouldTriggerTrialTransfer() ─────
+  // ── Hidden trial-audio bypass — see shouldTriggerTrialTransfer() ───────────
   // Inert (always false) unless both trial env vars are explicitly set.
   if (shouldTriggerTrialTransfer(q, phone, isFirstRequest)) {
-    console.log("[IVR] trial_transfer_triggered");
+    console.log("[IVR] trial_audio_direct_triggered");
     return buildTrialTransferResponse();
   }
 
