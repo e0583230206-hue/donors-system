@@ -105,6 +105,38 @@ check("בקשה תקינה — notfound (קישור שלא קיים בפועל �
   assert.notStrictEqual(res.body.files[0].fileName, "TRIAL-open001-v1");
 });
 
+// ── audio_endpoint_reached — diagnostic marker (added to isolate: did
+// Technoline even reach this route, vs. did the response body itself fail) ──
+check("audio_endpoint_reached נרשם אחרי אימות מוצלח, בלי query/מספר/callId/מפתח", function () {
+  const captured = [];
+  const originalLog = console.log;
+  console.log = function () { captured.push(Array.from(arguments).join(" ")); };
+  try {
+    run({ scenario: "open001", PBXextensionId: "8888", trialKey: "test-trial-key-value" });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.ok(captured.some(function (l) { return l === "[IVR-TRIAL] audio_endpoint_reached"; }),
+    "הלוג הקבוע אמור להופיע בדיוק");
+  captured.forEach(function (l) {
+    assert.ok(!l.includes("test-trial-key-value"), "המפתח נמצא בלוג: " + l);
+    assert.ok(!l.includes("8888") || l === "[IVR-TRIAL] audio_endpoint_reached", "PBXextensionId נמצא בלוג: " + l);
+  });
+});
+
+check("audio_endpoint_reached לא נרשם כשהאימות נכשל (403)", function () {
+  const captured = [];
+  const originalLog = console.log;
+  console.log = function () { captured.push(Array.from(arguments).join(" ")); };
+  try {
+    run({ scenario: "open001", PBXextensionId: "8888", trialKey: "wrong-key" });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.ok(!captured.some(function (l) { return l.includes("audio_endpoint_reached"); }),
+    "הלוג לא אמור להופיע כשהאימות נכשל");
+});
+
 // ── משתני סביבה לא מוגדרים בכלל → fail closed ───────────────────────────────
 check("IVR_AUDIO_TRIAL_KEY לא מוגדר בסביבה → fail closed (403), גם עם ערכים נכונים אחרת", function () {
   const saved = process.env.IVR_AUDIO_TRIAL_KEY;

@@ -445,8 +445,19 @@ function shouldTriggerTrialTransfer(q, phone, isFirstRequest) {
 
 // Pure builder — kept separate from the predicate so both are independently
 // testable without touching handleIvrQuery or the database.
+// IMPORTANT: a single module must be a bare object, never array-wrapped —
+// matches every other single-module return in ivr.js (e.g. simpleMenu(),
+// getDTMF()). An array here is only for chaining multiple modules, and an
+// unrecognized top-level shape makes the PBX silently retreat to the
+// previous menu (see PBX_DOCUMENTATION_CENTER.md §2.3) — this was the
+// original bug: goTo never actually transferred the call.
 function buildTrialTransferResponse() {
-  return { response: [{ type: "goTo", goTo: String(process.env.TECHNOLINE_IVR_TRIAL_EXTENSION) }] };
+  return {
+    response: {
+      type: "goTo",
+      goTo: String(process.env.TECHNOLINE_IVR_TRIAL_EXTENSION),
+    },
+  };
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────

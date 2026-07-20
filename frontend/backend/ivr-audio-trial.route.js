@@ -106,6 +106,11 @@ function trialHandler(req, res) {
     res.status(403).json({ error: "trial_auth_failed" });
     return;
   }
+  // Diagnostic marker only — fires strictly after successful auth, fixed
+  // string, no query/phone/callId/key. Lets us tell apart "Technoline never
+  // reached this route" from "it reached here but the scenario body itself
+  // (or the file download) is the problem".
+  console.log("[IVR-TRIAL] audio_endpoint_reached");
   const scenario = String((req.query && req.query.scenario) || "");
   const build = SCENARIOS[scenario];
   if (!build) {

@@ -82,9 +82,23 @@ check("כל התנאים מתקיימים → true", function () {
   assert.strictEqual(shouldTriggerTrialTransfer({}, TEST_TRIAL_PHONE, true), true);
 });
 
-check('buildTrialTransferResponse() מחזיר בדיוק {type:"goTo", goTo:"9999"}', function () {
+check("result.response אינו Array (תיקון הבאג — לא עוד עטיפת מערך למודול בודד)", function () {
   const res = buildTrialTransferResponse();
-  assert.deepStrictEqual(res, { response: [{ type: "goTo", goTo: "9999" }] });
+  assert.strictEqual(Array.isArray(res.response), false, "result.response לא אמור להיות מערך");
+});
+
+check('result.response שווה בדיוק {type:"goTo", goTo:"9999"} — אובייקט חשוף', function () {
+  const res = buildTrialTransferResponse();
+  assert.deepStrictEqual(res, { response: { type: "goTo", goTo: "9999" } });
+});
+
+check('גוף ה-HTTP הסופי אחרי res.json(result.response) הוא בדיוק {"type":"goTo","goTo":"9999"}', function () {
+  // server.js:2021 עושה res.json(result.response) — Express's res.json()
+  // ללא "json spaces"/"json replacer" מוגדרים (נבדק ב-server.js) שקול
+  // ל-JSON.stringify(obj) פשוט. מדמים את זה בדיוק, בלי לגעת ב-Express/רשת.
+  const res = buildTrialTransferResponse();
+  const httpBody = JSON.stringify(res.response);
+  assert.strictEqual(httpBody, '{"type":"goTo","goTo":"9999"}');
 });
 
 // ── 6. פורמטים ישראליים שונים מנורמלים נכון (אותו מספר, ייצוגים שונים) ──────
