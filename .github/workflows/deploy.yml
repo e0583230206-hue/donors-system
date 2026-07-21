@@ -28,4 +28,10 @@ jobs:
             # audioId, never touches an existing one. Safe to run on every
             # deploy forever; a no-op once all rows already exist.
             node seed-ident-audio.js
+            # Same idempotent insert-only pattern as above, for the 24
+            # PAYMSG-3000..3023 systemMessages rows (see
+            # seed-paymsg-audio.test.js). Does not set audioFile1/2/3 or
+            # touch IVR_AUDIO_PAYMSG_MODE — the payment-messages feature
+            # stays off until explicitly enabled.
+            node seed-paymsg-audio.js
             pm2 restart donors --update-env
