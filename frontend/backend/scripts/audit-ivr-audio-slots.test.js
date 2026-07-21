@@ -14,8 +14,9 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
-const { isFormatReady, describeSlot } = require("./audit-ivr-audio-slots");
+const { isFormatReady, describeSlot, computeReport, findOrphanSlotFiles } = require("./audit-ivr-audio-slots");
 
 const results = [];
 function check(name, fn) {
@@ -124,6 +125,101 @@ check("[ספירה אמיתית] שאילתת ה-DB סופרת רק שורות l
   assert.strictEqual(slot1, 1);
   assert.strictEqual(slot2, 1);
   assert.strictEqual(slot3, 1);
+});
+
+// ── findOrphanSlotFiles — DB-independent disk scan ─────────────────────────
+// Writes ONE uniquely-named marker file into the real (local dev)
+// uploads/ivr-audio dir under a fake audioId that can never collide with a
+// real recording, then deletes it in `finally` — this is the test creating
+// and cleaning up its own throwaway fixture, not the audit script itself
+// writing anything (the script only ever calls fs.readdirSync/fs.existsSync).
+check("findOrphanSlotFiles: מזהה קובץ יתום שתואם <audioId>-2-/-3- ולא קובץ בסלוט 1 או של audioId אחר", function () {
+  const uploadDirReal = path.join(__dirname, "..", "uploads", "ivr-audio");
+  fs.mkdirSync(uploadDirReal, { recursive: true });
+  const marker2 = "ZZZ-TEST-AUDIT-FAKE-001-2-marker.mp3";
+  const marker3 = "ZZZ-TEST-AUDIT-FAKE-001-3-marker.mp3";
+  const notOrphan1 = "ZZZ-TEST-AUDIT-FAKE-001-1-marker.mp3"; // slot 1 — must NOT be reported
+  const otherIdOrphan = "ZZZ-TEST-AUDIT-FAKE-OTHER-2-marker.mp3"; // different audioId — must NOT be reported when not asked for
+  [marker2, marker3, notOrphan1, otherIdOrphan].forEach(function (name) {
+    fs.writeFileSync(path.join(uploadDirReal, name), "test-fixture-not-real-audio");
+  });
+  try {
+    const found = findOrphanSlotFiles(["ZZZ-TEST-AUDIT-FAKE-001"]);
+    assert.ok(found.indexOf(marker2) !== -1, "צריך למצוא את קובץ סלוט 2");
+    assert.ok(found.indexOf(marker3) !== -1, "צריך למצוא את קובץ סלוט 3");
+    assert.ok(found.indexOf(notOrphan1) === -1, "אסור למצוא קובץ סלוט 1");
+    assert.ok(found.indexOf(otherIdOrphan) === -1, "אסור למצוא audioId שלא ביקשנו עליו");
+  } finally {
+    [marker2, marker3, notOrphan1, otherIdOrphan].forEach(function (name) {
+      try { fs.unlinkSync(path.join(uploadDirReal, name)); } catch (_) {}
+    });
+  }
+});
+
+check("findOrphanSlotFiles: תיקייה ריקה/לא קיימת -> מערך ריק, לא זורק", function () {
+  assert.deepStrictEqual(findOrphanSlotFiles(["NO-SUCH-ID"]), []);
+});
+
+// ── computeReport — הפונקציה המשותפת לדוח המלא ולבדיקות --check ────────────
+check("computeReport: רץ מול ה-DB המקומי האמיתי (read-only), מחזיר מבנה תקין, לא זורק", function () {
+  const report = computeReport();
+  assert.ok(Array.isArray(report.rows));
+  assert.strictEqual(typeof report.slot1Count, "number");
+  assert.strictEqual(typeof report.slot2Count, "number");
+  assert.strictEqual(typeof report.slot3Count, "number");
+  assert.ok(!report.rows.some(function (r) { return r.category === "paymsg"; }));
+});
+
+// ── מצב --check — בדיוק מה ש-workflow החדש מריץ כ-4 שלבים נפרדים ──────────
+// מריץ נגד ה-DB המקומי האמיתי (data.sqlite) דרך תהליך CLI אמיתי — אותה
+// דרך הרצה בדיוק שתרוץ בפרודקשן, רק שמה שנבדק כאן הוא ההתנהגות (קוד יציאה
+// 0/1 בהתאם למספר בפועל), לא הערך המספרי הספציפי של הפרודקשן.
+const SCRIPT_PATH = path.join(__dirname, "audit-ivr-audio-slots.js");
+
+function runCli(args) {
+  try {
+    const stdout = execFileSync(process.execPath, [SCRIPT_PATH].concat(args), { encoding: "utf8" });
+    return { code: 0, stdout: stdout };
+  } catch (err) {
+    return { code: err.status, stdout: (err.stdout || "").toString() };
+  }
+}
+
+check("[--check] legacyCount עם ה-expect הנכון (הערך האמיתי הנוכחי) -> קוד יציאה 0, PASS", function () {
+  const actual = computeReport().rows.length;
+  const result = runCli(["--check=legacyCount", "--expect=" + actual]);
+  assert.strictEqual(result.code, 0);
+  assert.ok(/^PASS/.test(result.stdout));
+});
+
+check("[--check] legacyCount עם expect שגוי במכוון -> קוד יציאה שונה מ-0, FAIL — מוכיח שהצלחה אינה מונחת כברירת מחדל", function () {
+  const actual = computeReport().rows.length;
+  const result = runCli(["--check=legacyCount", "--expect=" + (actual + 1)]);
+  assert.notStrictEqual(result.code, 0);
+  assert.ok(/^FAIL/.test(result.stdout));
+});
+
+check("[--check] audioFile2Count/audioFile3Count/slotFilesAbsent — כל אחד מחזיר PASS/FAIL עקבי עם computeReport הנוכחי", function () {
+  const report = computeReport();
+  const r2 = runCli(["--check=audioFile2Count", "--expect=" + report.slot2Count]);
+  assert.strictEqual(r2.code, 0);
+  const r3 = runCli(["--check=audioFile3Count", "--expect=" + report.slot3Count]);
+  assert.strictEqual(r3.code, 0);
+  const rSlot = runCli(["--check=slotFilesAbsent"]);
+  // slotFilesAbsent is independent of DB content — only fails if a stray
+  // "<legacyAudioId>-2-"/"-3-" file exists on disk; on a clean local dev
+  // checkout this must pass.
+  assert.strictEqual(rSlot.code, 0);
+});
+
+check("[--check] הפלט של מצב --check לעולם לא מכיל שם קובץ (.wav/.mp3/...) — רק PASS/FAIL ומספר", function () {
+  const result = runCli(["--check=legacyCount", "--expect=999999"]); // deliberately wrong, forces FAIL path
+  assert.ok(!/\.(wav|mp3|m4a|ogg|aac|flac)/i.test(result.stdout), "אסור ששם קובץ ידלוף לפלט הבדיקה: " + result.stdout);
+});
+
+check("[--check] ערך --check לא מוכר -> FAIL, קוד יציאה שונה מ-0", function () {
+  const result = runCli(["--check=notARealCheck"]);
+  assert.notStrictEqual(result.code, 0);
 });
 
 // ── סיכום ────────────────────────────────────────────────────────────────

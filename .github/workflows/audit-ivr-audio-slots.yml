@@ -1,13 +1,19 @@
 name: Audit IVR Audio Slots (read-only)
 
 # Manual-only (workflow_dispatch) — never runs automatically on push, unlike
-# deploy.yml. Reuses the exact same SSH secrets as the deploy workflow, but
-# the remote script itself only opens data.sqlite with { readOnly: true } and
-# never writes to disk anywhere (see
-# frontend/backend/scripts/audit-ivr-audio-slots.js and its test file for the
-# safety proof). Does NOT run npm ci, does NOT run any seed script, does NOT
-# restart pm2 — it changes nothing about the running app, only reads and
-# prints a report to this workflow's log.
+# deploy.yml. Reuses the exact same SSH secrets as the deploy workflow.
+#
+# Each verification below is its own step, running ONE numeric assertion via
+# `node scripts/audit-ivr-audio-slots.js --check=<name> --expect=<n>` (see
+# that script's header + audit-ivr-audio-slots.test.js for the read-only
+# safety proof). Each step's own conclusion (success only if the actual
+# count matches; failure otherwise) is visible via GitHub's public
+# jobs/steps API — so the specific claims can be verified without ever
+# needing access to this workflow's log output. --check mode prints only
+# PASS/FAIL + a count, never a filename, path, or secret.
+#
+# Does NOT run npm ci, does NOT run any seed script, does NOT restart pm2,
+# does NOT touch .env — nothing about the running app changes.
 on:
   workflow_dispatch: {}
 
@@ -15,7 +21,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Run read-only slot audit via SSH
+      - name: Pull latest code
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_IP }}
@@ -24,5 +30,43 @@ jobs:
           script: |
             cd /var/www/donors-system
             git pull origin master
-            cd frontend/backend
-            node scripts/audit-ivr-audio-slots.js
+
+      - name: Verify legacy rows equal 83
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/donors-system/frontend/backend
+            node scripts/audit-ivr-audio-slots.js --check=legacyCount --expect=83
+
+      - name: Verify audioFile2 rows equal 0
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/donors-system/frontend/backend
+            node scripts/audit-ivr-audio-slots.js --check=audioFile2Count --expect=0
+
+      - name: Verify audioFile3 rows equal 0
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/donors-system/frontend/backend
+            node scripts/audit-ivr-audio-slots.js --check=audioFile3Count --expect=0
+
+      - name: Verify slot 2/3 files are absent
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/donors-system/frontend/backend
+            node scripts/audit-ivr-audio-slots.js --check=slotFilesAbsent
