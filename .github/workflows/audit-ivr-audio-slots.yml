@@ -1,0 +1,28 @@
+name: Audit IVR Audio Slots (read-only)
+
+# Manual-only (workflow_dispatch) — never runs automatically on push, unlike
+# deploy.yml. Reuses the exact same SSH secrets as the deploy workflow, but
+# the remote script itself only opens data.sqlite with { readOnly: true } and
+# never writes to disk anywhere (see
+# frontend/backend/scripts/audit-ivr-audio-slots.js and its test file for the
+# safety proof). Does NOT run npm ci, does NOT run any seed script, does NOT
+# restart pm2 — it changes nothing about the running app, only reads and
+# prints a report to this workflow's log.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run read-only slot audit via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/donors-system
+            git pull origin master
+            cd frontend/backend
+            node scripts/audit-ivr-audio-slots.js
