@@ -244,6 +244,9 @@ module.exports = {
   decideAction,
   buildFfprobeArgs,
   buildFfmpegArgs,
+  probeAudio,
+  probeAudioSafe,
+  convertToTmpWav,
 };
 
 if (require.main === module) {

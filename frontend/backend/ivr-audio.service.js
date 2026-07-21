@@ -12,6 +12,7 @@ const {
   updateIvrAudioRecording,
   setIvrAudioRecordingFileSlot,
   clearIvrAudioRecordingFileSlot,
+  setIvrAudioRecordingSlots,
 } = require("./db");
 
 const STATUSES = ["חסר", "תורגם", "הוקלט", "נבדק", "אושר"];
@@ -131,4 +132,5 @@ module.exports = {
   updateIvrAudioRecording,
   setIvrAudioRecordingFileSlot,
   clearIvrAudioRecordingFileSlot,
+  setIvrAudioRecordingSlots,
 };

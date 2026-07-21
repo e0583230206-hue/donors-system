@@ -98,7 +98,23 @@ const {
   updateIvrAudioRecording,
   setIvrAudioRecordingFileSlot,
   clearIvrAudioRecordingFileSlot,
+  setIvrAudioRecordingSlots,
 } = require("./ivr-audio.service");
+
+// PAYMSG (S3000-S3023 Technoline systemMessages) 3-slot lifecycle — admin
+// UI only in this step. See docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.
+const { createPaymsgLifecycle } = require("./ivr-audio-paymsg-lifecycle.service");
+const { createIvrAudioSlotRoutes } = require("./ivr-audio-paymsg.routes");
+const paymsgLock = require("./ivr-audio-paymsg-lock.service");
+const {
+  isPathContained:      convIsPathContained,
+  computeDerivedFilename: convComputeDerivedFilename,
+  computeTmpFilename:   convComputeTmpFilename,
+  isReadyAsIs:          convIsReadyAsIs,
+  isValidDerivedProbe:  convIsValidDerivedProbe,
+  probeAudioSafe:       convProbeAudioSafe,
+  convertToTmpWav:      convConvertToTmpWav,
+} = require("./scripts/convert-ivr-audio-to-wav");
 
 const PORT         = Number(process.env.PORT || 3000);
 const IVR_KEY      = process.env.IVR_KEY || "";
@@ -108,6 +124,27 @@ const FRONTEND_DIR = path.join(__dirname, "..");
 // statically below. Separate from FRONTEND_DIR; not part of the donor UI.
 const IVR_AUDIO_UPLOADS_DIR = path.join(__dirname, "uploads", "ivr-audio");
 if (!fs.existsSync(IVR_AUDIO_UPLOADS_DIR)) fs.mkdirSync(IVR_AUDIO_UPLOADS_DIR, { recursive: true });
+
+// PAYMSG 3-slot lifecycle (audioFile1=active, audioFile2=previous,
+// audioFile3=pending) — see docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.12.
+// Real fs/ffmpeg wiring here; the module itself is fully dependency-injected
+// and has no idea any of this is Express/SQLite/ffmpeg.
+const paymsgLifecycle = createPaymsgLifecycle({
+  getRecordByAudioId:    getIvrAudioRecordingById,
+  setSlots:              setIvrAudioRecordingSlots,
+  uploadDir:             IVR_AUDIO_UPLOADS_DIR,
+  isPathContained:       convIsPathContained,
+  computeDerivedFilename: convComputeDerivedFilename,
+  computeTmpFilename:    convComputeTmpFilename,
+  fileExists:            fs.existsSync,
+  probeAudioSafe:        convProbeAudioSafe,
+  isValidDerivedProbe:   convIsValidDerivedProbe,
+  isReadyAsIs:           convIsReadyAsIs,
+  convertToTmpWav:       convConvertToTmpWav,
+  rename:                fs.renameSync,
+  unlink:                fs.unlinkSync,
+  log:                   console.warn,
+});
 
 // Runs at most once per DB (idempotent — see db.js ensureIvrAudioRecordingsUpToDate
 // for the exact rules). Logged in full so the migration report is visible in
@@ -538,20 +575,6 @@ app.post("/api/admin/ivr-audio", function (req, res, next) {
   }
 });
 
-app.put("/api/admin/ivr-audio/:id", function (req, res, next) {
-  try {
-    var body = req.body || {};
-    if (body.status !== undefined && !isValidIvrAudioStatus(String(body.status))) {
-      return res.status(400).json({ error: "סטטוס לא תקין: " + body.status });
-    }
-    var updated = updateIvrAudioRecording(req.params.id, body);
-    if (!updated) return res.status(404).json({ error: "לא נמצאה הקלטה עם המזהה הזה" });
-    res.json({ ok: true, recording: updated });
-  } catch (err) {
-    next(err);
-  }
-});
-
 var ivrAudioUpload = multer({
   storage: multer.diskStorage({
     destination: function (req, file, cb) { cb(null, IVR_AUDIO_UPLOADS_DIR); },
@@ -574,64 +597,29 @@ var ivrAudioUpload = multer({
 
 var IVR_AUDIO_FILE_FIELD = { 1: "audioFile1", 2: "audioFile2", 3: "audioFile3" };
 
-app.post("/api/admin/ivr-audio/:id/audio/:slot", function (req, res, next) {
-  if (!isValidIvrAudioSlot(req.params.slot)) return res.status(400).json({ error: "סלוט לא תקין (1/2/3 בלבד)" });
-  var existing = getIvrAudioRecordingById(req.params.id);
-  if (!existing) return res.status(404).json({ error: "לא נמצאה הקלטה עם המזהה הזה" });
-
-  ivrAudioUpload(req, res, function (err) {
-    if (err) return res.status(400).json({ error: err.message });
-    if (!req.file) return res.status(400).json({ error: "לא נשלח קובץ שמע" });
-
-    var slot = Number(req.params.slot);
-    var existingFilename = existing[IVR_AUDIO_FILE_FIELD[slot]];
-    if (existingFilename && existingFilename !== req.file.filename) {
-      var oldPath = path.join(IVR_AUDIO_UPLOADS_DIR, existingFilename);
-      if (fs.existsSync(oldPath)) { try { fs.unlinkSync(oldPath); } catch (_) {} }
-    }
-
-    var nextStatus = bumpIvrAudioStatusOnUpload(existing.status);
-    var updated = setIvrAudioRecordingFileSlot(req.params.id, slot, req.file.filename, nextStatus);
-
-    try {
-      insertAuditLog({
-        action: "ivr_audio_upload", entityType: "ivr_audio_recording", entityId: req.params.id, entityName: req.params.id,
-        details: "הועלה קובץ הקלטה " + slot + " ל-" + req.params.id + " (" + req.file.filename + ")",
-        workerId: req.user.id, workerName: req.user.name, ip: req.ip,
-      });
-    } catch (_) {}
-
-    res.json({ ok: true, recording: updated });
-  });
-});
-
-app.delete("/api/admin/ivr-audio/:id/audio/:slot", function (req, res, next) {
-  try {
-    if (!isValidIvrAudioSlot(req.params.slot)) return res.status(400).json({ error: "סלוט לא תקין (1/2/3 בלבד)" });
-    var existing = getIvrAudioRecordingById(req.params.id);
-    if (!existing) return res.status(404).json({ error: "לא נמצאה הקלטה עם המזהה הזה" });
-
-    var slot = Number(req.params.slot);
-    var filename = existing[IVR_AUDIO_FILE_FIELD[slot]];
-    if (filename) {
-      var p = path.join(IVR_AUDIO_UPLOADS_DIR, filename);
-      if (fs.existsSync(p)) { try { fs.unlinkSync(p); } catch (_) {} }
-    }
-    var updated = clearIvrAudioRecordingFileSlot(req.params.id, slot);
-
-    try {
-      insertAuditLog({
-        action: "ivr_audio_delete_file", entityType: "ivr_audio_recording", entityId: req.params.id, entityName: req.params.id,
-        details: "נמחק קובץ הקלטה " + slot + " מ-" + req.params.id,
-        workerId: req.user.id, workerName: req.user.name, ip: req.ip,
-      });
-    } catch (_) {}
-
-    res.json({ ok: true, recording: updated });
-  } catch (err) {
-    next(err);
-  }
-});
+// PUT /:id (approve branch + generic fallback), POST /:id/audio/:slot
+// (paymsg-staging branch + generic fallback), DELETE /:id/audio/:slot
+// (paymsg-reject branch + generic fallback), POST /:id/restore-previous
+// (paymsg-only) — extracted verbatim into ivr-audio-paymsg.routes.js so the
+// exact same route code can be mounted with fake deps + hit with real HTTP
+// requests in a test. See ivr-audio-paymsg.routes.test.js.
+app.use("/api/admin/ivr-audio", createIvrAudioSlotRoutes({
+  getIvrAudioRecordingById: getIvrAudioRecordingById,
+  updateIvrAudioRecording: updateIvrAudioRecording,
+  setIvrAudioRecordingFileSlot: setIvrAudioRecordingFileSlot,
+  clearIvrAudioRecordingFileSlot: clearIvrAudioRecordingFileSlot,
+  bumpStatusOnUpload: bumpIvrAudioStatusOnUpload,
+  isValidStatus: isValidIvrAudioStatus,
+  isValidSlot: isValidIvrAudioSlot,
+  insertAuditLog: insertAuditLog,
+  paymsgLock: paymsgLock,
+  paymsgLifecycle: paymsgLifecycle,
+  ivrAudioUpload: ivrAudioUpload,
+  IVR_AUDIO_FILE_FIELD: IVR_AUDIO_FILE_FIELD,
+  uploadsDir: IVR_AUDIO_UPLOADS_DIR,
+  fs: fs,
+  path: path,
+}));
 
 // ── Workers — protected CRUD ──────────────────────────────────────────────────
 app.use("/api/workers", apiLimiter);

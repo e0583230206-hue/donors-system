@@ -1444,7 +1444,11 @@ reloadWorkers().then(function () { renderWorkers(); });
   // identification texts added after the frozen v1.0 73-row spec — fixed
   // sentences, not numbers, so they belong on גיליון1 too.
   var SHEET1_CATEGORIES = ["open", "menu", "debt", "pay", "voicemail", "system", "purpose", "ident"];
-  var activeSheet = "sentences"; // "sentences" | "numbers"
+  // "paymsg" = the 24 Technoline creditCard-module systemMessages
+  // (PAYMSG-3000..3023) — its own 3rd sheet-tab, not folded into either
+  // existing bucket (see docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9).
+  var PAYMSG_CATEGORY = "paymsg";
+  var activeSheet = "sentences"; // "sentences" | "numbers" | "paymsg"
 
   // Fields that support Excel-style multi-cell paste, in on-screen column
   // order. pasteMatrix[rowIndex][fieldIndex] holds the live <textarea> for
@@ -1500,6 +1504,8 @@ reloadWorkers().then(function () { renderWorkers(); });
   }
 
   function matchesSheet(rec) {
+    if (activeSheet === "paymsg") return rec.category === PAYMSG_CATEGORY;
+    if (rec.category === PAYMSG_CATEGORY) return false; // never leaks into sentences/numbers
     var inSheet1 = SHEET1_CATEGORIES.indexOf(rec.category) !== -1;
     return activeSheet === "sentences" ? inSheet1 : !inSheet1;
   }
@@ -1757,7 +1763,194 @@ reloadWorkers().then(function () { renderWorkers(); });
   // many rows).
   var activeAudioEl = null;
 
+  // PAYMSG rows use the 3 slots for a fixed lifecycle, not 3 interchangeable
+  // upload slots — see docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.12:
+  //   1 = active/approved (server rejects direct upload/delete here)
+  //   2 = previous version (server rejects direct upload/delete here; only
+  //       a dedicated "restore" swaps it back into slot 1)
+  //   3 = pending approval (the only slot a plain upload/replace/delete
+  //       works on — reuses uploadAudio()/deleteAudio() exactly as-is)
+  var PAYMSG_SLOT_LABEL = { 1: "🟢 פעיל", 2: "↩ גרסה קודמת", 3: "⏳ ממתין לאישור" };
+
+  function buildPlayButton(filename) {
+    var audioEl = new Audio("/uploads/ivr-audio/" + encodeURIComponent(filename));
+    var playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "ivr-audio-icon-btn";
+    playBtn.title = "נגן";
+    playBtn.textContent = "▶";
+    playBtn.addEventListener("click", function () {
+      if (audioEl.paused) {
+        if (activeAudioEl && activeAudioEl !== audioEl) activeAudioEl.pause();
+        activeAudioEl = audioEl;
+        var p = audioEl.play();
+        if (p && p.catch) p.catch(function (err) { showMsg("לא ניתן לנגן את הקובץ: " + err.message, "error"); });
+      } else {
+        audioEl.pause();
+      }
+    });
+    audioEl.addEventListener("play",  function () { playBtn.textContent = "⏸"; playBtn.classList.add("playing"); });
+    audioEl.addEventListener("pause", function () { playBtn.textContent = "▶"; playBtn.classList.remove("playing"); });
+    audioEl.addEventListener("ended", function () { playBtn.textContent = "▶"; playBtn.classList.remove("playing"); });
+    return playBtn;
+  }
+
+  function buildPaymsgAudioCell(rec, slot) {
+    var field = "audioFile" + slot;
+    var filename = rec[field];
+    var td = document.createElement("td");
+    td.className = "ivr-audio-cell ivr-audio-cell-paymsg";
+
+    var label = document.createElement("div");
+    label.className = "ivr-audio-paymsg-label";
+    label.textContent = PAYMSG_SLOT_LABEL[slot];
+    td.appendChild(label);
+
+    if (!filename) {
+      if (slot === 3) {
+        var uploadLabel = document.createElement("label");
+        uploadLabel.className = "ivr-audio-upload-btn";
+        uploadLabel.textContent = "⬆️ העלה גרסה חדשה";
+        var uploadInput = document.createElement("input");
+        uploadInput.type = "file";
+        uploadInput.accept = "audio/*";
+        uploadInput.hidden = true;
+        uploadInput.addEventListener("change", function () {
+          if (uploadInput.files[0]) uploadAudio(rec.audioId, slot, uploadInput.files[0]);
+        });
+        uploadLabel.appendChild(uploadInput);
+        td.appendChild(uploadLabel);
+      } else {
+        var empty = document.createElement("span");
+        empty.className = "ivr-audio-paymsg-empty";
+        empty.textContent = slot === 1 ? "אין עדיין הקלטה פעילה" : "אין גרסה קודמת";
+        td.appendChild(empty);
+      }
+      return td;
+    }
+
+    var row = document.createElement("div");
+    row.className = "ivr-audio-cell-row";
+    row.appendChild(buildPlayButton(filename));
+
+    var name = document.createElement("span");
+    name.className = "ivr-audio-filename";
+    name.title = filename;
+    name.textContent = filename;
+    row.appendChild(name);
+
+    if (slot === 2) {
+      var restoreBtn = document.createElement("button");
+      restoreBtn.type = "button";
+      restoreBtn.className = "ivr-audio-icon-btn";
+      restoreBtn.title = "שחזר כגרסה פעילה";
+      restoreBtn.textContent = "↩";
+      restoreBtn.addEventListener("click", function () { restorePreviousVersion(rec.audioId); });
+      row.appendChild(restoreBtn);
+    } else if (slot === 3) {
+      var replaceLabel = document.createElement("label");
+      replaceLabel.className = "ivr-audio-icon-btn";
+      replaceLabel.title = "החלף גרסה ממתינה";
+      replaceLabel.textContent = "✏";
+      var replaceInput = document.createElement("input");
+      replaceInput.type = "file";
+      replaceInput.accept = "audio/*";
+      replaceInput.hidden = true;
+      replaceInput.addEventListener("change", function () {
+        if (replaceInput.files[0]) uploadAudio(rec.audioId, slot, replaceInput.files[0]);
+      });
+      replaceLabel.appendChild(replaceInput);
+      row.appendChild(replaceLabel);
+
+      var delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "ivr-audio-icon-btn danger";
+      delBtn.title = "דחה/מחק גרסה ממתינה";
+      delBtn.textContent = "🗑";
+      delBtn.addEventListener("click", function () { deleteAudio(rec.audioId, slot); });
+      row.appendChild(delBtn);
+    }
+    // slot 1 (active): play only — no replace/delete/approve here by
+    // design, see docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.12.
+
+    td.appendChild(row);
+
+    // Explicit button, NOT the status <select> — selecting "אושר" when the
+    // row's status is ALREADY "אושר" doesn't reliably fire a "change"
+    // event (see ivr-audio-paymsg-ui-logic.js header), so approving a
+    // replacement on an already-approved row would silently do nothing.
+    // This button always sends the request regardless of the row's
+    // current status. On its own line below the file row (not squeezed
+    // into it) since it has a text label, not just an icon.
+    if (slot === 3 && typeof IvrAudioPaymsgUiLogic !== "undefined" && IvrAudioPaymsgUiLogic.shouldShowApproveButton(rec)) {
+      var approveBtn = document.createElement("button");
+      approveBtn.type = "button";
+      approveBtn.className = "ivr-audio-paymsg-approve-btn";
+      approveBtn.title = "אשר את הגרסה הממתינה והפעל אותה בשיחות";
+      approveBtn.textContent = "✅ אשר והפעל";
+      approveBtn.addEventListener("click", function () { approvePendingVersion(rec); });
+      td.appendChild(approveBtn);
+    }
+
+    return td;
+  }
+
+  async function approvePendingVersion(rec) {
+    if (!confirm("לאשר את הגרסה הממתינה ולהפעיל אותה בשיחות?")) return;
+    var req = IvrAudioPaymsgUiLogic.buildApproveRequest(rec.audioId);
+    try {
+      var res = await apiFetch(req.url, { method: req.method, body: JSON.stringify(req.body) });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה באישור");
+
+      var responseVerification = IvrAudioPaymsgUiLogic.verifyPostApproveState(rec, data.recording);
+      var freshVerification = null;
+      if (!responseVerification.ok) {
+        // Don't trust the PUT response body at face value — re-fetch the
+        // real state from the server before touching local state or
+        // deciding what to tell the user.
+        await loadRecordings();
+        var freshRec = allRecordings.find(function (r) { return r.audioId === rec.audioId; });
+        freshVerification = IvrAudioPaymsgUiLogic.verifyPostApproveState(rec, freshRec);
+      }
+
+      var outcome = IvrAudioPaymsgUiLogic.decideApproveOutcome(responseVerification, freshVerification);
+      if (!outcome.showSuccess) {
+        showMsg("האישור לא אומת בהצלחה: " + outcome.errorReason + " — בדקו את השורה ונסו שוב", "error");
+        return;
+      }
+      if (outcome.applyLocalUpdate === "response") {
+        var idx = allRecordings.findIndex(function (r) { return r.audioId === rec.audioId; });
+        if (idx >= 0) allRecordings[idx] = data.recording;
+      }
+      // "refetch": allRecordings is already current from loadRecordings() above.
+      render();
+      updateStats();
+      showMsg("הגרסה אושרה והופעלה ✓ (הקובץ הקודם נשמר כגרסה קודמת)");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    }
+  }
+
+  async function restorePreviousVersion(audioId) {
+    if (!confirm("לשחזר את הגרסה הקודמת כגרסה הפעילה בשיחות?")) return;
+    try {
+      var res = await apiFetch("/api/admin/ivr-audio/" + encodeURIComponent(audioId) + "/restore-previous", { method: "POST" });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה בשחזור");
+      var idx = allRecordings.findIndex(function (r) { return r.audioId === audioId; });
+      if (idx >= 0) allRecordings[idx] = data.recording;
+      render();
+      updateStats();
+      showMsg("הגרסה הקודמת שוחזרה ✓");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    }
+  }
+
   function buildAudioCell(rec, slot) {
+    if (rec.category === PAYMSG_CATEGORY) return buildPaymsgAudioCell(rec, slot);
+
     var field = "audioFile" + slot;
     var filename = rec[field];
     var td = document.createElement("td");
@@ -1918,8 +2111,8 @@ reloadWorkers().then(function () { renderWorkers(); });
       if (!res.ok) throw new Error(data.error || "שגיאה");
       // New rows have no category yet — tag them into whichever sheet-tab
       // is currently open (via the existing PUT endpoint) so the row shows
-      // up immediately instead of silently landing in the other sheet.
-      var newCategory = activeSheet === "sentences" ? "open" : "number";
+      // up immediately instead of silently landing in another sheet.
+      var newCategory = activeSheet === "sentences" ? "open" : activeSheet === "paymsg" ? PAYMSG_CATEGORY : "number";
       await apiFetch("/api/admin/ivr-audio/" + encodeURIComponent(data.recording.audioId), {
         method: "PUT",
         body: JSON.stringify({ category: newCategory }),
@@ -1947,11 +2140,13 @@ reloadWorkers().then(function () { renderWorkers(); });
   }
 
   function exportToExcel() {
-    var sheet1Rows = allRecordings.filter(function (r) { return SHEET1_CATEGORIES.indexOf(r.category) !== -1; }).map(toExcelRow);
-    var sheet2Rows = allRecordings.filter(function (r) { return SHEET1_CATEGORIES.indexOf(r.category) === -1; }).map(toExcelRow);
+    var sheet1Rows = allRecordings.filter(function (r) { return r.category !== PAYMSG_CATEGORY && SHEET1_CATEGORIES.indexOf(r.category) !== -1; }).map(toExcelRow);
+    var sheet2Rows = allRecordings.filter(function (r) { return r.category !== PAYMSG_CATEGORY && SHEET1_CATEGORIES.indexOf(r.category) === -1; }).map(toExcelRow);
+    var sheet3Rows = allRecordings.filter(function (r) { return r.category === PAYMSG_CATEGORY; }).map(toExcelRow);
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet1Rows), "גיליון1");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet2Rows), "גיליון2");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet3Rows), "גיליון3");
     XLSX.writeFile(wb, "הקלטות_א_בלאט_גמרא_מעוצב_" + new Date().toISOString().slice(0, 10) + ".xlsx");
   }
 

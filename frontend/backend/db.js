@@ -1600,6 +1600,24 @@ function clearIvrAudioRecordingFileSlot(audioId, slot) {
   return getIvrAudioRecordingById(audioId);
 }
 
+// Writes all 3 file slots + status together in ONE UPDATE — used by the
+// PAYMSG 3-slot lifecycle (ivr-audio-paymsg-lifecycle.service.js) for its
+// approve/restore state transitions, which must each be a single atomic
+// write (never a partial multi-step change visible to a concurrent read).
+function setIvrAudioRecordingSlots(audioId, fields) {
+  db.prepare(
+    "UPDATE ivr_audio_recordings SET audioFile1=?, audioFile2=?, audioFile3=?, status=?, updatedAt=? WHERE audioId=?"
+  ).run(
+    String(fields.audioFile1 || ""),
+    String(fields.audioFile2 || ""),
+    String(fields.audioFile3 || ""),
+    String(fields.status || ""),
+    nowIso(),
+    String(audioId)
+  );
+  return getIvrAudioRecordingById(audioId);
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 initDatabase();
@@ -1690,5 +1708,6 @@ module.exports = {
   updateIvrAudioRecording,
   setIvrAudioRecordingFileSlot,
   clearIvrAudioRecordingFileSlot,
+  setIvrAudioRecordingSlots,
   IVR_AUDIO_CANONICAL_RECORDINGS,
 };

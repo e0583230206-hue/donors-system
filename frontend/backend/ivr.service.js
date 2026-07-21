@@ -1,5 +1,5 @@
 const { buildResponse, buildIdentificationResponse, MAX_PAYMENT_AMOUNT } = require("./ivr");
-const { buildAudioContext } = require("./ivr-audio-context.service");
+const { buildAudioContext, buildPaymsgAudioContext } = require("./ivr-audio-context.service");
 const { parseAudioMode } = require("./ivr-audio-mode.service");
 const {
   normalizePhone,
@@ -489,6 +489,11 @@ function handleIvrQuery(query) {
   // the exact same TTS behavior as before if it's ever omitted.
   var audio = buildAudioContext(phone);
 
+  // Independent from `audio` above — gated by IVR_AUDIO_PAYMSG_MODE, never
+  // IVR_AUDIO_MODE, even though that flag is already "on" in production.
+  // See ivr-audio-context.service.js's buildPaymsgAudioContext() header.
+  var paymsgAudio = buildPaymsgAudioContext(phone);
+
   // ── TEMPORARY diagnostic log — safe fields ONLY (no phone/callId/query/
   // donor data), added to empirically confirm whether Technoline resends
   // PBXphone/PBXcallId on every follow-up request of a call (not just the
@@ -536,7 +541,7 @@ function handleIvrQuery(query) {
     safeInsertCallLog(callId, phone, "voice_message_received",
       { donorId: donor ? donor.id : null });
     logCallEnd(callId, phone, "voice_message");
-    return { response: buildResponse(q, donor, audio) };
+    return { response: buildResponse(q, donor, audio, paymsgAudio) };
   }
 
   // ── Payment result ────────────────────────────────────────────────────────
@@ -573,7 +578,7 @@ function handleIvrQuery(query) {
           confirmationNumber: asText(lastParam(q, "CONFIRM_payment")) || null,
         });
         logCallEnd(callId, phone, "payment_success", alreadySaved.amount);
-        return { response: buildResponse(q, donor, audio) };
+        return { response: buildResponse(q, donor, audio, paymsgAudio) };
       }
     }
 
@@ -778,11 +783,11 @@ function handleIvrQuery(query) {
       }
     }
 
-    return { response: buildResponse(q, donor, audio) };
+    return { response: buildResponse(q, donor, audio, paymsgAudio) };
   }
 
   // ── Normal flow step (menu, sub-menus, DTMF entry) ───────────────────────
-  return { response: buildResponse(q, donor, audio) };
+  return { response: buildResponse(q, donor, audio, paymsgAudio) };
 }
 
 module.exports = {

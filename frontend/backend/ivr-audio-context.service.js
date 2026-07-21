@@ -98,9 +98,39 @@ function buildAudioContext(phone) {
   return useAudio ? realAudioContext() : passthroughAudioContext();
 }
 
+// ── PAYMSG (Technoline creditCard-module systemMessages, S3000-S3023) ──────
+// Independently gated by IVR_AUDIO_PAYMSG_MODE/IVR_AUDIO_PAYMSG_TRIAL_CALLER_PHONE
+// — NEVER IVR_AUDIO_MODE/IVR_AUDIO_TRIAL_CALLER_PHONE, even though that flag
+// is already "on" in production today. Deliberately a SEPARATE object from
+// buildAudioContext()'s result: reusing that one here would incorrectly tie
+// PAYMSG's rollout to the main-menu flag's current state. Only exposes
+// resolveAudioId — PAYMSG never uses resolveOrText's reverse-text lookup,
+// every S-code is looked up by its explicit audioId (see ivr.js's
+// PAYMSG_S_CODE table).
+function passthroughPaymsgAudioContext() {
+  return { resolveAudioId: function () { return { text: "" }; } };
+}
+
+function realPaymsgAudioContext() {
+  return { resolveAudioId: resolveAudioForProduction };
+}
+
+// phone: raw (not-yet-normalized) caller phone for this call.
+function buildPaymsgAudioContext(phone) {
+  const mode = parseAudioMode(process.env.IVR_AUDIO_PAYMSG_MODE);
+  const trialPhone = normalizePhone(process.env.IVR_AUDIO_PAYMSG_TRIAL_CALLER_PHONE || "");
+  const useAudio = shouldUseAudioForCall({
+    mode: mode,
+    phone: normalizePhone(phone),
+    trialPhone: trialPhone,
+  });
+  return useAudio ? realPaymsgAudioContext() : passthroughPaymsgAudioContext();
+}
+
 module.exports = {
   buildAudioContext,
   createAudioContext,
   passthroughAudioContext,
   textToAudioIdFrom,
+  buildPaymsgAudioContext,
 };

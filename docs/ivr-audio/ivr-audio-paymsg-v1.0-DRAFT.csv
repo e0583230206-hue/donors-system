@@ -1,0 +1,25 @@
+SCode,AudioID,DynamicTailAfter,Category,HebrewSourceText,UsageDescription,Type,GrammarNote,TranslatorQuestion,Status,SourceFilename,DerivedFilename
+S3000,PAYMSG-3000,כן - סכום,paymsg,"הנכם מועברים לביצוע תשלום על סך","פתיח מודול סליקה - הסכום מוקרא מיד אחרי ע""י טכנוליין",רכיב,משפט נחתך לפני מספר,היכן החיתוך נכון באידיש?,draft,ivr_paymsg_s3000_yi_v1.wav,ivr_paymsg_s3000_yi_v1-pcm8k.wav
+S3001,PAYMSG-3001,לא,paymsg,"לאישור הקישו 1, להקשת סכום אחר הקישו 2","תפריט אישור סכום",קבוע,1/2 כספרות בודדות,מספרים כאידיש טבעי או כספרות?,draft,ivr_paymsg_s3001_yi_v1.wav,ivr_paymsg_s3001_yi_v1-pcm8k.wav
+S3002,PAYMSG-3002,לא,paymsg,"נא הקישו את הסכום הכולל לתרומה, וסולמית לסיום","בקשת קלט DTMF לסכום",קבוע,"""סולמית""=#",מונח מקביל ל""סולמית"" באידיש?,draft,ivr_paymsg_s3002_yi_v1.wav,ivr_paymsg_s3002_yi_v1-pcm8k.wav
+S3003,PAYMSG-3003,לא,paymsg,"נא הקישו את מספר כרטיס האשראי, וסולמית לסיום","בקשת קלט DTMF למספר כרטיס",קבוע,,מונח מקובל ל""כרטיס אשראי""?,draft,ivr_paymsg_s3003_yi_v1.wav,ivr_paymsg_s3003_yi_v1-pcm8k.wav
+S3004,PAYMSG-3004,לא,paymsg,נא הקישו את תוקף האשראי בארבע ספרות,בקשת קלט DTMF לתוקף,קבוע,,,draft,ivr_paymsg_s3004_yi_v1.wav,ivr_paymsg_s3004_yi_v1-pcm8k.wav
+S3005,PAYMSG-3005,לא,paymsg,התוקף שהוקש אינו תקין,הודעת שגיאת תוקף,קבוע,,,draft,ivr_paymsg_s3005_yi_v1.wav,ivr_paymsg_s3005_yi_v1-pcm8k.wav
+S3006,PAYMSG-3006,לא,paymsg,נא הקישו את ספרות הביטחון אשר בגב הכרטיס,בקשת קלט DTMF ל-CVV,קבוע,,,draft,ivr_paymsg_s3006_yi_v1.wav,ivr_paymsg_s3006_yi_v1-pcm8k.wav
+S3007,PAYMSG-3007,לא,paymsg,"נא הקישו מספר תעודת זהות וסולמית לסיום","בקשת קלט DTMF לתעודת זהות",קבוע,,,draft,ivr_paymsg_s3007_yi_v1.wav,ivr_paymsg_s3007_yi_v1-pcm8k.wav
+S3008,PAYMSG-3008,לא,paymsg,נא בחרו מספר תשלומים,בקשת קלט DTMF למספר תשלומים,קבוע,,,draft,ivr_paymsg_s3008_yi_v1.wav,ivr_paymsg_s3008_yi_v1-pcm8k.wav
+S3009,PAYMSG-3009,כן - מספר תשלומים מקסימלי,paymsg,ניתן לבחור עד,פתיח משפט - נמשך ל-S3010 אחרי המספר,רכיב,משפט נחתך לפני מספר,היכן החיתוך נכון באידיש?,draft,ivr_paymsg_s3009_yi_v1.wav,ivr_paymsg_s3009_yi_v1-pcm8k.wav
+S3010,PAYMSG-3010,לא (בא אחרי דינמי של S3009),paymsg,תשלומים,סיום משפט S3009 אחרי המספר,רכיב,מגיע אחרי נתון דינמי לא לפניו,,draft,ivr_paymsg_s3010_yi_v1.wav,ivr_paymsg_s3010_yi_v1-pcm8k.wav
+S3011,PAYMSG-3011,"תלוי - יתכן וממשיך ל-S3012",paymsg,העסקה נכשלה,הודעת כישלון עסקה,קבוע,לאמת מול תיעוד אם תמיד עצמאי,האם תמיד מלווה בהודעת שגיאה?,draft,ivr_paymsg_s3011_yi_v1.wav,ivr_paymsg_s3011_yi_v1-pcm8k.wav
+S3012,PAYMSG-3012,כן - טקסט/קוד שגיאה מהסולק,paymsg,הודעת השגיאה שהתקבלה,פתיח לפני טקסט שגיאה חופשי,רכיב,משפט נחתך לפני טקסט חופשי,,draft,ivr_paymsg_s3012_yi_v1.wav,ivr_paymsg_s3012_yi_v1-pcm8k.wav
+S3013,PAYMSG-3013,לא,paymsg,העסקה נקלטה בהצלחה,הודעת הצלחת עסקה,קבוע,בד״כ ואחריה S3014+מספר,,draft,ivr_paymsg_s3013_yi_v1.wav,ivr_paymsg_s3013_yi_v1-pcm8k.wav
+S3014,PAYMSG-3014,כן - מספר אישור,paymsg,מספר אישור,פתיח לפני הקראת מספר אישור,רכיב,משפט נחתך לפני מספר,היכן החיתוך נכון באידיש?,draft,ivr_paymsg_s3014_yi_v1.wav,ivr_paymsg_s3014_yi_v1-pcm8k.wav
+S3015,PAYMSG-3015,לא,paymsg,"לשמיעה חוזרת הקישו 1, ליציאה הקישו 2","תפריט סיום/חזרה",קבוע,1/2 כספרות בודדות,,draft,ivr_paymsg_s3015_yi_v1.wav,ivr_paymsg_s3015_yi_v1-pcm8k.wav
+S3016,PAYMSG-3016,לא,paymsg,לתרומה בהוראת קבע הקישו 1,אפשרות תרומה בהוראת קבע,קבוע,,,draft,ivr_paymsg_s3016_yi_v1.wav,ivr_paymsg_s3016_yi_v1-pcm8k.wav
+S3017,PAYMSG-3017,לא,paymsg,לתשלום חודשי באשראי ללא תפיסת מסגרת הקישו 2,אפשרות תשלום חודשי,קבוע,"""תפיסת מסגרת"" - מונח כלכלי",יש מונח מקביל באידיש?,draft,ivr_paymsg_s3017_yi_v1.wav,ivr_paymsg_s3017_yi_v1-pcm8k.wav
+S3018,PAYMSG-3018,לא,paymsg,לתרומה חד-פעמית הקישו 3,אפשרות תרומה חד-פעמית,קבוע,,,draft,ivr_paymsg_s3018_yi_v1.wav,ivr_paymsg_s3018_yi_v1-pcm8k.wav
+S3019,PAYMSG-3019,לא,paymsg,לתרומה קבועה ללא הגבלת מספר חודשים הקישו 1,תת-אפשרות הוראת קבע,קבוע,,,draft,ivr_paymsg_s3019_yi_v1.wav,ivr_paymsg_s3019_yi_v1-pcm8k.wav
+S3020,PAYMSG-3020,לא,paymsg,להגדרת מספר חודשים לתרומה הקישו 2,תת-אפשרות הוראת קבע,קבוע,,,draft,ivr_paymsg_s3020_yi_v1.wav,ivr_paymsg_s3020_yi_v1-pcm8k.wav
+S3021,PAYMSG-3021,לא,paymsg,נא הקישו את מספר החודשים לתרומה,בקשת קלט DTMF למספר חודשים,קבוע,,,draft,ivr_paymsg_s3021_yi_v1.wav,ivr_paymsg_s3021_yi_v1-pcm8k.wav
+S3022,PAYMSG-3022,לא,paymsg,"נא הקישו את סכום התרומה החודשית, וסולמית לסיום","בקשת קלט DTMF לסכום חודשי",קבוע,,,draft,ivr_paymsg_s3022_yi_v1.wav,ivr_paymsg_s3022_yi_v1-pcm8k.wav
+S3023,PAYMSG-3023,לא,paymsg,"נא בחרו את יום החיוב בחודש הלועזי, בין 1 ל-28",בקשת קלט DTMF ליום חיוב,קבוע,טווח 1-28,,draft,ivr_paymsg_s3023_yi_v1.wav,ivr_paymsg_s3023_yi_v1-pcm8k.wav

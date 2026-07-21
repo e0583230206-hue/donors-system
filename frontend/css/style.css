@@ -754,6 +754,21 @@ table.ivr-audio-table tbody tr:hover           { background: var(--gold-soft); }
   gap: 5px;
 }
 
+/* PAYMSG 3-slot lifecycle labels (active/previous/pending) — see
+   docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.12. Purely visual; the
+   safety rules themselves are enforced server-side regardless of CSS. */
+.ivr-audio-paymsg-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.ivr-audio-paymsg-empty {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .ivr-audio-filename {
   flex: 1;
   min-width: 0;
@@ -797,6 +812,25 @@ table.ivr-audio-table tbody tr:hover           { background: var(--gold-soft); }
 .ivr-audio-icon-btn.playing {
   background: var(--primary);
   border-color: var(--primary);
+  color: #fff;
+}
+
+.ivr-audio-paymsg-approve-btn {
+  appearance: none;
+  border: 1px solid var(--success);
+  background: var(--success-soft);
+  color: var(--success);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.ivr-audio-paymsg-approve-btn:hover {
+  background: var(--success);
   color: #fff;
 }
 

@@ -273,8 +273,51 @@ function record(name) {
 
 function hangup() { return { type: "hangup" }; }
 
-function creditCardModule(amount) {
-  return {
+// PAYMSG-<N> <-> S<N> — deliberate 1:1 numeric mapping between our internal
+// audioId (DB row, resolver) and Technoline's own systemMessages code (see
+// docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §2/§9). Written out
+// explicitly (not generated) so it stays a single greppable, auditable
+// table — same convention as T_AUDIO_ID above.
+var PAYMSG_S_CODE = {
+  "PAYMSG-3000": "S3000", "PAYMSG-3001": "S3001", "PAYMSG-3002": "S3002", "PAYMSG-3003": "S3003",
+  "PAYMSG-3004": "S3004", "PAYMSG-3005": "S3005", "PAYMSG-3006": "S3006", "PAYMSG-3007": "S3007",
+  "PAYMSG-3008": "S3008", "PAYMSG-3009": "S3009", "PAYMSG-3010": "S3010", "PAYMSG-3011": "S3011",
+  "PAYMSG-3012": "S3012", "PAYMSG-3013": "S3013", "PAYMSG-3014": "S3014", "PAYMSG-3015": "S3015",
+  "PAYMSG-3016": "S3016", "PAYMSG-3017": "S3017", "PAYMSG-3018": "S3018", "PAYMSG-3019": "S3019",
+  "PAYMSG-3020": "S3020", "PAYMSG-3021": "S3021", "PAYMSG-3022": "S3022", "PAYMSG-3023": "S3023",
+};
+
+// paymsgAudio is a SEPARATE, independently-gated resolver object (built by
+// ivr-audio-context.service.js's buildPaymsgAudioContext(), driven by
+// IVR_AUDIO_PAYMSG_MODE — never IVR_AUDIO_MODE, and never the `audio`
+// object used for the rest of this file, which is gated by the OTHER,
+// already-live flag). Omitting it (undefined/null) is fully safe and
+// produces no systemMessages key at all — identical to today's behavior.
+//
+// Only S-codes that resolve to a REAL {fileLink,fileName} are included —
+// never a {text:...} fallback item (Technoline's own DB-default message
+// plays for anything not in the map — see the DRAFT doc §0 for the
+// verified official structure). No SF/sum/number/digits are ever added —
+// deliberately deferred, see DRAFT doc §9 decisions 2/3.
+function buildPaymsgSystemMessages(paymsgAudio) {
+  var out = {};
+  if (!paymsgAudio || typeof paymsgAudio.resolveAudioId !== "function") return out;
+  Object.keys(PAYMSG_S_CODE).forEach(function (audioId) {
+    var result;
+    try {
+      result = paymsgAudio.resolveAudioId(audioId, "");
+    } catch (e) {
+      result = null;
+    }
+    if (result && result.fileLink) {
+      out[PAYMSG_S_CODE[audioId]] = [{ fileLink: result.fileLink, fileName: result.fileName }];
+    }
+  });
+  return out;
+}
+
+function creditCardModule(amount, paymsgAudio) {
+  var result = {
     type: "creditCard",
     name: "payment",
     sum: amount,
@@ -286,6 +329,11 @@ function creditCardModule(amount) {
     // Set CREDIT_CARD_TERMINAL in .env once Technoline provides the terminal ID.
     terminal: process.env.CREDIT_CARD_TERMINAL || "",
   };
+  var systemMessages = buildPaymsgSystemMessages(paymsgAudio);
+  if (Object.keys(systemMessages).length > 0) {
+    result.systemMessages = systemMessages;
+  }
+  return result;
 }
 
 function paymentPlaceholder(audio) {
@@ -485,7 +533,7 @@ function buildIdentificationResponse(query, identState, audio) {
 
 // ── Flow ─────────────────────────────────────────────────────────────────────
 
-function buildResponse(query, donor, audio) {
+function buildResponse(query, donor, audio, paymsgAudio) {
   console.log("[IVR:buildResponse] keys:", Object.keys(query).join(","));
 
   var callStatus = p(query, "PBXcallStatus");
@@ -555,7 +603,7 @@ function buildResponse(query, donor, audio) {
         return [simpleMessage([ridT(audio, "AMOUNT_TOO_HIGH")]), hangup()];
       }
       if (!hasTerminal) return paymentPlaceholder(audio);
-      return creditCardModule(currentDebt.amount);
+      return creditCardModule(currentDebt.amount, paymsgAudio);
     }
 
     // payChoice=2 or no debt → collect amount then charge
@@ -565,7 +613,7 @@ function buildResponse(query, donor, audio) {
       if (check1 === "invalid")  return [simpleMessage([ridT(audio, "AMOUNT_INVALID")]),  hangup()];
       if (check1 === "too_high") return [simpleMessage([ridT(audio, "AMOUNT_TOO_HIGH")]), hangup()];
       if (!hasTerminal) return paymentPlaceholder(audio);
-      return creditCardModule(numAmount1);
+      return creditCardModule(numAmount1, paymsgAudio);
     }
 
     return getDTMF("amount", [ridT(audio, "ENTER_AMOUNT")], 6, 1, 7);
@@ -593,7 +641,7 @@ function buildResponse(query, donor, audio) {
         return [simpleMessage([ridT(audio, "AMOUNT_TOO_HIGH")]), hangup()];
       }
       if (!hasTerminal) return paymentPlaceholder(audio);
-      return creditCardModule(totalDebt);
+      return creditCardModule(totalDebt, paymsgAudio);
     }
 
     // debtChoice=2 → custom amount
@@ -604,7 +652,7 @@ function buildResponse(query, donor, audio) {
         if (check2 === "invalid")  return [simpleMessage([ridT(audio, "AMOUNT_INVALID")]),  hangup()];
         if (check2 === "too_high") return [simpleMessage([ridT(audio, "AMOUNT_TOO_HIGH")]), hangup()];
         if (!hasTerminal) return paymentPlaceholder(audio);
-        return creditCardModule(numAmount2);
+        return creditCardModule(numAmount2, paymsgAudio);
       }
       return getDTMF("amount", [ridT(audio, "ENTER_AMOUNT")], 6, 1, 7);
     }
@@ -703,4 +751,7 @@ module.exports = {
   buildPaymentSuccessSegment,
   buildGreetingSegment,
   T_AUDIO_ID,
+  PAYMSG_S_CODE,
+  buildPaymsgSystemMessages,
+  creditCardModule,
 };
