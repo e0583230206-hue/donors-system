@@ -24,9 +24,10 @@
   // Whether the explicit "אשר והפעל" button should be shown/enabled for
   // this row — driven ONLY by "is there a pending version", never by the
   // row's current status (a row can legitimately already be "אושר" while
-  // still having a newer pending replacement waiting).
+  // still having a newer pending replacement waiting), and never by
+  // category — every row in the table uses the same 3-slot lifecycle.
   function shouldShowApproveButton(rec) {
-    return !!(rec && rec.category === "paymsg" && rec.audioFile3);
+    return !!(rec && rec.audioFile3);
   }
 
   // The exact request the button must send — always unconditional

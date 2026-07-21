@@ -88,7 +88,6 @@ const { trialHandler: ivrAudioTrialHandler } = require("./ivr-audio-trial.route"
 const {
   isValidStatus:            isValidIvrAudioStatus,
   isValidSlot:              isValidIvrAudioSlot,
-  bumpStatusOnUpload:       bumpIvrAudioStatusOnUpload,
   sanitizeAudioIdForFilename,
   runStartupMigration:      runIvrAudioStartupMigration,
   importRows:               importIvrAudioRows,
@@ -96,8 +95,6 @@ const {
   getIvrAudioRecordingById,
   createIvrAudioRecording,
   updateIvrAudioRecording,
-  setIvrAudioRecordingFileSlot,
-  clearIvrAudioRecordingFileSlot,
   setIvrAudioRecordingSlots,
 } = require("./ivr-audio.service");
 
@@ -595,30 +592,23 @@ var ivrAudioUpload = multer({
   },
 }).single("audio");
 
-var IVR_AUDIO_FILE_FIELD = { 1: "audioFile1", 2: "audioFile2", 3: "audioFile3" };
-
-// PUT /:id (approve branch + generic fallback), POST /:id/audio/:slot
-// (paymsg-staging branch + generic fallback), DELETE /:id/audio/:slot
-// (paymsg-reject branch + generic fallback), POST /:id/restore-previous
-// (paymsg-only) — extracted verbatim into ivr-audio-paymsg.routes.js so the
-// exact same route code can be mounted with fake deps + hit with real HTTP
-// requests in a test. See ivr-audio-paymsg.routes.test.js.
+// PUT /:id (approve branch + plain field-update fallback), POST
+// /:id/audio/:slot (stage a pending upload), DELETE /:id/audio/:slot
+// (reject a pending upload), POST /:id/restore-previous (swap
+// active<->previous) — applies to every category (see
+// ivr-audio-paymsg.routes.js header). Extracted verbatim into
+// ivr-audio-paymsg.routes.js so the exact same route code can be mounted
+// with fake deps + hit with real HTTP requests in a test. See
+// ivr-audio-paymsg.routes.test.js.
 app.use("/api/admin/ivr-audio", createIvrAudioSlotRoutes({
   getIvrAudioRecordingById: getIvrAudioRecordingById,
   updateIvrAudioRecording: updateIvrAudioRecording,
-  setIvrAudioRecordingFileSlot: setIvrAudioRecordingFileSlot,
-  clearIvrAudioRecordingFileSlot: clearIvrAudioRecordingFileSlot,
-  bumpStatusOnUpload: bumpIvrAudioStatusOnUpload,
   isValidStatus: isValidIvrAudioStatus,
   isValidSlot: isValidIvrAudioSlot,
   insertAuditLog: insertAuditLog,
   paymsgLock: paymsgLock,
   paymsgLifecycle: paymsgLifecycle,
   ivrAudioUpload: ivrAudioUpload,
-  IVR_AUDIO_FILE_FIELD: IVR_AUDIO_FILE_FIELD,
-  uploadsDir: IVR_AUDIO_UPLOADS_DIR,
-  fs: fs,
-  path: path,
 }));
 
 // ── Workers — protected CRUD ──────────────────────────────────────────────────

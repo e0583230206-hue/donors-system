@@ -39,8 +39,8 @@ check("כפתור לא מוצג כשאין audioFile3 בכלל", function () {
   assert.strictEqual(shouldShowApproveButton({ category: "paymsg", status: "אושר" }), false);
 });
 
-check("כפתור לא מוצג לשורות שאינן paymsg, גם אם יש להן ערך ב-audioFile3", function () {
-  assert.strictEqual(shouldShowApproveButton({ category: "open", audioFile3: "x.wav" }), false);
+check("כפתור מוצג גם לשורות שאינן paymsg כשיש audioFile3 — כל הקטגוריות משתמשות באותו מנגנון 3 סלוטים", function () {
+  assert.strictEqual(shouldShowApproveButton({ category: "open", audioFile3: "x.wav" }), true);
 });
 
 check("קלט חסר/undefined לא זורק שגיאה", function () {

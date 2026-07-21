@@ -1763,13 +1763,18 @@ reloadWorkers().then(function () { renderWorkers(); });
   // many rows).
   var activeAudioEl = null;
 
-  // PAYMSG rows use the 3 slots for a fixed lifecycle, not 3 interchangeable
-  // upload slots — see docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.12:
+  // Every row (all 3 sheets/categories) uses the 3 slots for a fixed
+  // lifecycle, not 3 interchangeable upload slots — see
+  // docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.12:
   //   1 = active/approved (server rejects direct upload/delete here)
   //   2 = previous version (server rejects direct upload/delete here; only
   //       a dedicated "restore" swaps it back into slot 1)
   //   3 = pending approval (the only slot a plain upload/replace/delete
   //       works on — reuses uploadAudio()/deleteAudio() exactly as-is)
+  // Originally built for category="paymsg" only (hence the "paymsg" names
+  // below); extended to every legacy category once a read-only production
+  // audit confirmed none of the 83 legacy rows had anything in
+  // audioFile2/audioFile3, so no data migration was needed — only this.
   var PAYMSG_SLOT_LABEL = { 1: "🟢 פעיל", 2: "↩ גרסה קודמת", 3: "⏳ ממתין לאישור" };
 
   function buildPlayButton(filename) {
@@ -1948,90 +1953,15 @@ reloadWorkers().then(function () { renderWorkers(); });
     }
   }
 
+  // Every row (all categories, not just "paymsg" — see
+  // docs/ivr-audio/ivr-audio-paymsg-v1.0-DRAFT.md §9.12 and the legacy-sheet
+  // migration note above buildPaymsgAudioCell) uses the same 3-slot
+  // lifecycle rendering. There used to be a second, simpler rendering path
+  // here for non-paymsg rows (3 independent raw upload/replace/delete
+  // slots, no staging/approval step) — removed once the backend stopped
+  // accepting direct writes to audioFile1/2/3 for any category.
   function buildAudioCell(rec, slot) {
-    if (rec.category === PAYMSG_CATEGORY) return buildPaymsgAudioCell(rec, slot);
-
-    var field = "audioFile" + slot;
-    var filename = rec[field];
-    var td = document.createElement("td");
-    td.className = "ivr-audio-cell";
-
-    if (!filename) {
-      var uploadLabel = document.createElement("label");
-      uploadLabel.className = "ivr-audio-upload-btn";
-      uploadLabel.textContent = "⬆️ העלה";
-      var uploadInput = document.createElement("input");
-      uploadInput.type = "file";
-      uploadInput.accept = "audio/*";
-      uploadInput.hidden = true;
-      uploadInput.addEventListener("change", function () {
-        if (uploadInput.files[0]) uploadAudio(rec.audioId, slot, uploadInput.files[0]);
-      });
-      uploadLabel.appendChild(uploadInput);
-      td.appendChild(uploadLabel);
-      return td;
-    }
-
-    // ▶ play / שם קובץ / ✏ החלף / 🗑 מחק — all in a single compact row.
-    var row = document.createElement("div");
-    row.className = "ivr-audio-cell-row";
-
-    var audioEl = new Audio("/uploads/ivr-audio/" + encodeURIComponent(filename));
-    var playBtn = document.createElement("button");
-    playBtn.type = "button";
-    playBtn.className = "ivr-audio-icon-btn";
-    playBtn.title = "נגן";
-    playBtn.textContent = "▶";
-    playBtn.addEventListener("click", function () {
-      if (audioEl.paused) {
-        if (activeAudioEl && activeAudioEl !== audioEl) activeAudioEl.pause();
-        activeAudioEl = audioEl;
-        // play() returns a promise that rejects for an unplayable/corrupted
-        // file — without a .catch() that surfaces as an uncaught rejection
-        // and leaves the ▶/⏸ icon stuck.
-        audioEl.play().catch(function () { showMsg("שגיאה בנגינת הקובץ", "error"); });
-      } else {
-        audioEl.pause();
-      }
-    });
-    audioEl.addEventListener("play",  function () { playBtn.textContent = "⏸"; playBtn.classList.add("playing"); });
-    audioEl.addEventListener("pause", function () { playBtn.textContent = "▶"; playBtn.classList.remove("playing"); });
-    audioEl.addEventListener("ended", function () { playBtn.textContent = "▶"; playBtn.classList.remove("playing"); });
-    row.appendChild(playBtn);
-
-    var name = document.createElement("span");
-    name.className = "ivr-audio-filename";
-    name.title = filename;
-    name.textContent = filename;
-    row.appendChild(name);
-
-    var replaceLabel = document.createElement("label");
-    replaceLabel.className = "ivr-audio-icon-btn";
-    replaceLabel.title = "החלף קובץ";
-    replaceLabel.textContent = "✏";
-    var replaceInput = document.createElement("input");
-    replaceInput.type = "file";
-    replaceInput.accept = "audio/*";
-    replaceInput.hidden = true;
-    replaceInput.addEventListener("change", function () {
-      if (replaceInput.files[0]) uploadAudio(rec.audioId, slot, replaceInput.files[0]);
-    });
-    replaceLabel.appendChild(replaceInput);
-    row.appendChild(replaceLabel);
-
-    var delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.className = "ivr-audio-icon-btn danger";
-    delBtn.title = "מחק הקלטה";
-    delBtn.textContent = "🗑";
-    delBtn.addEventListener("click", function () {
-      if (activeAudioEl === audioEl) { audioEl.pause(); activeAudioEl = null; }
-      deleteAudio(rec.audioId, slot);
-    });
-    row.appendChild(delBtn);
-
-    td.appendChild(row);
-    return td;
+    return buildPaymsgAudioCell(rec, slot);
   }
 
   async function saveField(audioId, field, value) {

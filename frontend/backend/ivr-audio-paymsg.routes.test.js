@@ -13,18 +13,27 @@
 // (it's pure/dependency-free — no reason to fake it, and using the real one
 // proves the routes share the actual production lock, not a stand-in).
 //
-// Scope note: only PUT /:id, DELETE /:id/audio/:slot, and
-// POST /:id/restore-previous are exercised here — POST /:id/audio/:slot
-// (file upload) needs real multipart/form-data + a real temp upload dir to
-// test meaningfully over HTTP and is out of scope for this round; its
-// wiring follows the exact same isPaymsg/lock/deps pattern already proven
-// here and at the lifecycle level.
+// The 3-slot lifecycle originally applied to category="paymsg" only; it now
+// applies to EVERY row (see ivr-audio-paymsg.routes.js header) — a
+// read-only production audit (scripts/audit-ivr-audio-slots.js) confirmed
+// none of the 83 legacy rows had anything in audioFile2/audioFile3, so this
+// was a pure code change, no data migration. Several tests below are
+// deliberately duplicated across a "paymsg" row and a non-paymsg
+// (category="open"/"number") row to prove there is no longer any
+// category-based branching left in the routes.
+//
+// Scope note: POST /:id/audio/:slot (file upload) needs real
+// multipart/form-data + a real temp upload dir to test the full
+// convert+commit path meaningfully over HTTP; that part is out of scope
+// here and already covered at the lifecycle level
+// (ivr-audio-paymsg-lifecycle.service.test.js). The slot!==3 rejection
+// happens BEFORE multer runs, though, so that part IS exercised below for
+// both a paymsg and a non-paymsg row.
 //
 // הרצה: node ivr-audio-paymsg.routes.test.js
 
 const assert = require("assert");
 const http = require("http");
-const path = require("path");
 const express = require("express");
 const { createIvrAudioSlotRoutes } = require("./ivr-audio-paymsg.routes");
 const paymsgLock = require("./ivr-audio-paymsg-lock.service");
@@ -47,7 +56,6 @@ function makeDeps(rows, opts) {
   const rejectPendingCalls = [];
   const restorePreviousCalls = [];
   const auditLogs = [];
-  const fsUnlinkCalls = [];
   const updateIvrAudioRecordingCalls = [];
 
   const fakeLifecycle = {
@@ -93,29 +101,12 @@ function makeDeps(rows, opts) {
       Object.assign(rows[id], fields);
       return Object.assign({ audioId: id }, rows[id]);
     },
-    setIvrAudioRecordingFileSlot: function (id, slot, filename, status) {
-      rows[id]["audioFile" + slot] = filename;
-      rows[id].status = status;
-      return Object.assign({ audioId: id }, rows[id]);
-    },
-    clearIvrAudioRecordingFileSlot: function (id, slot) {
-      rows[id]["audioFile" + slot] = "";
-      return Object.assign({ audioId: id }, rows[id]);
-    },
-    bumpStatusOnUpload: function (s) { return s; },
     isValidStatus: function (s) { return VALID_STATUSES.indexOf(s) !== -1; },
     isValidSlot: function (s) { return [1, 2, 3].indexOf(Number(s)) !== -1; },
     insertAuditLog: function (entry) { auditLogs.push(entry); },
     paymsgLock: paymsgLock, // REAL — pure, dependency-free, shared with production
     paymsgLifecycle: opts.lifecycleOverrides ? Object.assign(fakeLifecycle, opts.lifecycleOverrides) : fakeLifecycle,
     ivrAudioUpload: function (req, res, cb) { cb(new Error("upload not exercised by this route test")); },
-    IVR_AUDIO_FILE_FIELD: { 1: "audioFile1", 2: "audioFile2", 3: "audioFile3" },
-    uploadsDir: "/fake-uploads-dir",
-    fs: {
-      existsSync: function () { return !!(opts.fileExistsOnDisk); },
-      unlinkSync: function (p) { fsUnlinkCalls.push(p); },
-    },
-    path: path,
   };
 
   return {
@@ -124,7 +115,6 @@ function makeDeps(rows, opts) {
     rejectPendingCalls: rejectPendingCalls,
     restorePreviousCalls: restorePreviousCalls,
     auditLogs: auditLogs,
-    fsUnlinkCalls: fsUnlinkCalls,
     updateIvrAudioRecordingCalls: updateIvrAudioRecordingCalls,
   };
 }
@@ -274,13 +264,26 @@ async function main() {
     });
   });
 
-  await check("[PUT — allowlist 5] שורה שאינה paymsg ממשיכה להתעדכן בחוזה הקיים — audioFile1/category כן ניתנים לעריכה כמו קודם (ללא רגרסיה)", async function () {
+  await check("[PUT — allowlist 5, לגאסי] שורה שאינה paymsg כפופה כעת לאותו allowlist בדיוק — category/audioFile1 מתעלמים, שדות מותרים כן מתעדכנים", async function () {
     const rows = { "OPEN-003": makeRow({ category: "open", audioFile1: "x.wav" }) };
     await withServer(rows, {}, async function (baseUrl) {
-      const r = await putJson(baseUrl, "OPEN-003", { category: "menu", sourceTextHe: "טקסט חדש" });
+      const r = await putJson(baseUrl, "OPEN-003", { category: "menu", audioFile1: "SNEAKY.wav", sourceTextHe: "טקסט חדש" });
       assert.strictEqual(r.status, 200);
-      assert.strictEqual(r.data.recording.category, "menu", "לשורה רגילה עדיין מותר לשנות category — זו לא הגבלה חדשה עליה");
-      assert.strictEqual(r.data.recording.sourceTextHe, "טקסט חדש");
+      assert.strictEqual(r.data.recording.category, "open", "category נשאר open — אותה הגנה שיש ל-paymsg, בלי הבדל קטגוריה");
+      assert.strictEqual(r.data.recording.audioFile1, "x.wav", "audioFile1 מהגוף מתעלם גם עבור שורת legacy");
+      assert.strictEqual(r.data.recording.sourceTextHe, "טקסט חדש", "שדה מותר (sourceTextHe) כן מתעדכן");
+    });
+  });
+
+  await check("[PUT — קידום, לגאסי] שורה שאינה paymsg עם status=\"אושר\"+audioFile3 -> אותו קידום דרך approvePending, בדיוק כמו paymsg", async function () {
+    const rows = { "NUM-DIGIT-001": makeRow({ category: "number", audioFile1: "old-active.wav", audioFile3: "new-pending.wav", status: "אושר" }) };
+    await withServer(rows, {}, async function (baseUrl, harness) {
+      const r = await putJson(baseUrl, "NUM-DIGIT-001", { status: "אושר" });
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual(r.data.recording.audioFile3, "");
+      assert.strictEqual(r.data.recording.audioFile1, "new-pending.wav");
+      assert.strictEqual(r.data.recording.audioFile2, "old-active.wav");
+      assert.strictEqual(harness.approvePendingCalls.length, 1, "approvePending כן נקרא לשורת legacy — אין יותר הבחנה לפי קטגוריה");
     });
   });
 
@@ -330,15 +333,27 @@ async function main() {
     });
   });
 
-  await check("[DELETE — category מה-DB, לא מהלקוח] שורה שאינה paymsg ממשיכה בנתיב הגנרי הקיים — rejectPending לא נקרא בכלל", async function () {
+  await check("[DELETE — עקיפת סלוט, לגאסי] שורה שאינה paymsg, ניסיון מחיקה בסלוט 1 (הפעיל) -> נדחה 400, בדיוק כמו paymsg — אין יותר נתיב גנרי שמוחק סלוט 1 ישירות", async function () {
     const rows = { "OPEN-002": makeRow({ category: "open", audioFile1: "existing.wav" }) };
-    await withServer(rows, { fileExistsOnDisk: true }, async function (baseUrl, harness) {
+    await withServer(rows, {}, async function (baseUrl, harness) {
       const res = await fetch(baseUrl + "/api/admin/ivr-audio/OPEN-002/audio/1", { method: "DELETE" });
       const data = await res.json();
+      assert.strictEqual(res.status, 400);
+      assert.ok(data.error);
+      assert.strictEqual(harness.rejectPendingCalls.length, 0);
+      assert.strictEqual(rows["OPEN-002"].audioFile1, "existing.wav", "הפעיל לא נגע");
+    });
+  });
+
+  await check("[DELETE — סלוט 3, לגאסי] שורה שאינה paymsg, slot=3 -> נכנס ל-rejectPending בדיוק כמו paymsg", async function () {
+    const rows = { "IDENT-002": makeRow({ category: "ident", audioFile1: "active.wav", audioFile3: "pending.wav", status: "אושר" }) };
+    await withServer(rows, {}, async function (baseUrl, harness) {
+      const res = await fetch(baseUrl + "/api/admin/ivr-audio/IDENT-002/audio/3", { method: "DELETE" });
+      const data = await res.json();
       assert.strictEqual(res.status, 200);
-      assert.strictEqual(data.recording.audioFile1, "", "נמחק דרך הנתיב הגנרי (clearIvrAudioRecordingFileSlot)");
-      assert.strictEqual(harness.rejectPendingCalls.length, 0, "rejectPending לא רלוונטי לשורה שאינה paymsg");
-      assert.strictEqual(harness.fsUnlinkCalls.length, 1, "הנתיב הגנרי מוחק את הקובץ ישירות מהדיסק (בניגוד ל-rejectPending)");
+      assert.strictEqual(data.recording.audioFile3, "");
+      assert.strictEqual(harness.rejectPendingCalls.length, 1);
+      assert.deepStrictEqual(harness.rejectPendingCalls, ["IDENT-002"]);
     });
   });
 
@@ -399,6 +414,38 @@ async function main() {
       const res = await fetch(baseUrl + "/api/admin/ivr-audio/PAYMSG-3007/restore-previous", { method: "POST" });
       assert.strictEqual(res.status, 409);
       paymsgLock.unlock("PAYMSG-3007");
+    });
+  });
+
+  await check("[restore-previous, לגאסי] שורה שאינה paymsg -> כעת עובד (בעבר נדחה 400 עם 'נתמך רק עבור הודעות סליקה')", async function () {
+    const rows = { "MENU-002": makeRow({ category: "menu", audioFile1: "active.wav", audioFile2: "previous.wav" }) };
+    await withServer(rows, {}, async function (baseUrl, harness) {
+      const res = await fetch(baseUrl + "/api/admin/ivr-audio/MENU-002/restore-previous", { method: "POST" });
+      const data = await res.json();
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(data.recording.audioFile1, "previous.wav");
+      assert.strictEqual(data.recording.audioFile2, "active.wav");
+      assert.strictEqual(harness.restorePreviousCalls.length, 1);
+    });
+  });
+
+  // ── POST /:id/audio/:slot — בדיקת דחיית סלוט (לפני multer) ─────────────
+  // הבדיקה המלאה (המרה+staging בפועל) מכוסה ברמת ה-lifecycle; כאן נבדקת רק
+  // דחיית סלוט!=3, שקורית *לפני* ש-multer בכלל מופעל — לכן לא דורשת קובץ
+  // multipart אמיתי, וניתן לבדוק אותה גם עבור שורת legacy.
+  await check("[POST upload — סלוט לא 3, paymsg] ניסיון העלאה לסלוט 1 -> נדחה 400 לפני multer", async function () {
+    const rows = { "PAYMSG-3008": makeRow({ category: "paymsg", audioFile1: "active.wav", status: "אושר" }) };
+    await withServer(rows, {}, async function (baseUrl) {
+      const res = await fetch(baseUrl + "/api/admin/ivr-audio/PAYMSG-3008/audio/1", { method: "POST" });
+      assert.strictEqual(res.status, 400);
+    });
+  });
+
+  await check("[POST upload — סלוט לא 3, לגאסי] שורה שאינה paymsg, ניסיון העלאה לסלוט 2 -> נדחה 400, בדיוק כמו paymsg", async function () {
+    const rows = { "DEBT-001": makeRow({ category: "debt", audioFile1: "active.wav" }) };
+    await withServer(rows, {}, async function (baseUrl) {
+      const res = await fetch(baseUrl + "/api/admin/ivr-audio/DEBT-001/audio/2", { method: "POST" });
+      assert.strictEqual(res.status, 400);
     });
   });
 
