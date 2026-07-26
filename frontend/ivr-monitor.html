@@ -212,6 +212,7 @@
           <ul class="alert-list" id="alertList">
             <li style="color:#888;font-size:13px;">טוען...</li>
           </ul>
+          <div class="pagination-bar" id="alertsPaginationBar"></div>
         </div>
 
         <!-- Sessions -->
@@ -232,6 +233,7 @@
               <tbody id="sessionsTable"></tbody>
             </table>
           </div>
+          <div class="pagination-bar" id="sessionsPaginationBar"></div>
         </div>
       </div>
 
@@ -304,6 +306,27 @@
       var currentSelectedRow = null;
       var refreshTimer = null;
 
+      var ALERTS_PAGE_SIZE   = 10;
+      var SESSIONS_PAGE_SIZE = 20;
+      var alertsPage   = 0;
+      var sessionsPage = 0;
+
+      function renderPaginationBar(elId, total, pageSize, currentPage, onPage) {
+        var el = document.getElementById(elId);
+        if (!el) return;
+        var totalPages = Math.ceil(total / pageSize);
+        if (totalPages <= 1) { el.innerHTML = ""; return; }
+        var html = "";
+        for (var i = 0; i < totalPages; i++) {
+          html += '<button class="page-btn' + (i === currentPage ? " active" : "") +
+                  '" onclick="' + onPage + '(' + i + ')">' + (i + 1) + '</button>';
+        }
+        el.innerHTML = html;
+      }
+
+      function setAlertsPage(n) { alertsPage = n; renderAlerts(alertsCache); }
+      function setSessionsPage(n) { sessionsPage = n; renderSessions(sessionsCache); }
+
       // ── Helpers ────────────────────────────────────────────────────────────
 
       function fmtTime(iso) {
@@ -357,13 +380,22 @@
 
       // ── Alerts ─────────────────────────────────────────────────────────────
 
+      var alertsCache = [];
+
       function renderAlerts(alerts) {
+        alertsCache = alerts || [];
         var list = document.getElementById("alertList");
-        if (!alerts || !alerts.length) {
+        if (!alertsCache.length) {
           list.innerHTML = '<li style="color:#888;font-size:13px;padding:8px 0;">אין התראות חדשות 🎉</li>';
+          document.getElementById("alertsPaginationBar").innerHTML = "";
           return;
         }
-        list.innerHTML = alerts.map(function(a) {
+        var totalPages = Math.ceil(alertsCache.length / ALERTS_PAGE_SIZE);
+        if (alertsPage >= totalPages) alertsPage = totalPages - 1;
+        if (alertsPage < 0) alertsPage = 0;
+        var paged = alertsCache.slice(alertsPage * ALERTS_PAGE_SIZE, (alertsPage + 1) * ALERTS_PAGE_SIZE);
+
+        list.innerHTML = paged.map(function(a) {
           var cfg = ALERT_CONFIG[a.alertType] || { icon: "❓", label: a.alertType, cls: "info" };
           return '<li class="alert-item ' + cfg.cls + '" onclick="selectSessionById(' + JSON.stringify(a.callId) + ')">' +
             '<span class="alert-icon">' + cfg.icon + '</span>' +
@@ -373,6 +405,8 @@
             '</div>' +
           '</li>';
         }).join("");
+
+        renderPaginationBar("alertsPaginationBar", alertsCache.length, ALERTS_PAGE_SIZE, alertsPage, "setAlertsPage");
       }
 
       // ── Sessions ───────────────────────────────────────────────────────────
@@ -382,11 +416,17 @@
       function renderSessions(sessions) {
         sessionsCache = sessions || [];
         var tbody = document.getElementById("sessionsTable");
-        if (!sessions || !sessions.length) {
+        if (!sessionsCache.length) {
           tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#888;padding:20px;">אין שיחות עדיין</td></tr>';
+          document.getElementById("sessionsPaginationBar").innerHTML = "";
           return;
         }
-        tbody.innerHTML = sessions.map(function(s) {
+        var totalPages = Math.ceil(sessionsCache.length / SESSIONS_PAGE_SIZE);
+        if (sessionsPage >= totalPages) sessionsPage = totalPages - 1;
+        if (sessionsPage < 0) sessionsPage = 0;
+        var paged = sessionsCache.slice(sessionsPage * SESSIONS_PAGE_SIZE, (sessionsPage + 1) * SESSIONS_PAGE_SIZE);
+
+        tbody.innerHTML = paged.map(function(s) {
           var oc = OUTCOME_CONFIG[s.outcome] || { label: s.outcome || "—", cls: "outcome-hangup" };
           var amt = fmtAmount(s.amountPaid);
           return '<tr onclick="selectSession(this, ' + JSON.stringify(s.callId) + ')" data-callid="' + escHtml(s.callId) + '">' +
@@ -398,6 +438,8 @@
             '<td>' + (amt ? '<strong>' + amt + '</strong>' : '—') + '</td>' +
           '</tr>';
         }).join("");
+
+        renderPaginationBar("sessionsPaginationBar", sessionsCache.length, SESSIONS_PAGE_SIZE, sessionsPage, "setSessionsPage");
       }
 
       function selectSession(tr, callId) {
@@ -535,7 +577,7 @@
       // ── Data loading ───────────────────────────────────────────────────────
 
       function loadData() {
-        apiFetch("/api/admin/ivr-monitor")
+        apiFetch("/api/admin/ivr-monitor?limit=200")
           .then(function(r) {
             if (r.status === 403) {
               document.querySelector(".main").innerHTML =

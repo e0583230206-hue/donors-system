@@ -3,6 +3,7 @@ const {
   startCallSession,
   updateCallSessionDonor,
   updateCallSessionPayer,
+  markIdentificationLogged,
   endCallSession,
 } = require("./db");
 
@@ -36,25 +37,35 @@ function logCallStart(callId, phone) {
 }
 
 /**
- * Record which donor was identified for this call. Safe to call multiple times
- * (the session update is idempotent — only sets donorId when it is still NULL).
+ * Record which donor was identified for this call. Safe to call on every
+ * request from the moment the beneficiary is resolved onward (both the
+ * session update and the call-log step are gated to fire exactly once per
+ * callId via markIdentificationLogged/donorId IS NULL).
  */
 function logDonorIdentified(callId, phone, donorId, donorName, extra) {
   try {
     updateCallSessionDonor(callId, donorId, donorName);
-    insertCallLog(callId, phone, "donor_identified", Object.assign(
-      { donorId: donorId, donorName: donorName },
-      extra || {}
-    ));
+    if (markIdentificationLogged(callId)) {
+      insertCallLog(callId, phone, "donor_identified", Object.assign(
+        { donorId: donorId, donorName: donorName },
+        extra || {}
+      ));
+    }
   } catch (err) {
     console.error("[IVR:log] logDonorIdentified failed:", err && err.message ? err.message : err);
   }
 }
 
-/** Record that the caller's phone was not found in the donor registry. */
+/**
+ * Record that the caller's phone was not found in the donor registry. Safe
+ * to call on every request — gated to fire exactly once per callId via
+ * markIdentificationLogged.
+ */
 function logUnknownCaller(callId, phone) {
   try {
-    insertCallLog(callId, phone, "unknown_caller", { phone: phone });
+    if (markIdentificationLogged(callId)) {
+      insertCallLog(callId, phone, "unknown_caller", { phone: phone });
+    }
   } catch (err) {
     console.error("[IVR:log] logUnknownCaller failed:", err && err.message ? err.message : err);
   }

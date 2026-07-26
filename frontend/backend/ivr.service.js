@@ -479,7 +479,7 @@ function handleIvrQuery(query) {
   }
 
   // ── Session start + call_start log (only on first request per callId) ─────
-  var isFirstRequest = logCallStart(callId, phone);
+  logCallStart(callId, phone);
 
   // ── Pre-recorded audio, if enabled for this call (IVR_AUDIO_MODE) ─────────
   // Built once per request. Defaults to a plain-TTS passthrough whenever
@@ -517,16 +517,19 @@ function handleIvrQuery(query) {
   // the payer when identChoice=2 "pay for someone else" was used) ───────────
   var donor = resolveBeneficiary(q, phone);
 
-  if (isFirstRequest) {
-    if (donor) {
-      logDonorIdentified(callId, phone, donor.id, donor.fullName, {
-        hasDebt:    !!donor.currentDebt,
-        debtAmount: donor.currentDebt ? donor.currentDebt.amount : null,
-        prevDebts:  donor.previousDebts ? donor.previousDebts.length : 0,
-      });
-    } else {
-      logUnknownCaller(callId, phone);
-    }
+  // Not gated on isFirstRequest: identification now happens on an earlier
+  // request (see the identification-phase branch above), so the FIRST
+  // request never reaches this line — logDonorIdentified/logUnknownCaller
+  // are themselves idempotent (fire exactly once per callId, regardless of
+  // which request first gets here).
+  if (donor) {
+    logDonorIdentified(callId, phone, donor.id, donor.fullName, {
+      hasDebt:    !!donor.currentDebt,
+      debtAmount: donor.currentDebt ? donor.currentDebt.amount : null,
+      prevDebts:  donor.previousDebts ? donor.previousDebts.length : 0,
+    });
+  } else {
+    logUnknownCaller(callId, phone);
   }
 
   console.log("[IVR] donor:", donor ? mask(donor.fullName) : "unknown",

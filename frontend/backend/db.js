@@ -199,6 +199,11 @@ function initDatabase() {
   try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN payerDonorId INTEGER REFERENCES donors(id)"); } catch (_) {}
   try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN payerDonorName TEXT"); } catch (_) {}
   try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN payerIdentMethod TEXT"); } catch (_) {}
+  // Tracks whether the one-time "donor_identified"/"unknown_caller" call-log
+  // step has already been written for this call, independent of which HTTP
+  // request of the call first reaches beneficiary resolution (identification
+  // now happens on an earlier request — see resolveBeneficiary() callers).
+  try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN identificationLogged INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
 
   try {
     const missing = db.prepare("SELECT COUNT(*) AS count FROM ivr_call_logs WHERE timestamp IS NULL").get();
@@ -757,6 +762,19 @@ function updateCallSessionDonor(callId, donorId, donorName) {
     SET donorId = ?, donorName = ?
     WHERE callId = ? AND donorId IS NULL
   `).run(donorId || null, donorName || null, String(callId).trim());
+}
+
+// Idempotent, single-fire gate for the "donor_identified"/"unknown_caller"
+// call-log step: returns true only the first time it's called for a given
+// callId, so callers can log the step exactly once regardless of how many
+// requests happen after beneficiary resolution.
+function markIdentificationLogged(callId) {
+  var result = db.prepare(`
+    UPDATE ivr_call_sessions
+    SET identificationLogged = 1
+    WHERE callId = ? AND identificationLogged = 0
+  `).run(String(callId).trim());
+  return result.changes > 0;
 }
 
 // Same idempotency pattern as updateCallSessionDonor — records who CALLED
@@ -1654,6 +1672,7 @@ module.exports = {
   startCallSession,
   updateCallSessionDonor,
   updateCallSessionPayer,
+  markIdentificationLogged,
   endCallSession,
   getCallSessions,
   getCallLogsByCallId,
