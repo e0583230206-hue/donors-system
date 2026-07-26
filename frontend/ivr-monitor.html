@@ -365,13 +365,21 @@
         return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
       }
 
-      // Confirmed beneficiary (donorName) takes priority; if the call never
-      // reached identification confirmation, fall back to showing the
-      // ANI/self-identified payer with an explicit "not confirmed" marker —
-      // this is a monitor-display convenience only, never used for debt/
-      // payment decisions (those still require a confirmed beneficiary).
+      // Confirmed beneficiary (donorName) takes priority. If the payer
+      // (whoever actually called, identified via ANI/self-ident) is a
+      // different person than the beneficiary — a "pay for someone else"
+      // call — note whose phone it came through. If the call never reached
+      // identification confirmation at all, fall back to showing the payer
+      // with an explicit "not confirmed" marker. Monitor-display only —
+      // never used for debt/payment decisions (those still require a
+      // confirmed beneficiary).
       function donorDisplayName(sess) {
-        if (sess.donorName) return escHtml(sess.donorName);
+        if (sess.donorName) {
+          var isProxy = sess.payerDonorName && sess.payerDonorId !== sess.donorId;
+          return escHtml(sess.donorName) + (isProxy
+            ? ' <span style="color:#999;font-size:11px;">(דרך הטלפון של ' + escHtml(sess.payerDonorName) + ')</span>'
+            : "");
+        }
         if (sess.payerDonorName) return escHtml(sess.payerDonorName) + ' <span style="color:#999;font-size:11px;">(לא אושר)</span>';
         return "—";
       }
