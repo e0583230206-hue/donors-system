@@ -365,6 +365,17 @@
         return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
       }
 
+      // Confirmed beneficiary (donorName) takes priority; if the call never
+      // reached identification confirmation, fall back to showing the
+      // ANI/self-identified payer with an explicit "not confirmed" marker —
+      // this is a monitor-display convenience only, never used for debt/
+      // payment decisions (those still require a confirmed beneficiary).
+      function donorDisplayName(sess) {
+        if (sess.donorName) return escHtml(sess.donorName);
+        if (sess.payerDonorName) return escHtml(sess.payerDonorName) + ' <span style="color:#999;font-size:11px;">(לא אושר)</span>';
+        return "—";
+      }
+
       // ── Stats ──────────────────────────────────────────────────────────────
 
       function renderStats(s) {
@@ -432,7 +443,7 @@
           return '<tr onclick="selectSession(this)" data-callid="' + escHtml(s.callId) + '">' +
             '<td>' + fmtTime(s.startedAt) + '</td>' +
             '<td>' + escHtml(s.phone) + '</td>' +
-            '<td>' + escHtml(s.donorName || "—") + '</td>' +
+            '<td>' + donorDisplayName(s) + '</td>' +
             '<td>' + fmtDuration(s.durationSec) + '</td>' +
             '<td><span class="outcome-badge ' + oc.cls + '">' + oc.label + '</span></td>' +
             '<td>' + (amt ? '<strong>' + amt + '</strong>' : '—') + '</td>' +
@@ -473,7 +484,7 @@
           meta.innerHTML =
             "<strong>callId:</strong> " + escHtml(callId) +
             " &nbsp;|&nbsp; <strong>טלפון:</strong> " + escHtml(sess.phone) +
-            " &nbsp;|&nbsp; <strong>תורם:</strong> " + escHtml(sess.donorName || "לא מוכר") +
+            " &nbsp;|&nbsp; <strong>תורם:</strong> " + (sess.donorName || sess.payerDonorName ? donorDisplayName(sess) : "לא מוכר") +
             " &nbsp;|&nbsp; <strong>משך:</strong> " + fmtDuration(sess.durationSec) +
             " &nbsp;|&nbsp; <strong>התחיל:</strong> " + fmtDate(sess.startedAt);
         }

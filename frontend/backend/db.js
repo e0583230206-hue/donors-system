@@ -803,6 +803,7 @@ function endCallSession(callId, outcome, amountPaid) {
 function getCallSessions(limit) {
   return db.prepare(`
     SELECT s.id, s.callId, s.phone, s.donorId, s.donorName,
+           s.payerDonorId, s.payerDonorName,
            s.startedAt, s.endedAt, s.durationSec,
            s.outcome, s.amountPaid, s.createdAt
     FROM ivr_call_sessions s
