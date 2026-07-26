@@ -362,7 +362,7 @@
       }
 
       function escHtml(s) {
-        return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
       }
 
       // ── Stats ──────────────────────────────────────────────────────────────
@@ -397,7 +397,7 @@
 
         list.innerHTML = paged.map(function(a) {
           var cfg = ALERT_CONFIG[a.alertType] || { icon: "❓", label: a.alertType, cls: "info" };
-          return '<li class="alert-item ' + cfg.cls + '" onclick="selectSessionById(' + JSON.stringify(a.callId) + ')">' +
+          return '<li class="alert-item ' + cfg.cls + '" onclick="selectSessionById(this.dataset.callid)" data-callid="' + escHtml(a.callId) + '">' +
             '<span class="alert-icon">' + cfg.icon + '</span>' +
             '<div class="alert-body">' +
               '<div class="alert-label">' + cfg.label + '</div>' +
@@ -429,7 +429,7 @@
         tbody.innerHTML = paged.map(function(s) {
           var oc = OUTCOME_CONFIG[s.outcome] || { label: s.outcome || "—", cls: "outcome-hangup" };
           var amt = fmtAmount(s.amountPaid);
-          return '<tr onclick="selectSession(this, ' + JSON.stringify(s.callId) + ')" data-callid="' + escHtml(s.callId) + '">' +
+          return '<tr onclick="selectSession(this)" data-callid="' + escHtml(s.callId) + '">' +
             '<td>' + fmtTime(s.startedAt) + '</td>' +
             '<td>' + escHtml(s.phone) + '</td>' +
             '<td>' + escHtml(s.donorName || "—") + '</td>' +
@@ -442,7 +442,8 @@
         renderPaginationBar("sessionsPaginationBar", sessionsCache.length, SESSIONS_PAGE_SIZE, sessionsPage, "setSessionsPage");
       }
 
-      function selectSession(tr, callId) {
+      function selectSession(tr) {
+        var callId = tr.dataset.callid;
         if (currentSelectedRow) currentSelectedRow.classList.remove("selected");
         tr.classList.add("selected");
         currentSelectedRow = tr;
@@ -451,7 +452,7 @@
 
       function selectSessionById(callId) {
         var tr = document.querySelector('[data-callid="' + CSS.escape(String(callId)) + '"]');
-        if (tr) selectSession(tr, callId);
+        if (tr) selectSession(tr);
         else loadDebug(callId);
       }
 
