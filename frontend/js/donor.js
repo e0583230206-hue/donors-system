@@ -796,6 +796,20 @@ function handleDonationsTableClick(e) {
 }
 donationsTable.addEventListener("click", handleDonationsTableClick);
 
+// Generated once per edit session (see openEditDonationModal) and reused
+// across retries of the same click (e.g. after a perceived timeout) so a
+// retried request is recognized server-side as the same logical payment
+// instead of creating a second one. A genuine double-click within one
+// session never even reaches a second network call — see savingDonationEdit.
+function generateIdempotencyKey() {
+  if (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+let donationEditIdempotencyKey = null;
+
 function openEditDonationModal(id) {
   const donation = donor.donations.find(function (d) {
     return d.id === id;
@@ -803,6 +817,7 @@ function openEditDonationModal(id) {
   if (!donation) return;
 
   editingDonationId = id;
+  donationEditIdempotencyKey = generateIdempotencyKey();
 
   editDonationAmountInput.value = donation.amount;
   editDonationParshaInput.value = donation.parsha || "";
@@ -898,26 +913,6 @@ async function saveDonationEdit() {
     if (!cancelPaymentConfirmed) return;
   }
 
-  var nextPaidPartial, nextRemainingDebt, nextPaid;
-  var nextLastPaymentMethod = donation.lastPaymentMethod;
-  var manualPaymentAmount = 0; // only the newly-collected slice — see "רק בגובה היתרה שנותרה"
-
-  if (statusChangedToPaid) {
-    nextPaidPartial = amount;
-    nextRemainingDebt = 0;
-    nextPaid = true;
-    nextLastPaymentMethod = paymentMethod;
-    manualPaymentAmount = amount - existingPaidPartial;
-  } else if (statusChangedToUnpaid) {
-    nextPaidPartial = 0;
-    nextRemainingDebt = amount;
-    nextPaid = false;
-  } else {
-    nextPaidPartial = existingPaidPartial;
-    nextRemainingDebt = amount - existingPaidPartial;
-    nextPaid = nextRemainingDebt === 0;
-  }
-
   const previous = {
     amount: donation.amount,
     parsha: donation.parsha || "",
@@ -929,51 +924,42 @@ async function saveDonationEdit() {
     paidLabel: wasPaid ? "שולם" : "לא שולם",
   };
 
-  const changes = [
-    { field: "amount", label: "סכום", before: String(previous.amount), after: String(amount) },
-    { field: "parsha", label: "פרשה", before: previous.parsha, after: manualParsha },
-    { field: "finalPurpose", label: "מטרה", before: previous.finalPurpose, after: finalPurpose },
-    { field: "paymentMethod", label: "אמצעי תשלום", before: previous.paymentMethod, after: paymentMethod },
-    { field: "note", label: "הערה", before: previous.note, after: note },
-    { field: "paidPartial", label: "סכום ששולם", before: String(previous.paidPartial), after: String(nextPaidPartial) },
-    { field: "remainingDebt", label: "יתרת חוב", before: String(previous.remainingDebt), after: String(nextRemainingDebt) },
-    { field: "paid", label: "סטטוס תשלום", before: previous.paidLabel, after: nextPaid ? "שולם" : "לא שולם" },
-  ].filter(function (change) {
-    return change.before !== change.after;
-  });
-
-  if (changes.length === 0) {
-    closeEditDonationModal();
-    showMessage(donationMessage, "לא בוצעו שינויים");
-    return;
-  }
-
   savingDonationEdit = true;
   saveDonationEditButton.disabled = true;
   cancelDonationEditButton.disabled = true;
 
   try {
-    // A manual "mark as paid" must produce a real row in the same payments
-    // table used by the payments screen/reports/receipts/Timeline — not just
-    // a field flip on the donation (see reconcileApprovalDrafts for the
-    // equivalent "keep other systems truthful" pattern on the approvals side).
-    // This is a real network round-trip, so — unlike the rest of this form,
-    // which saves through the app's local-first Database.save — we must wait
-    // for the server to actually confirm it before claiming success or
-    // touching local state. A rejected/failed request leaves the donation
-    // completely untouched and the modal open.
+    // A manual "mark as paid"/"cancel payment" must land as ONE atomic
+    // server-side operation covering both the payments-table row and the
+    // donation's own paidPartial/remainingDebt/paid — never a payment
+    // created here and then separately hoped-for via the fire-and-forget
+    // Database.save() the rest of this form uses. See markDonationPaidManually
+    // / cancelManualDonationPayment in db.js for the actual transaction.
+    // Because this is a real network round-trip, we wait for the server to
+    // confirm before claiming success or touching local state — a
+    // rejected/failed request leaves the donation completely untouched and
+    // the modal open. The donation fields returned by the server are treated
+    // as authoritative (never recomputed locally), since the server is the
+    // only side that can see concurrent edits from another admin.
     var createdPayment = null;
-    if (statusChangedToPaid && manualPaymentAmount > 0) {
+    var cancelledPayment = null;
+    var nextAmount, nextPaidPartial, nextRemainingDebt, nextPaid, nextPaymentMethod, nextLastPaymentMethod, nextLastPaymentId;
+
+    if (statusChangedToPaid) {
       try {
-        var res = await apiFetch("/api/donors/" + donor.id + "/manual-payment", {
-          method: "POST",
-          body: JSON.stringify({
-            amount: manualPaymentAmount,
-            phone: donor.phone || "",
-            donorName: donor.fullName || "",
-            paymentMethod: paymentMethod,
-          }),
-        });
+        var res = await apiFetch(
+          "/api/donors/" + donor.id + "/donations/" + donation.id + "/mark-paid",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              amount: amount,
+              phone: donor.phone || "",
+              donorName: donor.fullName || "",
+              paymentMethod: paymentMethod,
+              idempotencyKey: donationEditIdempotencyKey,
+            }),
+          },
+        );
         if (!res.ok) {
           var errBody = null;
           try { errBody = await res.json(); } catch (_) {}
@@ -982,24 +968,93 @@ async function saveDonationEdit() {
         }
         var resBody = await res.json();
         createdPayment = resBody && resBody.payment;
+        var serverDonation = resBody && resBody.donation;
+        if (!serverDonation) {
+          showMessage(editDonationMessage, "תשובת שרת לא תקינה — נסה שוב", "error");
+          return;
+        }
+        nextAmount = serverDonation.amount;
+        nextPaidPartial = serverDonation.paidPartial;
+        nextRemainingDebt = serverDonation.remainingDebt;
+        nextPaid = serverDonation.paid;
+        nextPaymentMethod = serverDonation.paymentMethod;
+        nextLastPaymentMethod = serverDonation.lastPaymentMethod;
+        nextLastPaymentId = serverDonation.lastPaymentId;
       } catch (_) {
         showMessage(editDonationMessage, "שגיאת תקשורת עם השרת — התשלום לא נרשם, נסה שוב", "error");
         return;
       }
+    } else if (statusChangedToUnpaid) {
+      try {
+        var cancelRes = await apiFetch(
+          "/api/donors/" + donor.id + "/donations/" + donation.id + "/cancel-manual-payment",
+          { method: "POST", body: JSON.stringify({}) },
+        );
+        if (!cancelRes.ok) {
+          var cancelErrBody = null;
+          try { cancelErrBody = await cancelRes.json(); } catch (_) {}
+          showMessage(editDonationMessage, (cancelErrBody && cancelErrBody.error) || "ביטול התשלום נכשל בשרת — נסה שוב", "error");
+          return;
+        }
+        var cancelResBody = await cancelRes.json();
+        cancelledPayment = cancelResBody && cancelResBody.payment;
+        var serverDonationAfterCancel = cancelResBody && cancelResBody.donation;
+        if (!serverDonationAfterCancel) {
+          showMessage(editDonationMessage, "תשובת שרת לא תקינה — נסה שוב", "error");
+          return;
+        }
+        nextAmount = serverDonationAfterCancel.amount;
+        nextPaidPartial = serverDonationAfterCancel.paidPartial;
+        nextRemainingDebt = serverDonationAfterCancel.remainingDebt;
+        nextPaid = serverDonationAfterCancel.paid;
+        nextPaymentMethod = paymentMethod;
+        nextLastPaymentMethod = donation.lastPaymentMethod;
+        nextLastPaymentId = serverDonationAfterCancel.lastPaymentId;
+      } catch (_) {
+        showMessage(editDonationMessage, "שגיאת תקשורת עם השרת — הביטול לא בוצע, נסה שוב", "error");
+        return;
+      }
+    } else {
+      nextAmount = amount;
+      nextPaymentMethod = paymentMethod;
+      nextLastPaymentMethod = donation.lastPaymentMethod;
+      nextLastPaymentId = donation.lastPaymentId;
+      nextPaidPartial = existingPaidPartial;
+      nextRemainingDebt = amount - existingPaidPartial;
+      nextPaid = nextRemainingDebt === 0;
     }
 
-    donation.amount = amount;
+    const changes = [
+      { field: "amount", label: "סכום", before: String(previous.amount), after: String(nextAmount) },
+      { field: "parsha", label: "פרשה", before: previous.parsha, after: manualParsha },
+      { field: "finalPurpose", label: "מטרה", before: previous.finalPurpose, after: finalPurpose },
+      { field: "paymentMethod", label: "אמצעי תשלום", before: previous.paymentMethod, after: nextPaymentMethod },
+      { field: "note", label: "הערה", before: previous.note, after: note },
+      { field: "paidPartial", label: "סכום ששולם", before: String(previous.paidPartial), after: String(nextPaidPartial) },
+      { field: "remainingDebt", label: "יתרת חוב", before: String(previous.remainingDebt), after: String(nextRemainingDebt) },
+      { field: "paid", label: "סטטוס תשלום", before: previous.paidLabel, after: nextPaid ? "שולם" : "לא שולם" },
+    ].filter(function (change) {
+      return change.before !== change.after;
+    });
+
+    if (changes.length === 0) {
+      closeEditDonationModal();
+      showMessage(donationMessage, "לא בוצעו שינויים");
+      return;
+    }
+
+    donation.amount = nextAmount;
     donation.parsha = manualParsha;
     donation.purposeType = selectedPurpose;
     donation.customPurpose = customPurpose;
     donation.finalPurpose = finalPurpose;
-    donation.paymentMethod = paymentMethod;
+    donation.paymentMethod = nextPaymentMethod;
     donation.note = note;
     donation.paidPartial = nextPaidPartial;
     donation.remainingDebt = nextRemainingDebt;
     donation.paid = nextPaid;
     donation.lastPaymentMethod = nextLastPaymentMethod;
-    if (createdPayment) donation.lastPaymentId = createdPayment.id;
+    donation.lastPaymentId = nextLastPaymentId;
     donation.updatedAt = new Date().toISOString();
     donor.updatedAt = new Date().toISOString();
 
@@ -1010,7 +1065,8 @@ async function saveDonationEdit() {
       ? "התרומה סומנה כשולמה ידנית באמצעי " + paymentMethod +
         (createdPayment ? " (רשומת תשלום מס' " + createdPayment.id + ")" : "")
       : statusChangedToUnpaid
-        ? "בוטל תשלום שנרשם עבור התרומה (אושר במפורש ע\"י המשתמש)"
+        ? "בוטל תשלום שנרשם עבור התרומה (אושר במפורש ע\"י המשתמש)" +
+          (cancelledPayment ? " (רשומת תשלום מס' " + cancelledPayment.id + ")" : "")
         : "עודכנה תרומה";
 
     AuditLog.record({
@@ -1025,7 +1081,7 @@ async function saveDonationEdit() {
     closeEditDonationModal();
     showMessage(donationMessage, "התרומה עודכנה בהצלחה");
     renderAll();
-    if (createdPayment) await loadDonorPayments(); // refresh payments panel + Timeline immediately, no reload needed
+    if (createdPayment || cancelledPayment) await loadDonorPayments(); // refresh payments panel + Timeline immediately, no reload needed
   } finally {
     savingDonationEdit = false;
     saveDonationEditButton.disabled = false;
@@ -1154,13 +1210,15 @@ function renderTimeline() {
     );
   });
 
-  // תשלומי IVR (נטענו מהשרת)
+  // תשלומים (נטענו מהשרת — IVR או ידניים)
   _timelinePayments.forEach(function (p) {
     var conf = p.confirmationNumber ? " | אישור: " + escapeHTML(p.confirmationNumber) : "";
+    var statusText = p.status === "cancelled" ? "בוטל" : p.status === "success" ? "הצליח" : "נכשל";
+    var sourceLabel = p.source === "manual" ? "תשלום ידני" : "תשלום IVR";
     addEv("ivr_payment", "pay-" + p.id,
       p.timestamp || p.createdAt || "",
-      "תשלום IVR: ₪" + Number(p.amount || 0).toFixed(2),
-      (p.status === "success" ? "הצליח" : "נכשל") + conf
+      sourceLabel + ": ₪" + Number(p.amount || 0).toFixed(2),
+      statusText + conf
     );
   });
 

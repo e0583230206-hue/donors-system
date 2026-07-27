@@ -41,8 +41,8 @@ const {
   getPayments,
   getPaymentById,
   getPaymentStats,
-  recordPayment,
-  findDonorByPhone,
+  markDonationPaidManually,
+  cancelManualDonationPayment,
   insertAuditLog,
   getAuditLogs,
   insertSyncLog,
@@ -969,79 +969,89 @@ app.get(
   }
 );
 
-// Records a real payment row for a donation manually marked "שולם" in the
-// donor card (cash/bank/etc — not an IVR call). Reuses the same `payments`
-// table and `recordPayment()` insert already used for CRM payment history/
-// reports/receipts, instead of a second parallel payment mechanism — see
-// donor.js saveDonationEdit(). Deliberately does NOT call
-// savePaymentInTransaction()/saveIvrPaymentOnce() — those also write to
-// ivr_donations, which is specifically "this phone call reported a payment"
-// and would misrepresent a manual entry as an IVR event.
+// Marks one donation "שולם" AND records a real payment row for it as a
+// single atomic server-side operation (donor.js saveDonationEdit() no longer
+// creates the payment and then separately hopes a fire-and-forget
+// Database.save() catches up the donation fields — see
+// markDonationPaidManually() in db.js for why "atomic" here means one
+// BEGIN/COMMIT covering both the payments insert and the app_state
+// read-modify-write, with rollback if either half fails).
 //
-// payments.donorId is a foreign key into the SQL `donors` table — the
-// phone-keyed IVR identity table populated by /api/donors/sync — which is a
-// completely different id space from the CRM's frontend donor.id in :id.
-// Resolve (or create) that row by phone via upsertDonor/findDonorByPhone,
-// same as the IVR flow does, instead of writing the frontend id into a
-// column it doesn't belong in (an unresolvable phone still records the
-// payment with donorId: null — it stays findable by phone).
+// idempotencyKey is required and caller-supplied (donor.js generates one per
+// edit session) — a retried/duplicated request with the same key returns the
+// original result instead of charging twice. Two different concurrent
+// requests for the *same* donation (two admins clicking "mark paid" around
+// the same time) are safe for a different reason: the charge amount is
+// always computed from the donation's current stored state, never trusted
+// from the client, so whichever request commits first zeroes the balance and
+// the second is rejected with 409 rather than double-charging.
 app.post(
-  "/api/donors/:id/manual-payment",
+  "/api/donors/:donorId/donations/:donationId/mark-paid",
   requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
   function (req, res, next) {
     try {
-      var appDonorId = parseInt(req.params.id, 10);
-      if (!appDonorId) return res.status(400).json({ error: "Invalid donor id" });
+      var appDonorId = parseInt(req.params.donorId, 10);
+      var donationId = parseInt(req.params.donationId, 10);
+      if (!appDonorId || !donationId) return res.status(400).json({ error: "מזהה תורם/תרומה לא תקין" });
 
       var amount = Number(req.body && req.body.amount);
       if (!isFinite(amount) || amount <= 0 || amount > MAX_SANE_AMOUNT) {
         return res.status(400).json({ error: "סכום לא תקין" });
       }
 
-      var phone      = req.body && req.body.phone      ? String(req.body.phone).trim().slice(0, 30)   : "";
-      var donorName  = req.body && req.body.donorName  ? String(req.body.donorName).trim().slice(0, 200) : "";
-      var paymentMethod = req.body && req.body.paymentMethod ? String(req.body.paymentMethod).trim().slice(0, 50) : "";
+      var idempotencyKey = req.body && req.body.idempotencyKey ? String(req.body.idempotencyKey).trim() : "";
+      if (!idempotencyKey) return res.status(400).json({ error: "חסר מפתח idempotency" });
 
-      var sqlDonorId = null;
-      if (phone) {
-        if (donorName) { try { upsertDonor(phone, donorName); } catch (_) {} }
-        var resolved = findDonorByPhone(phone);
-        if (resolved) sqlDonorId = resolved.id;
-      }
-
-      // Unique per request so a genuine double-click (two concurrent requests)
-      // can never race past the client-side re-entrancy guard into two rows —
-      // callId is UNIQUE in the payments table, same de-dup mechanism IVR
-      // payments already rely on (see payment.service.js saveIvrPaymentOnce).
-      var idempotencyKey = "manual-" + appDonorId + "-" + Date.now() + "-" + crypto.randomBytes(4).toString("hex");
-
-      var result = recordPayment({
-        callId:             idempotencyKey,
-        phone:              phone,
-        donorId:            sqlDonorId,
-        amount:             amount,
-        status:             "success",
-        source:             "manual",
-        confirmationNumber: null,
+      var result = markDonationPaidManually({
+        appDonorId:    appDonorId,
+        donationId:    donationId,
+        amount:        amount,
+        phone:         req.body && req.body.phone,
+        donorName:     req.body && req.body.donorName,
+        paymentMethod: req.body && req.body.paymentMethod,
+        idempotencyKey: idempotencyKey,
+        workerId:   req.user && req.user.id,
+        workerName: req.user && req.user.name,
+        ip:         req.ip,
       });
 
-      var payment = getPaymentById(result.lastInsertRowid);
+      res.json({ ok: true, idempotent: !!result.idempotent, donation: result.donation, payment: result.payment });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
 
-      try {
-        insertAuditLog({
-          action:     "create",
-          entityType: "payment",
-          entityId:   appDonorId,
-          entityName: donorName || null,
-          details:    "תשלום ידני נרשם בסך " + amount + " ₪" + (paymentMethod ? " (" + paymentMethod + ")" : ""),
-          workerId:   req.user && req.user.id,
-          workerName: req.user && req.user.name,
-          ip:         req.ip,
-        });
-      } catch (_) {}
+// Reverses exactly the payment donor.js's mark-paid call above created for
+// this donation (donation.lastPaymentId — see cancelManualDonationPayment())
+// — never an IVR payment or any other donation's payment. The row is kept
+// forever with status='cancelled', never deleted, so payment history/reports
+// stay a complete record; the donation is restored to whatever paidPartial
+// it had before that specific payment (0 if it was fully unpaid, or its
+// prior partial amount if a partial donation was completed manually).
+app.post(
+  "/api/donors/:donorId/donations/:donationId/cancel-manual-payment",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var appDonorId = parseInt(req.params.donorId, 10);
+      var donationId = parseInt(req.params.donationId, 10);
+      if (!appDonorId || !donationId) return res.status(400).json({ error: "מזהה תורם/תרומה לא תקין" });
 
-      res.json({ ok: true, payment: payment });
-    } catch (err) { next(err); }
+      var result = cancelManualDonationPayment({
+        appDonorId: appDonorId,
+        donationId: donationId,
+        workerId:   req.user && req.user.id,
+        workerName: req.user && req.user.name,
+        ip:         req.ip,
+      });
+
+      res.json({ ok: true, donation: result.donation, payment: result.payment });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
   }
 );
 

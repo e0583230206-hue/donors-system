@@ -185,6 +185,10 @@ function initDatabase() {
   try { db.exec("ALTER TABLE ivr_donations ADD COLUMN donorId INTEGER REFERENCES donors(id)"); } catch (_) {}
   try { db.exec("ALTER TABLE ivr_call_logs ADD COLUMN timestamp TEXT"); } catch (_) {}
   try { db.exec("ALTER TABLE payments ADD COLUMN confirmationNumber TEXT"); } catch (_) {}
+  // Lets a manual payment be reversed (status='cancelled') without ever
+  // deleting the row — financial history must stay intact. See
+  // cancelManualDonationPayment().
+  try { db.exec("ALTER TABLE payments ADD COLUMN cancelledAt TEXT"); } catch (_) {}
 
   // ── Caller-identification redesign: payer (who called/identified
   // themselves) vs beneficiary (existing donorId — whose debt is paid) ──────
@@ -537,7 +541,7 @@ function getPayments(opts) {
 
   var base = `
     SELECT p.id, p.callId, p.phone, p.donorId, p.amount, p.status, p.source,
-           p.confirmationNumber, p.createdAt, p.timestamp,
+           p.confirmationNumber, p.createdAt, p.timestamp, p.cancelledAt,
            d.fullName AS donorName
     FROM   payments p
     LEFT JOIN donors d ON d.id = p.donorId
@@ -556,12 +560,203 @@ function getPayments(opts) {
 function getPaymentById(id) {
   return db.prepare(`
     SELECT p.id, p.callId, p.phone, p.donorId, p.amount, p.status, p.source,
-           p.confirmationNumber, p.createdAt, p.timestamp,
+           p.confirmationNumber, p.createdAt, p.timestamp, p.cancelledAt,
            d.fullName AS donorName
     FROM   payments p
     LEFT JOIN donors d ON d.id = p.donorId
     WHERE  p.id = ?
   `).get(Number(id));
+}
+
+function cancelPaymentById(id) {
+  db.prepare("UPDATE payments SET status = 'cancelled', cancelledAt = ? WHERE id = ?").run(nowIso(), Number(id));
+}
+
+function httpError(status, message) {
+  var err = new Error(message);
+  err.httpStatus = status;
+  return err;
+}
+
+// ── Manual payment: mark-paid / cancel, both atomic (see
+// manual-payment.routes.test.js) ─────────────────────────────────────────────
+//
+// donors (with nested donations) live as one JSON blob in app_state, not a
+// per-row SQL table, so "atomic" here means: the payments-table write and the
+// app_state read-modify-write happen inside one BEGIN/COMMIT (same manual
+// transaction style as savePaymentInTransaction above) — either both land or
+// neither does. node:sqlite's DatabaseSync is fully synchronous and Node is
+// single-threaded, so no other request's code can run between the statements
+// in this function; the transaction protects against a thrown error or crash
+// mid-way, not against interleaving from a concurrent request (that risk
+// doesn't exist here for the same reason).
+//
+// idempotencyKey is caller-supplied (donor.js generates one per edit
+// session, reused across retries of the same click) and is stored as the
+// payment's callId (UNIQUE) — a request replayed with the same key after a
+// timeout/retry finds the already-created payment and returns it rather than
+// charging twice.
+function markDonationPaidManually(params) {
+  var callId = "manual:" + String(params.idempotencyKey).trim();
+
+  var existing = findPaymentByCallId(callId);
+  if (existing) {
+    var donorsNow = getAppState("donors");
+    var donorNow = donorsNow.find(function (d) { return Number(d.id) === Number(params.appDonorId); });
+    var donationNow = donorNow ? (donorNow.donations || []).find(function (d) { return Number(d.id) === Number(params.donationId); }) : null;
+    return { idempotent: true, payment: existing, donation: donationNow || null };
+  }
+
+  try {
+    db.exec("BEGIN");
+
+    var donors = getAppState("donors");
+    var donor = donors.find(function (d) { return Number(d.id) === Number(params.appDonorId); });
+    if (!donor) throw httpError(404, "תורם לא נמצא");
+    var donation = (donor.donations || []).find(function (d) { return Number(d.id) === Number(params.donationId); });
+    if (!donation) throw httpError(404, "תרומה לא נמצאה");
+
+    var existingPaidPartial = Number(donation.paidPartial || 0);
+    var amount = Number(params.amount);
+    if (!isFinite(amount) || amount <= 0) throw httpError(400, "סכום לא תקין");
+    if (amount < existingPaidPartial) {
+      throw httpError(400, "אי אפשר להקטין את סכום התרומה מתחת לסכום שכבר שולם");
+    }
+
+    // Server-computed from the CURRENT stored state, never trusted from the
+    // client — this is what makes two concurrent "mark as paid" requests for
+    // the same donation safe: whichever commits first zeroes remainingDebt,
+    // so the second (running strictly after, per the note above) sees
+    // chargeAmount <= 0 here and is rejected instead of charging again.
+    var chargeAmount = amount - existingPaidPartial;
+    if (chargeAmount <= 0) {
+      throw httpError(409, "התרומה כבר משולמת במלואה — ייתכן שתשלום מקביל כבר נקלט");
+    }
+
+    var phone = params.phone ? String(params.phone).trim().slice(0, 30) : "";
+    var donorName = params.donorName ? String(params.donorName).trim().slice(0, 200) : "";
+    var paymentMethod = params.paymentMethod ? String(params.paymentMethod).trim().slice(0, 50) : "";
+
+    var sqlDonorId = null;
+    if (phone) {
+      if (donorName) { try { upsertDonor(phone, donorName); } catch (_) {} }
+      var resolved = findDonorByPhone(phone);
+      if (resolved) sqlDonorId = resolved.id;
+    }
+
+    var result = recordPayment({
+      callId:             callId,
+      phone:              phone,
+      donorId:            sqlDonorId,
+      amount:             chargeAmount,
+      status:             "success",
+      source:             "manual",
+      confirmationNumber: null,
+    });
+    var payment = getPaymentById(result.lastInsertRowid);
+
+    // Test-only fault injection to exercise the rollback path over real HTTP
+    // (see manual-payment.routes.test.js) — inert unless a test explicitly
+    // sets this env var before requiring server.js; never set in deploy.
+    if (process.env.TEST_FORCE_MANUAL_PAYMENT_FAILURE === "1") {
+      throw new Error("[test-only] forced failure between payment insert and donation update");
+    }
+
+    donation.amount = amount;
+    donation.paidPartial = amount;
+    donation.remainingDebt = 0;
+    donation.paid = true;
+    if (paymentMethod) {
+      donation.paymentMethod = paymentMethod;
+      donation.lastPaymentMethod = paymentMethod;
+    }
+    donation.lastPaymentId = payment.id;
+    donation.updatedAt = nowIso();
+    donor.updatedAt = nowIso();
+
+    setAppState("donors", donors);
+
+    try {
+      insertAuditLog({
+        action:     "create",
+        entityType: "payment",
+        entityId:   params.appDonorId,
+        entityName: donorName || null,
+        details:    "תשלום ידני נרשם בסך " + chargeAmount + " ₪" + (paymentMethod ? " (" + paymentMethod + ")" : ""),
+        workerId:   params.workerId,
+        workerName: params.workerName,
+        ip:         params.ip,
+      });
+    } catch (_) {}
+
+    db.exec("COMMIT");
+    return { idempotent: false, payment: payment, donation: donation };
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch (_) {}
+    throw err;
+  }
+}
+
+// Reverses exactly the payment this donation's own manual mark-paid action
+// created (donation.lastPaymentId — never an arbitrary/IVR payment) by
+// flipping its status to 'cancelled' (never deleting it) and restoring the
+// donation to whatever paidPartial it had immediately before that specific
+// payment — correctly returning a donation that was partially paid and then
+// completed manually back to its partial state, not to zero.
+function cancelManualDonationPayment(params) {
+  try {
+    db.exec("BEGIN");
+
+    var donors = getAppState("donors");
+    var donor = donors.find(function (d) { return Number(d.id) === Number(params.appDonorId); });
+    if (!donor) throw httpError(404, "תורם לא נמצא");
+    var donation = (donor.donations || []).find(function (d) { return Number(d.id) === Number(params.donationId); });
+    if (!donation) throw httpError(404, "תרומה לא נמצאה");
+
+    var paymentId = donation.lastPaymentId;
+    if (!paymentId) throw httpError(400, "אין תשלום ידני מקושר לביטול עבור תרומה זו");
+
+    var payment = getPaymentById(paymentId);
+    if (!payment) throw httpError(404, "רשומת התשלום לא נמצאה");
+    if (payment.source !== "manual") {
+      throw httpError(400, "ניתן לבטל רק תשלום ידני שנוצר מפעולת עריכה זו — לא תשלום IVR או תשלום אחר");
+    }
+    if (payment.status === "cancelled") throw httpError(409, "התשלום כבר בוטל");
+
+    cancelPaymentById(paymentId);
+
+    var reduceBy = Number(payment.amount || 0);
+    var newPaidPartial = Number(donation.paidPartial || 0) - reduceBy;
+    if (newPaidPartial < 0) newPaidPartial = 0; // defensive floor — should never trigger given the invariants above
+
+    donation.paidPartial = newPaidPartial;
+    donation.remainingDebt = Number(donation.amount || 0) - newPaidPartial;
+    donation.paid = donation.remainingDebt <= 0;
+    donation.lastPaymentId = null;
+    donation.updatedAt = nowIso();
+    donor.updatedAt = nowIso();
+
+    setAppState("donors", donors);
+
+    try {
+      insertAuditLog({
+        action:     "update",
+        entityType: "payment",
+        entityId:   params.appDonorId,
+        entityName: null,
+        details:    "תשלום ידני מס' " + paymentId + " בוטל (" + reduceBy + " ₪) — אושר במפורש ע\"י המשתמש",
+        workerId:   params.workerId,
+        workerName: params.workerName,
+        ip:         params.ip,
+      });
+    } catch (_) {}
+
+    db.exec("COMMIT");
+    return { donation: donation, payment: getPaymentById(paymentId) };
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch (_) {}
+    throw err;
+  }
 }
 
 function getPaymentStats() {
@@ -1679,6 +1874,9 @@ module.exports = {
   getPayments,
   getPaymentById,
   getPaymentStats,
+  cancelPaymentById,
+  markDonationPaidManually,
+  cancelManualDonationPayment,
   // Logs
   insertCallLog,
   // Call Sessions

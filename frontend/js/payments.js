@@ -43,6 +43,7 @@ function statusBadge(status) {
   if (status === "failed" || status === "error")
                              return '<span class="badge badge-err">🔴 נכשל</span>';
   if (status === "duplicate") return '<span class="badge badge-dup">🟡 כפול</span>';
+  if (status === "cancelled") return '<span class="badge badge-def">⚪ בוטל</span>';
   return '<span class="badge badge-def">' + escapeHTML(status) + '</span>';
 }
 

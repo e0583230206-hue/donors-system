@@ -1,13 +1,22 @@
 // donation-edit-ui.test.js — audit tests for the "ערוך תרומה" (edit donation)
 // feature in frontend/donor.html + frontend/js/donor.js, including the manual
-// "mark as paid" -> real payment record flow (POST /api/donors/:id/manual-payment,
-// see manual-payment.routes.test.js for the server-side half of that same
-// feature). Loads the real utils.js / database.js / audit-log.js / donor.js
-// source into a Node `vm` context with a minimal DOM/localStorage/fetch stub
-// (no browser needed), then drives the actual shipped functions
-// (openEditDonationModal, saveDonationEdit, handleDonationsTableClick) exactly
-// as a click on "✏️ ערוך" would, and inspects the real persisted state
-// (localStorage-backed Database.get) plus the real AuditLog output.
+// "mark as paid" -> real atomic payment record flow:
+//   POST /api/donors/:donorId/donations/:donationId/mark-paid
+//   POST /api/donors/:donorId/donations/:donationId/cancel-manual-payment
+// (see manual-payment.routes.test.js for the real server/db.js half of this
+// same feature — that file proves the actual transaction/rollback/idempotency/
+// concurrency behavior over real HTTP; this file proves donor.js *consumes*
+// that contract correctly: right URLs/payloads, treats the server's returned
+// donation as authoritative, never claims success before the server confirms,
+// reuses one idempotency key per edit session across retries, and the
+// re-entrancy guard blocks a double click before a second request ever fires).
+//
+// Loads the real utils.js / database.js / audit-log.js / donor.js source into
+// a Node `vm` context with a minimal DOM/localStorage/fetch stub (no browser
+// needed), then drives the actual shipped functions (openEditDonationModal,
+// saveDonationEdit, handleDonationsTableClick) exactly as a click on
+// "✏️ ערוך" would, and inspects the real persisted state (localStorage-backed
+// Database.get) plus the real AuditLog output.
 //
 // This exercises the production code directly — nothing here is a
 // reimplementation of the edit logic, so a bug in donor.js shows up here too.
@@ -124,28 +133,61 @@ function buildSandbox(donorId) {
   return { sandbox: sandbox, documentStub: documentStub };
 }
 
-// Wires sandbox.fetch to a tiny in-memory fake server for the two endpoints
-// saveDonationEdit's manual-payment path actually calls: POST creates a row
-// (mirroring the real /api/donors/:id/manual-payment contract), GET returns
-// everything created so far (mirroring /api/payments?phone=...). Lets tests
-// assert "exactly once" end-to-end through the real client code without a
-// live server — the real server-side contract is covered separately in
-// manual-payment.routes.test.js.
-function mockPaymentServer(mod) {
+// Wires sandbox.fetch to a small fake server that mirrors the REAL contract
+// of markDonationPaidManually/cancelManualDonationPayment (db.js) closely
+// enough to exercise donor.js's client logic: charge = newAmount -
+// existingPaidPartial, reject if <= 0 (already fully paid — the concurrency
+// guard), idempotencyKey replay returns the original result without
+// re-charging, and cancellation restores paidPartial by exactly the
+// cancelled payment's amount (not to zero). The real transaction/rollback/
+// concurrency/SQL behavior is proven separately, over real HTTP, in
+// manual-payment.routes.test.js — this mock's job is only to let this file
+// prove donor.js *consumes* that contract correctly.
+//
+// initialDonation seeds the fake server's view of the donation being edited
+// (amount/paidPartial/remainingDebt/paid/lastPaymentId) so charge math is
+// correct for whichever fixture donation the test opens.
+function mockPaymentServer(mod, initialDonation) {
+  var state = Object.assign({ amount: 0, paidPartial: 0, remainingDebt: 0, paid: false, lastPaymentId: null }, initialDonation || {});
   var payments = [];
   var postBodies = [];
+  var cancelBodies = [];
+  var byKey = {};
   var getCalls = 0;
+
   mod.sandbox.fetch = function (url, options) {
-    if (String(url).indexOf("/manual-payment") !== -1) {
-      var body = JSON.parse((options && options.body) || "{}");
+    var body = options && options.body ? JSON.parse(options.body) : {};
+
+    if (String(url).indexOf("/mark-paid") !== -1) {
       postBodies.push(body);
+
+      if (byKey[body.idempotencyKey]) {
+        var prior = byKey[body.idempotencyKey];
+        return Promise.resolve({ ok: true, json: function () {
+          return Promise.resolve({ ok: true, idempotent: true, payment: prior.payment, donation: prior.donation });
+        } });
+      }
+
+      var newAmount = Number(body.amount);
+      var existingPaidPartial = Number(state.paidPartial || 0);
+      if (!(newAmount > 0)) {
+        return Promise.resolve({ ok: false, status: 400, json: function () { return Promise.resolve({ error: "סכום לא תקין" }); } });
+      }
+      if (newAmount < existingPaidPartial) {
+        return Promise.resolve({ ok: false, status: 400, json: function () { return Promise.resolve({ error: "אי אפשר להקטין את סכום התרומה מתחת לסכום שכבר שולם" }); } });
+      }
+      var charge = newAmount - existingPaidPartial;
+      if (charge <= 0) {
+        return Promise.resolve({ ok: false, status: 409, json: function () { return Promise.resolve({ error: "התרומה כבר משולמת במלואה" }); } });
+      }
+
       var payment = {
         id: payments.length + 1,
-        callId: "manual-test-" + (payments.length + 1),
+        callId: "manual:" + body.idempotencyKey,
         phone: body.phone || "",
         donorId: null,
         donorName: body.donorName || null,
-        amount: body.amount,
+        amount: charge,
         status: "success",
         source: "manual",
         confirmationNumber: null,
@@ -153,17 +195,53 @@ function mockPaymentServer(mod) {
         timestamp: new Date().toISOString(),
       };
       payments.push(payment);
-      return Promise.resolve({ ok: true, json: function () { return Promise.resolve({ ok: true, payment: payment }); } });
+
+      state.amount = newAmount;
+      state.paidPartial = newAmount;
+      state.remainingDebt = 0;
+      state.paid = true;
+      if (body.paymentMethod) { state.paymentMethod = body.paymentMethod; state.lastPaymentMethod = body.paymentMethod; }
+      state.lastPaymentId = payment.id;
+
+      var donationSnapshot = Object.assign({}, state);
+      byKey[body.idempotencyKey] = { payment: payment, donation: donationSnapshot };
+      return Promise.resolve({ ok: true, json: function () {
+        return Promise.resolve({ ok: true, idempotent: false, payment: payment, donation: donationSnapshot });
+      } });
     }
+
+    if (String(url).indexOf("/cancel-manual-payment") !== -1) {
+      cancelBodies.push(body);
+      if (!state.lastPaymentId) {
+        return Promise.resolve({ ok: false, status: 400, json: function () { return Promise.resolve({ error: "אין תשלום ידני מקושר לביטול" }); } });
+      }
+      var cancelled = payments.find(function (p) { return p.id === state.lastPaymentId; });
+      if (cancelled) cancelled.status = "cancelled";
+
+      var reduceBy = cancelled ? Number(cancelled.amount || 0) : 0;
+      state.paidPartial = Math.max(0, Number(state.paidPartial || 0) - reduceBy);
+      state.remainingDebt = Number(state.amount || 0) - state.paidPartial;
+      state.paid = state.remainingDebt <= 0;
+      state.lastPaymentId = null;
+
+      var donationSnapshot2 = Object.assign({}, state);
+      return Promise.resolve({ ok: true, json: function () {
+        return Promise.resolve({ ok: true, payment: cancelled || null, donation: donationSnapshot2 });
+      } });
+    }
+
     if (String(url).indexOf("/api/payments") !== -1) {
       getCalls++;
       return Promise.resolve({ ok: true, json: function () { return Promise.resolve(payments); } });
     }
+
     return Promise.reject(new Error("unexpected fetch in mockPaymentServer: " + url));
   };
+
   return {
     payments: payments,
     postBodies: postBodies,
+    cancelBodies: cancelBodies,
     getCallCount: function () { return getCalls; },
   };
 }
@@ -200,6 +278,14 @@ function loadDonorModule(fixtureDonor, fixtureApprovals) {
     getLogs: function () { return toPlain(sandbox.__Database.get("logs") || []); },
     setInput: function (id, value) { built.documentStub.getElementById(id).value = value; },
     getInput: function (id) { return built.documentStub.getElementById(id); },
+    // donationEditIdempotencyKey is a top-level `let` in donor.js — those
+    // bindings live in the context's lexical scope, not as sandbox/global
+    // object properties (same reason __Database/__AuditLog need the var-copy
+    // trick above), so it can't be read as sandbox.donationEditIdempotencyKey
+    // directly. Re-evaluating the bare identifier in-context on demand does
+    // reach the live, current value (the context's lexical scope persists
+    // across separate vm.runInContext calls).
+    getIdempotencyKey: function () { return vm.runInContext("donationEditIdempotencyKey", sandbox); },
   };
 }
 
@@ -310,7 +396,7 @@ async function main() {
 await check("תרומה שלא שולמה: עריכת פרטים בלבד (סכום) מעדכנת יתרה, לא נוגעת בשדות אחרים ולא פונה לשרת תשלומים", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
   var before = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
-  var netMock = mockPaymentServer(mod); // אם ייקרא בכלל — זו כשל, כי אין כאן שינוי סטטוס תשלום
+  var netMock = mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
   mod.setInput("editDonationAmountInput", "750");
@@ -346,21 +432,24 @@ await check("תרומה שלא שולמה: שאר התרומות של אותו �
   assert.strictEqual(partial.paidPartial, 400);
 });
 
-// ── 2. תרומה שלא שולמה -> תשלום מלא במזומן (יוצר רשומת תשלום אמיתית) ────
+// ── 2. תרומה שלא שולמה -> תשלום מלא במזומן (יוצר רשומת תשלום אמיתית ואטומית) ─
 
-await check("תרומה שלא שולמה -> סימון כתשלום מלא במזומן: יוצר רשומת תשלום אמיתית בגובה מלוא הסכום, כולל אמצעי התשלום", async function () {
+await check("תרומה שלא שולמה -> סימון כתשלום מלא במזומן: קורא ל-mark-paid, יוצר תשלום אמיתי כולל אמצעי התשלום, ומעדכן את התרומה מהתשובה הסמכותית של השרת", async function () {
   var mod = loadDonorModule(makeFixtureDonor()); // amount=500, paidPartial=0, wasPaid=false
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
+  var idKey = mod.getIdempotencyKey();
+  assert.ok(idKey, "נוצר מפתח idempotency עם פתיחת המודל");
   mod.setInput("editDonationPaidSelect", "true");
   mod.setInput("editDonationPaymentMethodSelect", "מזומן");
   await mod.sandbox.saveDonationEdit();
 
-  assert.strictEqual(netMock.postBodies.length, 1, "בדיוק קריאת יצירת-תשלום אחת");
+  assert.strictEqual(netMock.postBodies.length, 1, "בדיוק קריאת mark-paid אחת");
   assert.strictEqual(netMock.postBodies[0].amount, 500, "כל הסכום — התרומה לא הייתה משולמת בכלל קודם");
   assert.strictEqual(netMock.postBodies[0].paymentMethod, "מזומן", "מזומן הוא אמצעי תשלום תקין ונשלח לשרת");
   assert.strictEqual(netMock.postBodies[0].donorName, "בדיקה טסט");
+  assert.strictEqual(netMock.postBodies[0].idempotencyKey, idKey);
 
   var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
   assert.strictEqual(after.paidPartial, 500);
@@ -368,7 +457,7 @@ await check("תרומה שלא שולמה -> סימון כתשלום מלא במ
   assert.strictEqual(after.paid, true);
   assert.strictEqual(after.paymentMethod, "מזומן");
   assert.strictEqual(after.lastPaymentMethod, "מזומן");
-  assert.strictEqual(after.lastPaymentId, 1, "התרומה מקושרת לרשומת התשלום שנוצרה");
+  assert.strictEqual(after.lastPaymentId, 1, "התרומה מקושרת לרשומת התשלום שהשרת החזיר");
 
   var logs = mod.getLogs();
   var log = logs[logs.length - 1];
@@ -381,9 +470,9 @@ await check("תרומה שלא שולמה -> סימון כתשלום מלא במ
 
 // ── 3. תרומה ששולמה חלקית -> השלמת יתרה במזומן (רק גובה היתרה!) ─────────
 
-await check("תרומה ששולמה חלקית -> השלמת היתרה במזומן: רשומת התשלום נוצרת רק בגובה היתרה שנותרה (600), לא מלוא הסכום (1000)", async function () {
+await check("תרומה ששולמה חלקית -> השלמת היתרה במזומן: הבקשה לשרת היא רק בגובה היתרה שנותרה (600), לא מלוא הסכום (1000)", async function () {
   var mod = loadDonorModule(makeFixtureDonor()); // amount=1000, paidPartial=400, remainingDebt=600
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 1000, paidPartial: 400, remainingDebt: 600, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID);
   mod.setInput("editDonationPaidSelect", "true");
@@ -391,7 +480,7 @@ await check("תרומה ששולמה חלקית -> השלמת היתרה במז�
   await mod.sandbox.saveDonationEdit();
 
   assert.strictEqual(netMock.postBodies.length, 1);
-  assert.strictEqual(netMock.postBodies[0].amount, 600, "רק היתרה שנותרה — לא 1000 ולא 400 שכבר שולמו קודם");
+  assert.strictEqual(netMock.postBodies[0].amount, 1000, "השרת מקבל את הסכום המלא של התרומה ומחשב בעצמו את היתרה לחיוב");
 
   var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PARTIAL_ID; });
   assert.strictEqual(after.amount, 1000);
@@ -404,7 +493,7 @@ await check("תרומה ששולמה חלקית -> השלמת היתרה במז�
 
 await check("תרומה ששולמה חלקית: עריכת פרט אחר (הערה) בלבד לא יוצרת תשלום ולא נוגעת בסכום שכבר שולם", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 1000, paidPartial: 400, remainingDebt: 600, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID); // paidPartial=400, remainingDebt=600
   mod.setInput("editDonationNoteInput", "הערה חדשה בלבד");
@@ -428,7 +517,7 @@ await check("תרומה ששולמה חלקית: עריכת פרט אחר (הע�
 
 await check("תרומה ששולמה במלואה -> הגדלת הסכום בלי לגעת במצב התשלום: לא ממציאה תשלום נוסף, נשארת עם יתרה חדשה", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 300, paidPartial: 300, remainingDebt: 0, paid: true });
 
   mod.sandbox.openEditDonationModal(DONATION_PAID_ID); // paidSelect prefilled "true", wasPaid=true
   mod.setInput("editDonationAmountInput", "900"); // was 300 (כולו שולם), לא נוגעים בסטטוס
@@ -458,11 +547,11 @@ await check("תרומה ששולמה במלואה: עריכת הערה בלבד 
 
 // ── 5. ניסיון להקטין סכום מתחת לסכום ששולם ──────────────────────────────
 
-await check("ניסיון להקטין סכום מתחת לסכום שכבר שולם: נחסם, לא נשמר, ואין קריאה לשרת תשלומים", async function () {
+await check("ניסיון להקטין סכום מתחת לסכום שכבר שולם: נחסם בצד הלקוח (לא נשלחת בכלל בקשה לשרת)", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
   var before = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PARTIAL_ID; });
   var logsBefore = mod.getLogs().length;
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 1000, paidPartial: 400, remainingDebt: 600, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID); // amount=1000, paidPartial=400
   mod.setInput("editDonationAmountInput", "300"); // below the 400 already paid
@@ -479,9 +568,9 @@ await check("ניסיון להקטין סכום מתחת לסכום שכבר ש�
   assert.strictEqual(netMock.postBodies.length, 0);
 });
 
-await check("ניסיון להקטין סכום מתחת לסכום ששולם -תוך כדי סימון \"שולם\" בו-זמנית: גם זה נחסם (לא מאפשרים לצמצם תשלום קיים)", async function () {
+await check("ניסיון להקטין סכום מתחת לסכום ששולם תוך כדי סימון \"שולם\" בו-זמנית: גם זה נחסם בצד הלקוח לפני כל קריאה לשרת", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 1000, paidPartial: 400, remainingDebt: 600, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID); // paidPartial=400
   mod.setInput("editDonationAmountInput", "300");
@@ -490,45 +579,128 @@ await check("ניסיון להקטין סכום מתחת לסכום ששולם -
 
   var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PARTIAL_ID; });
   assert.strictEqual(after.paidPartial, 400, "אסור שהסכום שכבר שולם יקטן");
-  assert.strictEqual(netMock.postBodies.length, 0, "השמירה נחסמה — אין קריאה לשרת");
+  assert.strictEqual(netMock.postBodies.length, 0, "השמירה נחסמה בצד הלקוח — אין קריאה לשרת");
 });
 
-// ── 6. שינוי מ"שולם" ל"לא שולם" דורש אישור מפורש ────────────────────────
-
-await check("שינוי מ\"שולם\" ל\"לא שולם\": ללא אישור מפורש (confirm בוטל) — שום דבר לא משתנה", async function () {
+await check("[הגנת שרת] גם אם צד הלקוח היה מאפשר לחייב פחות מהיתרה — השרת עצמו דוחה עם 400/409 ולא מעדכן את התרומה", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  var before = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PAID_ID; });
+  var netMock = mockPaymentServer(mod, { amount: 1000, paidPartial: 1000, remainingDebt: 0, paid: true }); // "כבר" משולם במלואה בצד השרת
+
+  mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID);
+  mod.setInput("editDonationPaidSelect", "true"); // בצד הלקוח עדיין חושב שזה לא שולם (wasPaid=false לפי הפיקסצ'ר)
+  await mod.sandbox.saveDonationEdit();
+
+  assert.strictEqual(netMock.postBodies.length, 1, "הבקשה כן נשלחת (הלקוח לא ידע שהשרת כבר עודכן)");
+  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PARTIAL_ID; });
+  assert.strictEqual(after.paidPartial, 400, "התרומה המקומית נשארת ללא שינוי — השרת דחה, לא הוכפל תשלום");
+  assert.strictEqual(mod.getInput("editDonationModal").style.display, "flex", "החלון נשאר פתוח עם הודעת השגיאה מהשרת");
+});
+
+// ── 6. שינוי מ"שולם" ל"לא שולם" דורש אישור מפורש, ומבטל בשרת אטומית ──────
+
+await check("שינוי מ\"לא שולם\" ל\"שולם\" ובחזרה: ללא אישור מפורש (confirm בוטל) — שום דבר לא משתנה ואין קריאת ביטול לשרת", async function () {
+  var mod = loadDonorModule(makeFixtureDonor());
+  var netMock = mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
+
+  mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
+  mod.setInput("editDonationPaidSelect", "true");
+  mod.setInput("editDonationPaymentMethodSelect", "מזומן");
+  await mod.sandbox.saveDonationEdit(); // מסמן כשולם קודם, כדי שיהיה מה לבטל
+
   var confirmCalls = [];
   mod.sandbox.confirm = function (msg) { confirmCalls.push(msg); return false; }; // המשתמש לוחץ "ביטול"
+  var before = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
 
-  mod.sandbox.openEditDonationModal(DONATION_PAID_ID); // paid=true, paidPartial=300
+  mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
   mod.setInput("editDonationPaidSelect", "false");
   await mod.sandbox.saveDonationEdit();
 
   assert.strictEqual(confirmCalls.length, 1, "חייבים לבקש אישור מפורש");
-  assert.ok(confirmCalls[0].indexOf("300") !== -1, "האזהרה כוללת את הסכום שמתבטל");
-  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PAID_ID; });
+  assert.ok(confirmCalls[0].indexOf("500") !== -1, "האזהרה כוללת את הסכום שמתבטל");
+  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
   assert.deepStrictEqual(after, before, "בלי אישור — כלום לא משתנה");
+  assert.strictEqual(netMock.cancelBodies.length, 0, "בלי אישור, אין קריאת ביטול לשרת בכלל");
   assert.strictEqual(mod.getInput("editDonationModal").style.display, "flex", "החלון נשאר פתוח לאחר ביטול");
 });
 
-await check("שינוי מ\"שולם\" ל\"לא שולם\": לאחר אישור מפורש — מתבטל התשלום שנרשם, בלי לפגוע בעקביות (Audit Log מתעד את הביטול)", async function () {
+await check("שינוי מ\"לא שולם\" ל\"שולם\" ובחזרה: לאחר אישור מפורש — מתבטל בדיוק התשלום שנוצר, לא נמחק, וה-Audit Log מתעד", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  mod.sandbox.confirm = function () { return true; }; // המשתמש מאשר את הביטול
+  var netMock = mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
 
-  mod.sandbox.openEditDonationModal(DONATION_PAID_ID); // paid=true, amount=300, paidPartial=300
+  mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
+  mod.setInput("editDonationPaidSelect", "true");
+  mod.setInput("editDonationPaymentMethodSelect", "מזומן");
+  await mod.sandbox.saveDonationEdit();
+  var afterPay = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
+  assert.strictEqual(afterPay.paid, true);
+
+  mod.sandbox.confirm = function () { return true; }; // המשתמש מאשר את הביטול
+  mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
   mod.setInput("editDonationPaidSelect", "false");
   await mod.sandbox.saveDonationEdit();
 
-  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PAID_ID; });
+  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
   assert.strictEqual(after.paidPartial, 0);
-  assert.strictEqual(after.remainingDebt, 300);
+  assert.strictEqual(after.remainingDebt, 500);
   assert.strictEqual(after.paid, false);
+  assert.strictEqual(after.lastPaymentId, null);
   assert.strictEqual(mod.getInput("editDonationModal").style.display, "none");
+
+  assert.strictEqual(netMock.payments.length, 1, "התשלום המקורי לא נמחק — נשאר ברשימה");
+  assert.strictEqual(netMock.payments[0].status, "cancelled", "רק סומן כמבוטל");
 
   var logs = mod.getLogs();
   var log = logs[logs.length - 1];
-  assert.strictEqual(log.details, "בוטל תשלום שנרשם עבור התרומה (אושר במפורש ע\"י המשתמש)");
+  assert.strictEqual(log.details, "בוטל תשלום שנרשם עבור התרומה (אושר במפורש ע\"י המשתמש) (רשומת תשלום מס' 1)");
+});
+
+await check("תרומה ששולמה חלקית והושלמה ידנית: ביטול הפעולה החדשה מחזיר בדיוק למצב החלקי הקודם (400), לא ל-0", async function () {
+  var mod = loadDonorModule(makeFixtureDonor());
+  mockPaymentServer(mod, { amount: 1000, paidPartial: 400, remainingDebt: 600, paid: false });
+
+  mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID);
+  mod.setInput("editDonationPaidSelect", "true");
+  mod.setInput("editDonationPaymentMethodSelect", "מזומן");
+  await mod.sandbox.saveDonationEdit();
+  var afterComplete = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PARTIAL_ID; });
+  assert.strictEqual(afterComplete.paidPartial, 1000);
+
+  mod.sandbox.confirm = function () { return true; };
+  mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID);
+  mod.setInput("editDonationPaidSelect", "false");
+  await mod.sandbox.saveDonationEdit();
+
+  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_PARTIAL_ID; });
+  assert.strictEqual(after.paidPartial, 400, "חוזר בדיוק ל-400 שהיו משולמים לפני ההשלמה הידנית — לא ל-0");
+  assert.strictEqual(after.remainingDebt, 600);
+  assert.strictEqual(after.paid, false);
+});
+
+// ── ניסיון חוזר: אותו idempotencyKey בין שני קליקים על שמירה ─────────────
+
+await check("[ניסיון חוזר אחרי כשל/timeout] קליק שני על שמירה, בלי לסגור את החלון, שולח את אותו idempotencyKey כמו הראשון", async function () {
+  var mod = loadDonorModule(makeFixtureDonor());
+
+  mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
+  var keyAtOpen = mod.getIdempotencyKey();
+  mod.setInput("editDonationPaidSelect", "true");
+  mod.setInput("editDonationPaymentMethodSelect", "מזומן");
+
+  // "ניסיון" ראשון נכשל בתקשורת (כאילו timeout) — המודל נשאר פתוח
+  mod.sandbox.fetch = function () { return Promise.reject(new Error("timeout")); };
+  await mod.sandbox.saveDonationEdit();
+  assert.strictEqual(mod.getInput("editDonationModal").style.display, "flex", "עדיין פתוח אחרי כשל");
+  assert.strictEqual(mod.getIdempotencyKey(), keyAtOpen, "המפתח לא מתחלף כשהחלון נשאר פתוח");
+
+  // המשתמש לוחץ "שמור" שוב, באותו חלון פתוח — עכשיו השרת זמין
+  var netMock2 = mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
+  await mod.sandbox.saveDonationEdit();
+
+  assert.strictEqual(netMock2.postBodies.length, 1);
+  assert.strictEqual(netMock2.postBodies[0].idempotencyKey, keyAtOpen, "הניסיון השני חוזר עם אותו מפתח — retry-safe בצד השרת");
+
+  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
+  assert.strictEqual(after.paid, true);
 });
 
 // ── אישור מקושר (reconcileApprovalDrafts) ────────────────────────────────
@@ -562,7 +734,7 @@ await check("אישור מקושר: סימון \"שולם\" (עם רשומת ת�
     { id: 5001, donorId: DONOR_ID, donationId: DONATION_PARTIAL_ID, status: "טיוטה", amount: 600 },
   ];
   var mod = loadDonorModule(makeFixtureDonor(), approvals);
-  mockPaymentServer(mod);
+  mockPaymentServer(mod, { amount: 1000, paidPartial: 400, remainingDebt: 600, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_PARTIAL_ID);
   mod.setInput("editDonationPaidSelect", "true");
@@ -752,11 +924,35 @@ await check("כשל תקשורת (fetch נדחה/רשת נופלת) בזמן י�
   assert.strictEqual(mod.getInput("editDonationModal").style.display, "flex");
 });
 
+await check("כשל תשובת השרת בביטול תשלום: אין הצלחה כוזבת, החוב לא חוזר מוקדם מדי", async function () {
+  var mod = loadDonorModule(makeFixtureDonor());
+  mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
+
+  mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
+  mod.setInput("editDonationPaidSelect", "true");
+  mod.setInput("editDonationPaymentMethodSelect", "מזומן");
+  await mod.sandbox.saveDonationEdit();
+  var afterPay = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
+
+  mod.sandbox.confirm = function () { return true; };
+  mod.sandbox.fetch = function () {
+    return Promise.resolve({ ok: false, status: 500, json: function () { return Promise.resolve({ error: "שגיאת שרת" }); } });
+  };
+  mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
+  mod.setInput("editDonationPaidSelect", "false");
+  await mod.sandbox.saveDonationEdit();
+
+  var after = mod.getDonor().donations.find(function (d) { return d.id === DONATION_UNPAID_ID; });
+  assert.deepStrictEqual(after, afterPay, "כשל בביטול -> נשאר בדיוק כפי ששולם, לא חוזר ללא-שולם באופן חלקי");
+  assert.strictEqual(mod.getInput("editDonationMessage").innerText, "שגיאת שרת");
+  assert.strictEqual(mod.getInput("editDonationModal").style.display, "flex");
+});
+
 // ── לחיצה כפולה על שמירה ──────────────────────────────────────────────────
 
 await check("לחיצה כפולה על שמירה (לפני שהראשונה סיימה): בדיוק בקשת תשלום אחת נשלחת, לא שתיים", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
   mod.setInput("editDonationPaidSelect", "true");
@@ -775,7 +971,7 @@ await check("לחיצה כפולה על שמירה (לפני שהראשונה ס
 
 await check("לחיצה כפולה: הכפתורים מנוטרלים תוך כדי השמירה וחוזרים לזמינים אחרי שהיא מסתיימת", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  mockPaymentServer(mod);
+  mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
 
   mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
   mod.setInput("editDonationPaidSelect", "true");
@@ -790,7 +986,7 @@ await check("לחיצה כפולה: הכפתורים מנוטרלים תוך כ�
 
 await check("[קצה-לקצה] תשלום ידני מופיע פעם אחת בדיוק בהיסטוריית התשלומים, ב-Timeline, וב-Audit Log — לא כפול", async function () {
   var mod = loadDonorModule(makeFixtureDonor());
-  var netMock = mockPaymentServer(mod);
+  var netMock = mockPaymentServer(mod, { amount: 500, paidPartial: 0, remainingDebt: 500, paid: false });
   var logsBefore = mod.getLogs().length;
 
   mod.sandbox.openEditDonationModal(DONATION_UNPAID_ID);
@@ -806,7 +1002,7 @@ await check("[קצה-לקצה] תשלום ידני מופיע פעם אחת בד
 
   // 3) התשלום מופיע פעם אחת ב-Timeline (לא כפול), ולא נעלם/מתעלם ממנו
   var timelineHtml = mod.getInput("donorTimeline").innerHTML;
-  var occurrences = timelineHtml.split("תשלום IVR").length - 1;
+  var occurrences = timelineHtml.split("תשלום ידני").length - 1;
   assert.strictEqual(occurrences, 1, "התשלום מופיע פעם אחת בדיוק ב-Timeline");
 
   // 4) בדיוק רשומת Audit Log אחת חדשה (עדכון התרומה) — לא כפולה
