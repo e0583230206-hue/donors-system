@@ -41,6 +41,8 @@ const {
   getPayments,
   getPaymentById,
   getPaymentStats,
+  recordPayment,
+  findDonorByPhone,
   insertAuditLog,
   getAuditLogs,
   insertSyncLog,
@@ -961,7 +963,84 @@ app.get(
     try {
       var limit   = Math.min(Number(req.query.limit) || 500, 2000);
       var donorId = req.query.donorId ? Number(req.query.donorId) : null;
-      res.json(getPayments({ limit: limit, donorId: donorId }));
+      var phone   = req.query.phone ? String(req.query.phone) : null;
+      res.json(getPayments({ limit: limit, donorId: donorId, phone: phone }));
+    } catch (err) { next(err); }
+  }
+);
+
+// Records a real payment row for a donation manually marked "שולם" in the
+// donor card (cash/bank/etc — not an IVR call). Reuses the same `payments`
+// table and `recordPayment()` insert already used for CRM payment history/
+// reports/receipts, instead of a second parallel payment mechanism — see
+// donor.js saveDonationEdit(). Deliberately does NOT call
+// savePaymentInTransaction()/saveIvrPaymentOnce() — those also write to
+// ivr_donations, which is specifically "this phone call reported a payment"
+// and would misrepresent a manual entry as an IVR event.
+//
+// payments.donorId is a foreign key into the SQL `donors` table — the
+// phone-keyed IVR identity table populated by /api/donors/sync — which is a
+// completely different id space from the CRM's frontend donor.id in :id.
+// Resolve (or create) that row by phone via upsertDonor/findDonorByPhone,
+// same as the IVR flow does, instead of writing the frontend id into a
+// column it doesn't belong in (an unresolvable phone still records the
+// payment with donorId: null — it stays findable by phone).
+app.post(
+  "/api/donors/:id/manual-payment",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var appDonorId = parseInt(req.params.id, 10);
+      if (!appDonorId) return res.status(400).json({ error: "Invalid donor id" });
+
+      var amount = Number(req.body && req.body.amount);
+      if (!isFinite(amount) || amount <= 0 || amount > MAX_SANE_AMOUNT) {
+        return res.status(400).json({ error: "סכום לא תקין" });
+      }
+
+      var phone      = req.body && req.body.phone      ? String(req.body.phone).trim().slice(0, 30)   : "";
+      var donorName  = req.body && req.body.donorName  ? String(req.body.donorName).trim().slice(0, 200) : "";
+      var paymentMethod = req.body && req.body.paymentMethod ? String(req.body.paymentMethod).trim().slice(0, 50) : "";
+
+      var sqlDonorId = null;
+      if (phone) {
+        if (donorName) { try { upsertDonor(phone, donorName); } catch (_) {} }
+        var resolved = findDonorByPhone(phone);
+        if (resolved) sqlDonorId = resolved.id;
+      }
+
+      // Unique per request so a genuine double-click (two concurrent requests)
+      // can never race past the client-side re-entrancy guard into two rows —
+      // callId is UNIQUE in the payments table, same de-dup mechanism IVR
+      // payments already rely on (see payment.service.js saveIvrPaymentOnce).
+      var idempotencyKey = "manual-" + appDonorId + "-" + Date.now() + "-" + crypto.randomBytes(4).toString("hex");
+
+      var result = recordPayment({
+        callId:             idempotencyKey,
+        phone:              phone,
+        donorId:            sqlDonorId,
+        amount:             amount,
+        status:             "success",
+        source:             "manual",
+        confirmationNumber: null,
+      });
+
+      var payment = getPaymentById(result.lastInsertRowid);
+
+      try {
+        insertAuditLog({
+          action:     "create",
+          entityType: "payment",
+          entityId:   appDonorId,
+          entityName: donorName || null,
+          details:    "תשלום ידני נרשם בסך " + amount + " ₪" + (paymentMethod ? " (" + paymentMethod + ")" : ""),
+          workerId:   req.user && req.user.id,
+          workerName: req.user && req.user.name,
+          ip:         req.ip,
+        });
+      } catch (_) {}
+
+      res.json({ ok: true, payment: payment });
     } catch (err) { next(err); }
   }
 );

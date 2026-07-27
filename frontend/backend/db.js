@@ -523,10 +523,17 @@ function savePaymentInTransaction(details) {
 
 // ── Payments list / single / stats (for CRM payments screen) ─────────────────
 
+// donorId here is the SQL donors(id) — the phone-keyed IVR identity table —
+// which is NOT the same id space as the CRM's frontend donor.id (see
+// findDonorByPhone/upsertDonor). The optional `phone` filter exists because
+// callers on the CRM side (e.g. donor.html) only know the donor by their
+// app-level id/phone, not this table's id, and normalizing by phone is the
+// one thing both id spaces agree on.
 function getPayments(opts) {
   var options = (typeof opts === "object" && opts !== null) ? opts : { limit: opts };
   var limit   = Math.min(Number(options.limit) || 500, 2000);
   var donorId = options.donorId ? Number(options.donorId) : null;
+  var phone   = options.phone ? normalizePhoneForDb(options.phone) : null;
 
   var base = `
     SELECT p.id, p.callId, p.phone, p.donorId, p.amount, p.status, p.source,
@@ -535,10 +542,15 @@ function getPayments(opts) {
     FROM   payments p
     LEFT JOIN donors d ON d.id = p.donorId
   `;
-  if (donorId) {
-    return db.prepare(base + " WHERE p.donorId = ? ORDER BY p.id DESC LIMIT ?").all(donorId, limit);
-  }
-  return db.prepare(base + " ORDER BY p.id DESC LIMIT ?").all(limit);
+
+  var where  = [];
+  var params = [];
+  if (donorId) { where.push("p.donorId = ?"); params.push(donorId); }
+  if (phone)   { where.push(STRIP_PHONE_SQL.replace(/\bphone\b/g, "p.phone") + " = ?"); params.push(phone); }
+
+  var sql  = base + (where.length ? " WHERE " + where.join(" AND ") : "") + " ORDER BY p.id DESC LIMIT ?";
+  var stmt = db.prepare(sql);
+  return stmt.all.apply(stmt, params.concat([limit]));
 }
 
 function getPaymentById(id) {

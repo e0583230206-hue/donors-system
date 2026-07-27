@@ -65,6 +65,20 @@ const partialMessage = document.getElementById("partialMessage");
 
 const donationsTable = document.getElementById("donationsTable");
 
+const editDonationModal = document.getElementById("editDonationModal");
+const editDonationAmountInput = document.getElementById("editDonationAmountInput");
+const editDonationParshaInput = document.getElementById("editDonationParshaInput");
+const editDonationPurposeSelect = document.getElementById("editDonationPurposeSelect");
+const editDonationCustomPurposeInput = document.getElementById("editDonationCustomPurposeInput");
+const editDonationPaymentMethodSelect = document.getElementById("editDonationPaymentMethodSelect");
+const editDonationPaidSelect = document.getElementById("editDonationPaidSelect");
+const editDonationNoteInput = document.getElementById("editDonationNoteInput");
+const saveDonationEditButton = document.getElementById("saveDonationEditButton");
+const cancelDonationEditButton = document.getElementById("cancelDonationEditButton");
+const editDonationMessage = document.getElementById("editDonationMessage");
+
+let editingDonationId = null;
+
 
 function saveDonors() {
   Database.save("donors", donors);
@@ -742,7 +756,7 @@ function renderDonationsTable() {
   if (donor.donations.length === 0) {
     donationsTable.innerHTML = `
       <tr class="empty-state-row">
-        <td colspan="7">💰 אין עדיין תרומות לתורם זה</td>
+        <td colspan="8">💰 אין עדיין תרומות לתורם זה</td>
       </tr>
     `;
     return;
@@ -761,10 +775,262 @@ function renderDonationsTable() {
       <td class="${donation.remainingDebt > 0 ? "red-text" : "green-text"}">
         ${formatMoney(donation.remainingDebt, donation.currency)}
       </td>
+      <td><button type="button" class="small-btn" data-action="edit-donation" data-donation-id="${donation.id}">✏️ ערוך</button></td>
     `;
 
     donationsTable.appendChild(row);
   });
+}
+
+// Row actions are dispatched via delegation instead of an onclick="" string
+// built from row data (same fix class as the payments-receipt button, see
+// commit e5657ee / 17c0bb9) — donation.id is numeric so it was never an
+// injection vector here, but this keeps one consistent pattern for all
+// per-row action buttons in the app.
+function handleDonationsTableClick(e) {
+  var btn = e.target.closest("button[data-action='edit-donation']");
+  if (!btn) return;
+  var id = Number(btn.dataset.donationId);
+  if (!id) return;
+  openEditDonationModal(id);
+}
+donationsTable.addEventListener("click", handleDonationsTableClick);
+
+function openEditDonationModal(id) {
+  const donation = donor.donations.find(function (d) {
+    return d.id === id;
+  });
+  if (!donation) return;
+
+  editingDonationId = id;
+
+  editDonationAmountInput.value = donation.amount;
+  editDonationParshaInput.value = donation.parsha || "";
+
+  const knownPurposes = ["גליון מתאחדת", "פרנס"];
+  if (knownPurposes.indexOf(donation.purposeType) !== -1) {
+    editDonationPurposeSelect.value = donation.purposeType;
+    editDonationCustomPurposeInput.value = "";
+    editDonationCustomPurposeInput.classList.add("hidden");
+  } else {
+    editDonationPurposeSelect.value = "אחר";
+    editDonationCustomPurposeInput.value =
+      donation.customPurpose || donation.finalPurpose || "";
+    editDonationCustomPurposeInput.classList.remove("hidden");
+  }
+
+  editDonationPaymentMethodSelect.value = donation.paymentMethod || "מזומן";
+  editDonationPaidSelect.value = donation.remainingDebt > 0 ? "false" : "true";
+  editDonationNoteInput.value = donation.note || "";
+
+  editDonationMessage.innerText = "";
+  editDonationMessage.className = "message";
+  editDonationModal.style.display = "flex";
+}
+
+function closeEditDonationModal() {
+  editDonationModal.style.display = "none";
+  editingDonationId = null;
+}
+
+let savingDonationEdit = false; // re-entrancy guard — blocks a double-click from firing two saves/two payments
+
+async function saveDonationEdit() {
+  if (savingDonationEdit) return;
+
+  const donation = donor.donations.find(function (d) {
+    return d.id === editingDonationId;
+  });
+  if (!donation) return;
+
+  const amount = Number(editDonationAmountInput.value);
+  const manualParsha = editDonationParshaInput.value.trim();
+  const selectedPurpose = editDonationPurposeSelect.value;
+  const customPurpose = editDonationCustomPurposeInput.value.trim();
+  const paymentMethod = editDonationPaymentMethodSelect.value;
+  const paidSelection = editDonationPaidSelect.value === "true";
+  const note = editDonationNoteInput.value.trim();
+
+  if (!amount || amount <= 0) {
+    showMessage(editDonationMessage, "חובה להכניס סכום תקין", "error");
+    return;
+  }
+
+  if (selectedPurpose === "אחר" && customPurpose === "") {
+    showMessage(editDonationMessage, "בחרת אחר, צריך לכתוב מטרה", "error");
+    return;
+  }
+
+  const finalPurpose =
+    selectedPurpose === "אחר" ? customPurpose : selectedPurpose;
+
+  // Payment-status math. A donation only ever gets a new paidPartial/remainingDebt
+  // through one of two doors: the user explicitly flips the paid dropdown (a real
+  // manual payment event, handled below), or — if the dropdown didn't change — the
+  // existing paid amount is carried forward untouched and only remainingDebt is
+  // recomputed against the (possibly edited) amount. Editing amount/purpose/note
+  // must never manufacture or erase money that was or wasn't actually paid.
+  const wasPaid = donation.paid === true;
+  const existingPaidPartial = Number(donation.paidPartial || 0);
+  const statusChangedToPaid = paidSelection && !wasPaid;
+  const statusChangedToUnpaid = !paidSelection && wasPaid;
+
+  // Blocks both "no status change" edits AND "mark as paid" transitions that
+  // would retroactively shrink an already-collected amount. Exempt only the
+  // explicit "unpaid the payment" transition below, which legitimately zeroes
+  // paidPartial after the user has confirmed exactly that.
+  if (!statusChangedToUnpaid && amount < existingPaidPartial) {
+    showMessage(
+      editDonationMessage,
+      "אי אפשר להקטין את סכום התרומה מתחת לסכום שכבר שולם: " +
+        formatMoney(existingPaidPartial, donation.currency),
+      "error",
+    );
+    return;
+  }
+
+  if (statusChangedToUnpaid) {
+    var cancelPaymentConfirmed = confirm(
+      "פעולה זו תבטל את רישום התשלום שכבר נרשם עבור תרומה זו (" +
+        formatMoney(existingPaidPartial, donation.currency) +
+        "). התרומה תסומן מחדש כ\"לא שולם\". להמשיך?",
+    );
+    if (!cancelPaymentConfirmed) return;
+  }
+
+  var nextPaidPartial, nextRemainingDebt, nextPaid;
+  var nextLastPaymentMethod = donation.lastPaymentMethod;
+  var manualPaymentAmount = 0; // only the newly-collected slice — see "רק בגובה היתרה שנותרה"
+
+  if (statusChangedToPaid) {
+    nextPaidPartial = amount;
+    nextRemainingDebt = 0;
+    nextPaid = true;
+    nextLastPaymentMethod = paymentMethod;
+    manualPaymentAmount = amount - existingPaidPartial;
+  } else if (statusChangedToUnpaid) {
+    nextPaidPartial = 0;
+    nextRemainingDebt = amount;
+    nextPaid = false;
+  } else {
+    nextPaidPartial = existingPaidPartial;
+    nextRemainingDebt = amount - existingPaidPartial;
+    nextPaid = nextRemainingDebt === 0;
+  }
+
+  const previous = {
+    amount: donation.amount,
+    parsha: donation.parsha || "",
+    finalPurpose: donation.finalPurpose,
+    paymentMethod: donation.paymentMethod,
+    note: donation.note || "",
+    paidPartial: existingPaidPartial,
+    remainingDebt: Number(donation.remainingDebt || 0),
+    paidLabel: wasPaid ? "שולם" : "לא שולם",
+  };
+
+  const changes = [
+    { field: "amount", label: "סכום", before: String(previous.amount), after: String(amount) },
+    { field: "parsha", label: "פרשה", before: previous.parsha, after: manualParsha },
+    { field: "finalPurpose", label: "מטרה", before: previous.finalPurpose, after: finalPurpose },
+    { field: "paymentMethod", label: "אמצעי תשלום", before: previous.paymentMethod, after: paymentMethod },
+    { field: "note", label: "הערה", before: previous.note, after: note },
+    { field: "paidPartial", label: "סכום ששולם", before: String(previous.paidPartial), after: String(nextPaidPartial) },
+    { field: "remainingDebt", label: "יתרת חוב", before: String(previous.remainingDebt), after: String(nextRemainingDebt) },
+    { field: "paid", label: "סטטוס תשלום", before: previous.paidLabel, after: nextPaid ? "שולם" : "לא שולם" },
+  ].filter(function (change) {
+    return change.before !== change.after;
+  });
+
+  if (changes.length === 0) {
+    closeEditDonationModal();
+    showMessage(donationMessage, "לא בוצעו שינויים");
+    return;
+  }
+
+  savingDonationEdit = true;
+  saveDonationEditButton.disabled = true;
+  cancelDonationEditButton.disabled = true;
+
+  try {
+    // A manual "mark as paid" must produce a real row in the same payments
+    // table used by the payments screen/reports/receipts/Timeline — not just
+    // a field flip on the donation (see reconcileApprovalDrafts for the
+    // equivalent "keep other systems truthful" pattern on the approvals side).
+    // This is a real network round-trip, so — unlike the rest of this form,
+    // which saves through the app's local-first Database.save — we must wait
+    // for the server to actually confirm it before claiming success or
+    // touching local state. A rejected/failed request leaves the donation
+    // completely untouched and the modal open.
+    var createdPayment = null;
+    if (statusChangedToPaid && manualPaymentAmount > 0) {
+      try {
+        var res = await apiFetch("/api/donors/" + donor.id + "/manual-payment", {
+          method: "POST",
+          body: JSON.stringify({
+            amount: manualPaymentAmount,
+            phone: donor.phone || "",
+            donorName: donor.fullName || "",
+            paymentMethod: paymentMethod,
+          }),
+        });
+        if (!res.ok) {
+          var errBody = null;
+          try { errBody = await res.json(); } catch (_) {}
+          showMessage(editDonationMessage, (errBody && errBody.error) || "השמירה נכשלה בשרת — התשלום לא נרשם, נסה שוב", "error");
+          return;
+        }
+        var resBody = await res.json();
+        createdPayment = resBody && resBody.payment;
+      } catch (_) {
+        showMessage(editDonationMessage, "שגיאת תקשורת עם השרת — התשלום לא נרשם, נסה שוב", "error");
+        return;
+      }
+    }
+
+    donation.amount = amount;
+    donation.parsha = manualParsha;
+    donation.purposeType = selectedPurpose;
+    donation.customPurpose = customPurpose;
+    donation.finalPurpose = finalPurpose;
+    donation.paymentMethod = paymentMethod;
+    donation.note = note;
+    donation.paidPartial = nextPaidPartial;
+    donation.remainingDebt = nextRemainingDebt;
+    donation.paid = nextPaid;
+    donation.lastPaymentMethod = nextLastPaymentMethod;
+    if (createdPayment) donation.lastPaymentId = createdPayment.id;
+    donation.updatedAt = new Date().toISOString();
+    donor.updatedAt = new Date().toISOString();
+
+    saveDonors();
+    reconcileApprovalDrafts([donation]);
+
+    var details = statusChangedToPaid
+      ? "התרומה סומנה כשולמה ידנית באמצעי " + paymentMethod +
+        (createdPayment ? " (רשומת תשלום מס' " + createdPayment.id + ")" : "")
+      : statusChangedToUnpaid
+        ? "בוטל תשלום שנרשם עבור התרומה (אושר במפורש ע\"י המשתמש)"
+        : "עודכנה תרומה";
+
+    AuditLog.record({
+      action: "update",
+      entityType: "donation",
+      entityId: donation.id,
+      entityName: donor.fullName,
+      details: details,
+      changes: changes,
+    });
+
+    closeEditDonationModal();
+    showMessage(donationMessage, "התרומה עודכנה בהצלחה");
+    renderAll();
+    if (createdPayment) await loadDonorPayments(); // refresh payments panel + Timeline immediately, no reload needed
+  } finally {
+    savingDonationEdit = false;
+    saveDonationEditButton.disabled = false;
+    cancelDonationEditButton.disabled = false;
+  }
 }
 
 function renderTags() {
@@ -1162,6 +1428,22 @@ addDonationButton.addEventListener("click", addDonation);
 saveIvrButton.addEventListener("click", saveIvrSettings);
 partialPaymentButton.addEventListener("click", registerPartialPayment);
 
+editDonationPurposeSelect.addEventListener("change", function () {
+  if (editDonationPurposeSelect.value === "אחר") {
+    editDonationCustomPurposeInput.classList.remove("hidden");
+  } else {
+    editDonationCustomPurposeInput.classList.add("hidden");
+    editDonationCustomPurposeInput.value = "";
+  }
+});
+
+saveDonationEditButton.addEventListener("click", saveDonationEdit);
+cancelDonationEditButton.addEventListener("click", closeEditDonationModal);
+editDonationModal.addEventListener("click", function (e) {
+  if (savingDonationEdit) return; // don't let an outside-click abandon an in-flight payment save
+  if (e.target === editDonationModal) closeEditDonationModal();
+});
+
 Database.whenReady(function () {
   donors = Database.get("donors");
   donor  = donors.find(function (item) { return item.id === donorId; });
@@ -1342,6 +1624,12 @@ Database.whenReady(function () {
 // ── IVR payment history for this donor ───────────────────────────────────────
 async function loadDonorPayments() {
   if (!donorId || typeof apiFetch !== "function") return;
+  // payments.donorId is a different id space (see server.js manual-payment
+  // route) — donor.phone is the one thing this table and the CRM donor both
+  // agree on, so filtering by phone is required, not optional. An empty
+  // phone must never be sent as a filter: the server treats a falsy `phone`
+  // query param as "no filter" and would return every donor's payments.
+  if (!donor.phone) return;
   var panel   = document.getElementById("ivrPaymentsPanel");
   var loading = document.getElementById("ivrPaymentsLoading");
   var tbody   = document.getElementById("ivrPaymentsTable");
@@ -1349,7 +1637,7 @@ async function loadDonorPayments() {
 
   loading.style.display = "block";
   try {
-    var res = await apiFetch("/api/payments?donorId=" + encodeURIComponent(donorId) + "&limit=100");
+    var res = await apiFetch("/api/payments?phone=" + encodeURIComponent(donor.phone) + "&limit=100");
     if (!res.ok) return;
     var payments = await res.json();
     if (!payments || payments.length === 0) return;
