@@ -809,6 +809,15 @@ function validateApprovalsPayload(approvals) {
   return null;
 }
 
+// Deliberately content-free: a count (or "עודכן" for a non-array blob like
+// settings/sip_config) is the only thing derived from the payload itself.
+// Never inspect field values here — this summary is what lands in
+// server_audit_log, so it must stay safe by construction even for keys that
+// hold phone numbers, addresses or free-text notes (donors/tasks/approvals).
+function summarizeDataSaveForAudit(body) {
+  return Array.isArray(body) ? body.length + " רשומות" : "עודכן";
+}
+
 app.get("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function (req, res, next) {
   try {
     const key  = req.params.key;
@@ -878,6 +887,30 @@ app.post("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function
       return res.status(400).json({ error: "Unknown data key: " + key });
     }
 
+    // Baseline trace for EVERY successful save through this endpoint, for
+    // EVERY key — independent of whether the client also separately saved a
+    // matching entry to "logs" (the mirror below). This is what guarantees a
+    // save can never pass through the server untraced just because a buggy
+    // or compromised client skipped AuditLog.record(): who (from the
+    // verified JWT), what key, when, from which IP, and a safe count-only
+    // summary — never the record content itself.
+    try {
+      insertAuditLog({
+        action:     "data_save",
+        entityType: key,
+        entityId:   null,
+        entityName: null,
+        details:    summarizeDataSaveForAudit(body),
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+    } catch (_) {}
+
+    // Richer, per-entity detail (action/entityType/entityId/entityName/
+    // changed fields) is still mirrored from the client's own AuditLog trail
+    // when available — see data-audit-mirror.service.js. This is additive to
+    // the baseline row above, not a replacement for it.
     if (key === "logs") {
       try {
         mirrorLogEntriesToAuditLog(

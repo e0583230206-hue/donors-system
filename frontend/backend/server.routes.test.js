@@ -190,9 +190,30 @@ async function main() {
     assert.strictEqual(res.status, 409);
   });
 
-  // ── מיזוג audit log (data-audit-mirror.service.js) ──────────────────────────
+  // ── audit log: baseline trace (כל שמירה) + מיזוג עשיר (data-audit-mirror.service.js) ──
 
-  await check("POST /api/data/logs עם רשומת AuditLog חדשה -> נוצרת שורה תואמת ב-server_audit_log, עם workerId מה-JWT ולא מהרשומה", async function () {
+  await check("POST /api/data/donors לבדו (בלי שום קריאה ל-/api/data/logs) יוצר רשומת audit בסיסית בצד השרת", async function () {
+    const before = db.getAuditLogs(1000).length;
+
+    const res = await jsonFetch("POST", "/api/data/donors", [
+      { id: 2, fullName: "תורם לבדיקת audit בסיסי", phone: "0509999999", donations: [], notes: "הערה רגישה שלא אמורה להישמר בלוג" },
+    ], adminToken);
+    assert.strictEqual(res.status, 200);
+
+    const logs = db.getAuditLogs(1000);
+    assert.strictEqual(logs.length, before + 1, "a successful donors save must leave exactly one baseline audit row on its own, with no /api/data/logs call at all");
+
+    const row = logs[0]; // getAuditLogs orders by id DESC -> most recent first
+    assert.strictEqual(row.action, "data_save");
+    assert.strictEqual(row.entityType, "donors");
+    assert.strictEqual(row.workerName, "מנהל מערכת", "workerName must come from the authenticated admin (JWT), not the request body");
+
+    const serialized = JSON.stringify(row);
+    assert.ok(!serialized.includes("0509999999"), "audit row must never contain the donor's phone number");
+    assert.ok(!serialized.includes("הערה רגישה"), "audit row must never contain free-text notes");
+  });
+
+  await check("POST /api/data/logs עם רשומת AuditLog חדשה -> יוצר גם שורת בסיס (data_save) וגם שורת מיזוג מדויקת, עם workerId מה-JWT ולא מהרשומה", async function () {
     const before = db.getAuditLogs(1000).length;
 
     await jsonFetch("POST", "/api/data/logs", [
@@ -208,16 +229,23 @@ async function main() {
     ], adminToken);
 
     const logs = db.getAuditLogs(1000);
-    assert.strictEqual(logs.length, before + 1, "expected exactly one new server_audit_log row");
-    const mirrored = logs[0]; // getAuditLogs orders by id DESC
+    // +2: one baseline "data_save"/entityType="logs" row (fires for every key,
+    // every time) plus one precise mirrored row for the entry itself.
+    assert.strictEqual(logs.length, before + 2, "expected one baseline row plus one mirrored row");
+
+    const mirrored = logs[0]; // mirror is inserted after the baseline row -> higher id -> first in DESC order
     assert.strictEqual(mirrored.action, "create");
     assert.strictEqual(mirrored.entityType, "donor");
     assert.strictEqual(mirrored.entityName, "תורם לדוגמה");
     assert.strictEqual(mirrored.workerName, "מנהל מערכת", "workerName must come from the authenticated admin, not the client payload");
     assert.notStrictEqual(mirrored.workerId, 999999);
+
+    const baseline = logs[1];
+    assert.strictEqual(baseline.action, "data_save");
+    assert.strictEqual(baseline.entityType, "logs");
   });
 
-  await check("POST /api/data/logs פעם שנייה עם אותה רשומה (id זהה) -> לא ממוזג שוב", async function () {
+  await check("POST /api/data/logs פעם שנייה עם אותה רשומה (id זהה) -> שורת בסיס חדשה נוספת (שמירה קרתה), אבל בלי מיזוג כפול של אותה רשומה", async function () {
     const sharedEntry = {
       id: 777777,
       action: "delete",
@@ -230,11 +258,20 @@ async function main() {
     const withEntry = currentLogs.body.concat([sharedEntry]);
 
     await jsonFetch("POST", "/api/data/logs", withEntry, adminToken);
-    const before = db.getAuditLogs(1000).length;
+    const countMirroredFor777776 = function (logs) {
+      return logs.filter(function (r) { return r.action === "delete" && r.entityType === "task" && r.entityId === "5"; }).length;
+    };
+    const before = db.getAuditLogs(1000);
+    const mirroredCountBefore = countMirroredFor777776(before);
 
     await jsonFetch("POST", "/api/data/logs", withEntry, adminToken); // re-save identical array — no new id
-    const after = db.getAuditLogs(1000).length;
-    assert.strictEqual(after, before, "re-saving the same logs array must not mirror the same entry twice");
+    const after = db.getAuditLogs(1000);
+
+    // The baseline "data_save" row still fires (a save genuinely happened),
+    // but the precise per-entity mirror must not duplicate an entry it has
+    // already recorded.
+    assert.strictEqual(after.length, before.length + 1, "exactly one new baseline data_save row, no more");
+    assert.strictEqual(countMirroredFor777776(after), mirroredCountBefore, "re-saving the same logs array must not mirror the same entry twice");
   });
 
   // ── סיכום ────────────────────────────────────────────────────────────────
