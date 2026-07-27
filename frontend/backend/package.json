@@ -6,7 +6,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node scripts/run-tests.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

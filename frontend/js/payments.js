@@ -6,6 +6,7 @@ var currentPage  = 0;
 var pageSize     = 100;
 var quickFilter  = "all";
 var _currentReceipt = null;
+var lastRenderedRows = []; // payment objects for the currently rendered page, indexed by row position (see tableBody click delegation below)
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 var searchInput     = document.getElementById("searchInput");
@@ -45,12 +46,11 @@ function statusBadge(status) {
   return '<span class="badge badge-def">' + escapeHTML(status) + '</span>';
 }
 
-function shortCallId(callId) {
+function shortCallId(callId, rowIndex) {
   if (!callId) return "—";
   var short = callId.length > 10 ? callId.slice(0, 10) + "…" : callId;
   return '<span class="callid-cell">' +
-    '<button class="copy-btn" title="העתק Call ID" onclick="copyCallId(\'' +
-      escapeHTML(callId) + '\')" >📋</button>' +
+    '<button class="copy-btn" type="button" data-action="copy-callid" data-index="' + rowIndex + '" title="העתק Call ID">📋</button>' +
     '<span class="callid-short" title="' + escapeHTML(callId) + '">' + escapeHTML(short) + '</span>' +
     '</span>';
 }
@@ -225,7 +225,9 @@ function renderTable(rows) {
     return;
   }
 
-  tableBody.innerHTML = rows.map(function (p) {
+  lastRenderedRows = rows;
+
+  tableBody.innerHTML = rows.map(function (p, i) {
     var donorCell = p.donorId
       ? '<a href="donor.html?id=' + p.donorId + '">' + escapeHTML(p.donorName || "—") + '</a>'
       : escapeHTML(p.donorName || "לא ידוע");
@@ -237,15 +239,31 @@ function renderTable(rows) {
       "<td style='font-weight:600;white-space:nowrap'>" + formatMoney(p.amount) + "</td>" +
       "<td>" + escapeHTML(p.confirmationNumber || "—") + "</td>" +
       "<td>" + escapeHTML(p.source || "ivr") + "</td>" +
-      "<td>" + shortCallId(p.callId) + "</td>" +
+      "<td>" + shortCallId(p.callId, i) + "</td>" +
       "<td>" + statusBadge(p.status) + "</td>" +
       "<td style='white-space:nowrap'>" +
-        "<button class='copy-btn' onclick='showReceipt(" + JSON.stringify(p).replace(/'/g, "\\'") + ")' title='קבלה'>🧾</button> " +
-        "<button class='copy-btn' onclick='showIvrFlow(\"" + escapeHTML(p.callId || "") + "\")' title='רצף IVR'>📡</button>" +
+        "<button class='copy-btn' type='button' data-action='receipt' data-index='" + i + "' title='קבלה'>🧾</button> " +
+        "<button class='copy-btn' type='button' data-action='flow' data-index='" + i + "' title='רצף IVR'>📡</button>" +
       "</td>" +
       "</tr>";
   }).join("");
 }
+
+// Row actions are dispatched via delegation instead of building onclick="" strings
+// from payment data (donor names / call IDs can contain quotes and other characters
+// that break naive string-built attribute values — see commit 17c0bb9 and payments.js
+// receipt-button bug for two real instances of that failure).
+tableBody.addEventListener("click", function (e) {
+  var btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  var p = lastRenderedRows[Number(btn.dataset.index)];
+  if (!p) return;
+  switch (btn.dataset.action) {
+    case "receipt":      showReceipt(p); break;
+    case "flow":         showIvrFlow(p.callId || ""); break;
+    case "copy-callid":  copyCallId(p.callId || ""); break;
+  }
+});
 
 // ── Receipt ───────────────────────────────────────────────────────────────────
 function showReceipt(p) {

@@ -6,7 +6,28 @@ on:
       - master
 
 jobs:
+  test:
+    # Runs the full backend test suite (frontend/backend/*.test.js and
+    # scripts/*.test.js — 21 files as of this writing) on a clean GitHub-hosted
+    # runner, entirely separate from the production server. These tests are
+    # pure/DI-style or use their own temporary sqlite files (see each file's
+    # own header comment) — none of them touch the real server, its .env, or
+    # its data.sqlite, so running them here is safe and requires no secrets.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+      - name: Install dependencies
+        working-directory: frontend/backend
+        run: npm ci
+      - name: Run test suite
+        working-directory: frontend/backend
+        run: npm test
+
   deploy:
+    needs: test # deploy must never start if a single test failed
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH

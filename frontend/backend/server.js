@@ -112,6 +112,7 @@ const {
   probeAudioSafe:       convProbeAudioSafe,
   convertToTmpWav:      convConvertToTmpWav,
 } = require("./scripts/convert-ivr-audio-to-wav");
+const { mirrorLogEntriesToAuditLog } = require("./data-audit-mirror.service");
 
 const PORT         = Number(process.env.PORT || 3000);
 const IVR_KEY      = process.env.IVR_KEY || "";
@@ -845,6 +846,11 @@ app.post("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function
       if (approvalsErr) return res.status(400).json({ error: approvalsErr });
     }
 
+    // Snapshot the previous "logs" blob before it's overwritten below, so any
+    // newly-appended AuditLog.record() entries can be mirrored into the
+    // tamper-resistant server_audit_log table (see data-audit-mirror.service.js).
+    var previousLogs = key === "logs" ? getAppState("logs") : null;
+
     // Optimistic concurrency check — if the client tells us what version it
     // last read (X-Expected-Updated-At) and the stored data has moved on
     // since, reject the save instead of silently overwriting whatever the
@@ -870,6 +876,17 @@ app.post("/api/data/:key", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function
 
     if (!ok) {
       return res.status(400).json({ error: "Unknown data key: " + key });
+    }
+
+    if (key === "logs") {
+      try {
+        mirrorLogEntriesToAuditLog(
+          previousLogs,
+          body,
+          { workerId: req.user.id, workerName: req.user.name, ip: req.ip },
+          insertAuditLog
+        );
+      } catch (_) {}
     }
 
     var newUpdatedAt = getAppStateUpdatedAt(key);
@@ -2528,71 +2545,82 @@ app.use(function (err, req, res, _next) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, function () {
-  console.log("[" + new Date().toISOString() + "] Server running on port " + PORT + " (NODE_ENV=" + (process.env.NODE_ENV || "development") + ")");
-});
+// Exported unconditionally so tests can `require("./server")` to get the
+// Express app and drive it with their own ephemeral http server (same
+// pattern already used by ivr-audio-paymsg.routes.test.js), without ever
+// binding the real PORT or running the backup job below. Has no effect on
+// production: PM2 always launches this file as `node server.js`
+// (pm2.ecosystem.config.js: script: "server.js"), so require.main === module
+// there and the guarded block always runs exactly as before.
+module.exports = app;
 
-// ── Daily SQLite backup ───────────────────────────────────────────────────────
-(function scheduleDailyBackup() {
-  const BACKUP_DIR   = path.join(__dirname, "backups");
-  const MAX_AGE_DAYS = 30; // README_PRODUCTION.md documents "~30 days" of backups
+if (require.main === module) {
+  app.listen(PORT, function () {
+    console.log("[" + new Date().toISOString() + "] Server running on port " + PORT + " (NODE_ENV=" + (process.env.NODE_ENV || "development") + ")");
+  });
 
-  function todayDateStamp() {
-    return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  }
+  // ── Daily SQLite backup ─────────────────────────────────────────────────────
+  (function scheduleDailyBackup() {
+    const BACKUP_DIR   = path.join(__dirname, "backups");
+    const MAX_AGE_DAYS = 30; // README_PRODUCTION.md documents "~30 days" of backups
 
-  // A frequent restart/deploy day used to create a fresh backup every single
-  // time (this function also runs once immediately on startup, below) — skip
-  // if today's backup already exists instead of piling up several per day.
-  function hasBackupForToday() {
-    if (!fs.existsSync(BACKUP_DIR)) return false;
-    const today = todayDateStamp();
-    return fs.readdirSync(BACKUP_DIR).some(function (f) {
-      return f.indexOf("data-" + today) === 0 && f.endsWith(".sqlite");
-    });
-  }
-
-  function runBackup() {
-    if (!fs.existsSync(BACKUP_DIR)) {
-      try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch (e) {
-        console.error("[Backup] Cannot create backup dir:", e.message);
-        return;
-      }
+    function todayDateStamp() {
+      return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     }
 
-    if (hasBackupForToday()) {
-      console.log("[Backup] Already have a backup for today — skipping.");
-    } else {
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
-      const dest  = path.join(BACKUP_DIR, "data-" + stamp + ".sqlite");
+    // A frequent restart/deploy day used to create a fresh backup every single
+    // time (this function also runs once immediately on startup, below) — skip
+    // if today's backup already exists instead of piling up several per day.
+    function hasBackupForToday() {
+      if (!fs.existsSync(BACKUP_DIR)) return false;
+      const today = todayDateStamp();
+      return fs.readdirSync(BACKUP_DIR).some(function (f) {
+        return f.indexOf("data-" + today) === 0 && f.endsWith(".sqlite");
+      });
+    }
+
+    function runBackup() {
+      if (!fs.existsSync(BACKUP_DIR)) {
+        try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch (e) {
+          console.error("[Backup] Cannot create backup dir:", e.message);
+          return;
+        }
+      }
+
+      if (hasBackupForToday()) {
+        console.log("[Backup] Already have a backup for today — skipping.");
+      } else {
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
+        const dest  = path.join(BACKUP_DIR, "data-" + stamp + ".sqlite");
+        try {
+          backupDatabase(dest);
+          console.log("[Backup] Created:", dest);
+        } catch (e) {
+          console.error("[Backup] Failed:", e.message);
+        }
+      }
+
+      // Prune by age (matches the ~30-days retention already documented in
+      // README_PRODUCTION.md), not by file count — a count-based prune deletes
+      // backups faster than 30 calendar days on any day with several restarts.
       try {
-        backupDatabase(dest);
-        console.log("[Backup] Created:", dest);
+        const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+        fs.readdirSync(BACKUP_DIR)
+          .filter(function (f) { return f.endsWith(".sqlite"); })
+          .forEach(function (f) {
+            const full = path.join(BACKUP_DIR, f);
+            let stat;
+            try { stat = fs.statSync(full); } catch (_) { return; }
+            if (stat.mtimeMs < cutoff) {
+              try { fs.unlinkSync(full); } catch (_) {}
+            }
+          });
       } catch (e) {
-        console.error("[Backup] Failed:", e.message);
+        console.error("[Backup] Prune failed:", e.message);
       }
     }
 
-    // Prune by age (matches the ~30-days retention already documented in
-    // README_PRODUCTION.md), not by file count — a count-based prune deletes
-    // backups faster than 30 calendar days on any day with several restarts.
-    try {
-      const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-      fs.readdirSync(BACKUP_DIR)
-        .filter(function (f) { return f.endsWith(".sqlite"); })
-        .forEach(function (f) {
-          const full = path.join(BACKUP_DIR, f);
-          let stat;
-          try { stat = fs.statSync(full); } catch (_) { return; }
-          if (stat.mtimeMs < cutoff) {
-            try { fs.unlinkSync(full); } catch (_) {}
-          }
-        });
-    } catch (e) {
-      console.error("[Backup] Prune failed:", e.message);
-    }
-  }
-
-  runBackup();
-  setInterval(runBackup, 24 * 60 * 60 * 1000);
-}());
+    runBackup();
+    setInterval(runBackup, 24 * 60 * 60 * 1000);
+  }());
+}
