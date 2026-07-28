@@ -207,6 +207,12 @@ async function main() {
   // ── מדמים העלאה שהצליחה (ללא ffmpeg אמיתי) ע"י כתיבה ישירה ל-DB, ואז בודקים
   //    את מחזור החיים המלא (הפעלה/כיבוי/לוח זמנים/מחיקה) מעל HTTP אמיתי ─────────
 
+  // Snapshot of every OTHER row's state (all 83+ catalog recordings —
+  // OPEN-001 and everything else), taken BEFORE any enable/schedule/disable
+  // call below, so the later check can prove the whole cycle never touched
+  // any of them — not just OPEN-001 in isolation.
+  var otherRowsBefore = db.getIvrAudioRecordings().filter(function (r) { return r.audioId !== db.PREGREETING_AUDIO_ID; });
+
   await check("(seed) קובץ מאושר לדימוי העלאה מוצלחת", async function () {
     db.setIvrAudioRecordingSlots(db.PREGREETING_AUDIO_ID, {
       audioFile1: "pregreeting-seed-abc123.wav", audioFile2: "", audioFile3: "", status: "אושר",
@@ -270,6 +276,11 @@ async function main() {
     const status = await jsonFetch("GET", "/api/admin/ivr-audio/pregreeting", undefined, adminToken);
     assert.strictEqual(status.body.enabled, false);
     assert.strictEqual(status.body.hasFile, true, "כיבוי לא מוחק את הקובץ");
+  });
+
+  await check("מחזור מלא של הפעלה+לוח זמנים+כיבוי של ההודעה הזמנית לא נגע בשום שדה של אף הקלטה אחרת (כולל OPEN-001)", function () {
+    var otherRowsAfter = db.getIvrAudioRecordings().filter(function (r) { return r.audioId !== db.PREGREETING_AUDIO_ID; });
+    assert.deepStrictEqual(otherRowsAfter, otherRowsBefore, "83+ ההקלטות האחרות חייבות להישאר זהות ביט-לביט אחרי הפעלה/לוח-זמנים/כיבוי של ההודעה הזמנית");
   });
 
   // ── נעילה: מונעת פעולה כפולה ────────────────────────────────────────────────

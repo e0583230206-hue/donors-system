@@ -2321,6 +2321,14 @@ reloadWorkers().then(function () { renderWorkers(); });
 
   async function setEnabled(enabled) {
     if (busy) return;
+    // Explicit confirmation for both directions — activating starts playing
+    // the message to real callers immediately (before the fixed opening);
+    // deactivating stops only this message (the file itself, the fixed
+    // opening, and the other 83 recordings are all unaffected either way).
+    var confirmMsg = enabled
+      ? "להפעיל את ההודעה הזמנית? היא תושמע לפני הפתיח הקבוע בתחילת כל שיחה, עד שתכבו אותה."
+      : "לכבות את ההודעה הזמנית? היא תפסיק להישמע בשיחות (הקובץ עצמו לא יימחק וניתן להפעיל שוב בכל עת).";
+    if (!confirm(confirmMsg)) return;
     setBusy(true);
     try {
       var res = await apiFetch("/api/admin/ivr-audio/pregreeting/enabled", {
