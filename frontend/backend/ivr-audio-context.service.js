@@ -10,6 +10,15 @@
 // ivr-audio-resolver.service.js, which it wraps) is the only place that
 // does.
 //
+// getPregreetingFiles() (the temporary pre-greeting message, PREGREETING-001)
+// is DELIBERATELY independent of IVR_AUDIO_MODE — see buildAudioContext()
+// below. It has its own, separate gate (enabled + approved file + optional
+// Asia/Jerusalem schedule window — see ivr-pregreeting.service.js's
+// isPregreetingActiveNow), and must keep working (or stay silent) exactly
+// according to THAT gate whether IVR_AUDIO_MODE is off, trial, or on. Turning
+// the pre-greeting on must never require turning on audio for the other 83
+// catalog recordings, and IVR_AUDIO_MODE=off must never silence it either.
+//
 // resolveOrText's exact-text reverse lookup (Hebrew sentence -> audioId) is
 // now a SECONDARY mechanism only — ivr.js uses explicit rid(audio, audioId,
 // fallbackText) calls for every message with a known audioId (see the fix
@@ -98,7 +107,14 @@ function realAudioContext() {
 }
 
 // phone: raw (not-yet-normalized) caller phone for this call.
-function buildAudioContext(phone) {
+// deps (optional — tests only; production always omits this and gets the
+// real ivr-pregreeting.service.js wiring):
+//   getPregreetingFiles() -> [] | [{fileLink,fileName}]
+function buildAudioContext(phone, deps) {
+  const getPregreetingFiles = (deps && typeof deps.getPregreetingFiles === "function")
+    ? deps.getPregreetingFiles
+    : buildPregreetingFilesForProduction;
+
   const mode = parseAudioMode(process.env.IVR_AUDIO_MODE);
   const trialPhone = normalizePhone(process.env.IVR_AUDIO_TRIAL_CALLER_PHONE || "");
   const useAudio = shouldUseAudioForCall({
@@ -106,7 +122,17 @@ function buildAudioContext(phone) {
     phone: normalizePhone(phone),
     trialPhone: trialPhone,
   });
-  return useAudio ? realAudioContext() : passthroughAudioContext();
+  const base = useAudio ? realAudioContext() : passthroughAudioContext();
+
+  // The pre-greeting is NOT part of the useAudio decision above — see the
+  // module header comment. resolveOrText/resolveAudioId still follow
+  // IVR_AUDIO_MODE exactly as before (unchanged for the other 83
+  // recordings); only getPregreetingFiles is spliced in independently here.
+  return {
+    resolveOrText: base.resolveOrText,
+    resolveAudioId: base.resolveAudioId,
+    getPregreetingFiles: getPregreetingFiles,
+  };
 }
 
 // ── PAYMSG (Technoline creditCard-module systemMessages, S3000-S3023) ──────
