@@ -88,6 +88,71 @@ check("resolveOrText עם {text} (לא הצליח) → אין שום לוג", fu
   assert.deepStrictEqual(logs, []);
 });
 
+// ── getPregreetingFiles ─────────────────────────────────────────────────────
+// Regression coverage for the real production bug: this wrapper used to
+// rebuild a plain {resolveOrText, resolveAudioId} object, silently dropping
+// getPregreetingFiles — since handleIvrQuery() reassigns `audio` to this
+// wrapper's return value before ever calling ivr.js, the pre-greeting could
+// never play in production no matter its enabled/schedule state. See
+// ivr-pregreeting-production-path.test.js for the full end-to-end proof
+// through the real handleIvrQuery() entry point.
+
+check("wrapAudioForDiagnosticLog מחזיר עטיפה שכוללת getPregreetingFiles כפונקציה (לא undefined)", function () {
+  const realAudio = {
+    resolveOrText: function (text) { return { text: text }; },
+    resolveAudioId: function (id, fb) { return { text: fb }; },
+    getPregreetingFiles: function () { return []; },
+  };
+  const wrapped = wrapAudioForDiagnosticLog(realAudio);
+  assert.strictEqual(typeof wrapped.getPregreetingFiles, "function", "זו בדיוק התקלה שקרתה בפרודקשן — getPregreetingFiles חייב להישאר פונקציה אחרי העטיפה");
+});
+
+check("getPregreetingFiles: מעביר את התוצאה האמיתית של realAudio, כולל fileLink", function () {
+  const item = { fileLink: "https://x/PREGREETING-001.wav", fileName: "PREGREETING-001" };
+  const realAudio = {
+    resolveOrText: function (text) { return { text: text }; },
+    resolveAudioId: function (id, fb) { return { text: fb }; },
+    getPregreetingFiles: function () { return [item]; },
+  };
+  const wrapped = wrapAudioForDiagnosticLog(realAudio);
+  assert.deepStrictEqual(wrapped.getPregreetingFiles(), [item]);
+});
+
+check("getPregreetingFiles עם תוצאה לא ריקה → לוג יחיד עם מספר פריטים בלבד, בלי תוכן ה-fileLink", function () {
+  const item = { fileLink: "https://x/PREGREETING-001.wav", fileName: "PREGREETING-001" };
+  const realAudio = {
+    resolveOrText: function (text) { return { text: text }; },
+    resolveAudioId: function (id, fb) { return { text: fb }; },
+    getPregreetingFiles: function () { return [item]; },
+  };
+  const wrapped = wrapAudioForDiagnosticLog(realAudio);
+  const logs = captureConsole(function () { wrapped.getPregreetingFiles(); });
+  assert.strictEqual(logs.length, 1);
+  assert.strictEqual(logs[0], "[IVR-DIAG] pregreeting_selected=1 item(s)");
+  assert.ok(!logs[0].includes("fileLink"));
+  assert.ok(!logs[0].includes(item.fileLink));
+});
+
+check("getPregreetingFiles עם [] (כבויה/לא בטווח) → אין שום לוג", function () {
+  const realAudio = {
+    resolveOrText: function (text) { return { text: text }; },
+    resolveAudioId: function (id, fb) { return { text: fb }; },
+    getPregreetingFiles: function () { return []; },
+  };
+  const wrapped = wrapAudioForDiagnosticLog(realAudio);
+  const logs = captureConsole(function () { wrapped.getPregreetingFiles(); });
+  assert.deepStrictEqual(logs, []);
+});
+
+check("getPregreetingFiles: אם realAudio לא מספק אותה בכלל (בדיקות ישנות) → [] בבטחה, לא זורק", function () {
+  const realAudio = {
+    resolveOrText: function (text) { return { text: text }; },
+    resolveAudioId: function (id, fb) { return { text: fb }; },
+  };
+  const wrapped = wrapAudioForDiagnosticLog(realAudio);
+  assert.deepStrictEqual(wrapped.getPregreetingFiles(), []);
+});
+
 check("הערך המוחזר מהעטיפה זהה בדיוק לערך שהוחזר מ-realAudio — העטיפה לא משנה התנהגות", function () {
   const realAudio = {
     resolveOrText: function (text) { return { text: text }; },

@@ -439,6 +439,19 @@ function wrapAudioForDiagnosticLog(realAudio) {
       if (result && result.fileLink) console.log("[IVR-DIAG] audio_selected=" + audioId);
       return result;
     },
+    // BUG FIX: this wrapper used to return a plain {resolveOrText,
+    // resolveAudioId} object, silently dropping getPregreetingFiles — since
+    // handleIvrQuery() reassigns `audio` to this wrapper's return value
+    // BEFORE calling buildIdentificationResponse(), ivr.js's
+    // audio.getPregreetingFiles() call always hit a missing method (caught,
+    // -> []), so the pre-greeting could never play in production regardless
+    // of its enabled/schedule state. Forwarded here the same way the other
+    // two methods are, plus the same kind of diagnostic log line.
+    getPregreetingFiles: function () {
+      var result = realAudio.getPregreetingFiles ? realAudio.getPregreetingFiles() : [];
+      if (result && result.length) console.log("[IVR-DIAG] pregreeting_selected=" + result.length + " item(s)");
+      return result;
+    },
   };
 }
 
