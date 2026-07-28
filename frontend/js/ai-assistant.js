@@ -237,7 +237,7 @@ if (new URLSearchParams(window.location.search).get("aiDebug") === "1") {
     appendMessage("user", question);
     showTyping();
 
-    var tok = sessionStorage.getItem("authToken") || "";
+    var tok = localStorage.getItem("authToken") || "";
     fetch("/api/ai/query", {
       method:  "POST",
       headers: {

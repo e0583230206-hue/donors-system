@@ -387,7 +387,7 @@ function recordAuditLog(action, entityName, details) {
 // next page load doesn't overwrite the restored data with stale server data.
 async function pushRestoredDataToServer() {
   var serverKeys = ["donors", "tasks", "logs", "settings", "approvals"];
-  var token = sessionStorage.getItem("authToken") || "";
+  var token = localStorage.getItem("authToken") || "";
   if (!token) return;
 
   var promises = serverKeys.map(function (key) {
@@ -700,7 +700,7 @@ reloadWorkers().then(function () { renderWorkers(); });
     btn.textContent = "שומר...";
 
     try {
-      var token = sessionStorage.getItem("authToken") || "";
+      var token = localStorage.getItem("authToken") || "";
       var res = await fetch("/api/workers/me/password", {
         method:  "PUT",
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
@@ -715,7 +715,7 @@ reloadWorkers().then(function () { renderWorkers(); });
         return;
       }
 
-      sessionStorage.removeItem("mustChangePassword");
+      localStorage.removeItem("mustChangePassword");
       overlay.remove();
       window.location.href = "index.html";
     } catch (e) {
@@ -780,7 +780,7 @@ reloadWorkers().then(function () { renderWorkers(); });
 
   window.restoreServerBackup = function (filename) {
     if (!confirm("לשחזר את הנתונים מ-" + filename + "?\nהפעולה תדרוס את הנתונים הנוכחיים בשרת.")) return;
-    var tok = sessionStorage.getItem("authToken") || "";
+    var tok = localStorage.getItem("authToken") || "";
     fetch("/api/admin/backups/restore/" + encodeURIComponent(filename), {
       method: "POST",
       headers: { "Authorization": "Bearer " + tok },
@@ -798,7 +798,7 @@ reloadWorkers().then(function () { renderWorkers(); });
 
   if (listBtn) {
     listBtn.addEventListener("click", function () {
-      var tok = sessionStorage.getItem("authToken") || "";
+      var tok = localStorage.getItem("authToken") || "";
       fetch("/api/admin/backups/list", { headers: { "Authorization": "Bearer " + tok } })
         .then(function (r) { return r.json(); })
         .then(function (files) { renderBackupList(files); })
@@ -809,7 +809,7 @@ reloadWorkers().then(function () { renderWorkers(); });
   if (runBtn) {
     runBtn.addEventListener("click", function () {
       runBtn.disabled = true;
-      var tok = sessionStorage.getItem("authToken") || "";
+      var tok = localStorage.getItem("authToken") || "";
       fetch("/api/admin/backups/run", { method: "POST", headers: { "Authorization": "Bearer " + tok } })
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -968,6 +968,17 @@ reloadWorkers().then(function () { renderWorkers(); });
   function statusText(status)  { return STATUS_TEXT[status] || (status || "—"); }
   function rowClass(status)    { return ROW_STATUS_CLASS[status] || ""; }
 
+  // A logged-in session (status "active") never auto-expires anymore, so
+  // "online" reflects presence, not login validity — a user whose browser is
+  // closed still shows here (correctly still logged in) but greyed out
+  // rather than green, based purely on how recent their last heartbeat is.
+  function activeStatusHtml(row) {
+    if (row.status !== "active") return statusHtml(row.status);
+    return row.online
+      ? '<span style="color:#1a7a1a;font-weight:600">🟢 מחובר עכשיו</span>'
+      : '<span style="color:#888;font-weight:600">🟡 מחובר (לא פעיל כרגע)</span>';
+  }
+
   // Recognizes admin-initiated disconnects in the Audit Log regardless of exactly
   // which action string was used ("force_logout" is what this app actually writes;
   // the others are matched defensively in case older/other code paths used them).
@@ -997,7 +1008,7 @@ reloadWorkers().then(function () { renderWorkers(); });
       loginAt: s.loginAt, lastHeartbeat: s.lastHeartbeat,
       durationMs: Date.now() - toMs(s.loginAt),
       ip: s.ip || "—", browser: parseBrowser(s.userAgent), os: parseOS(s.userAgent),
-      status: s.status || "active", lastAction: s.lastAction,
+      status: s.status || "active", online: !!s.online, lastAction: s.lastAction,
     };
   }
 
@@ -1098,7 +1109,7 @@ reloadWorkers().then(function () { renderWorkers(); });
         "<td dir='ltr'>" + escapeHTML(r.ip) + "</td>" +
         "<td>" + escapeHTML(r.browser) + "</td>" +
         "<td>" + escapeHTML(r.os) + "</td>" +
-        "<td>" + statusHtml(r.status) + "</td>" +
+        "<td>" + activeStatusHtml(r) + "</td>" +
         "<td>" + activityBtn(r.workerId, r.workerName) + "</td>" +
         "<td>" + disconnectCell + "</td>" +
         "</tr>";

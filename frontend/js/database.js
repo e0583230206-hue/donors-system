@@ -228,7 +228,7 @@ const Database = {
   // ── Server sync ────────────────────────────────────────────────────────────
 
   _getToken: function () {
-    return sessionStorage.getItem("authToken") || "";
+    return localStorage.getItem("authToken") || "";
   },
 
   // Fire-and-forget push to server (non-blocking)

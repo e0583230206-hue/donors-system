@@ -1,6 +1,9 @@
-/* auth.js v3 — redirect-aware, with server-side session tracking */
-const SESSION_TIMEOUT_HOURS = 8;
-const SESSION_TIMEOUT_MS    = SESSION_TIMEOUT_HOURS * 60 * 60 * 1000;
+/* auth.js v4 — persistent login (localStorage), no fixed session timeout.
+ * A login stays valid until one of: explicit logout, an admin force-logout
+ * from the sessions screen, or the worker being deleted/disabled. The JWT
+ * itself is long-lived and silently renewed on every heartbeat (see
+ * _sendHeartbeat), so normal use (closing the browser, a computer restart,
+ * the day changing) never surfaces a "session expired" prompt. */
 const HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 var _heartbeatTimer = null;
@@ -12,14 +15,14 @@ const ROLE_IVR_SYSTEM = "IVR_SYSTEM";
 
 function getCurrentUser() {
   try {
-    return JSON.parse(sessionStorage.getItem("currentUser"));
+    return JSON.parse(localStorage.getItem("currentUser"));
   } catch (_) {
     return null;
   }
 }
 
 function getAuthToken() {
-  return sessionStorage.getItem("authToken") || "";
+  return localStorage.getItem("authToken") || "";
 }
 
 function normalizeRole(role) {
@@ -39,6 +42,12 @@ function _loginRedirectTarget(extra) {
   return "login.html?" + (extra ? extra + "&" : "") + redirectPart;
 }
 
+function _clearAuthStorage() {
+  localStorage.removeItem("authToken");
+  localStorage.removeItem("currentUser");
+  localStorage.removeItem("sessionId");
+}
+
 function requireLogin() {
   const token       = getAuthToken();
   const currentUser = getCurrentUser();
@@ -48,14 +57,7 @@ function requireLogin() {
     return;
   }
 
-  if (Date.now() - currentUser.loginTime > SESSION_TIMEOUT_MS) {
-    sessionStorage.removeItem("authToken");
-    sessionStorage.removeItem("currentUser");
-    window.location.replace(_loginRedirectTarget("expired=1"));
-    return;
-  }
-
-  if (sessionStorage.getItem("mustChangePassword") === "1") {
+  if (localStorage.getItem("mustChangePassword") === "1") {
     const onSettings = window.location.pathname.endsWith("settings.html");
     if (!onSettings) {
       window.location.href = "settings.html?forcePassword=1";
@@ -97,10 +99,9 @@ function apiFetch(url, options) {
   opts.headers  = getApiHeaders(opts.headers);
   return fetch(url, opts).then(function (res) {
     if (res.status === 401) {
-      sessionStorage.removeItem("authToken");
-      sessionStorage.removeItem("currentUser");
-      window.location.replace(_loginRedirectTarget("expired=1"));
-      return Promise.reject(new Error("Session expired"));
+      _clearAuthStorage();
+      window.location.replace(_loginRedirectTarget("invalid=1"));
+      return Promise.reject(new Error("Invalid session"));
     }
     return res;
   });
@@ -117,28 +118,43 @@ function requireAdminAction(message) {
 // ── Session heartbeat ─────────────────────────────────────────────────────────
 
 // An admin disconnected this session remotely from the sessions screen — end the
-// local session the same way an expired one ends, but with a distinct message.
+// local session the same way an invalid one ends, but with a distinct message.
 function _handleForcedLogout() {
   if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
-  sessionStorage.removeItem("authToken");
-  sessionStorage.removeItem("currentUser");
-  sessionStorage.removeItem("sessionId");
+  _clearAuthStorage();
   window.location.replace(_loginRedirectTarget("forced=1"));
+}
+
+// The worker behind this token was deleted/disabled, or the token is
+// otherwise no longer valid server-side (requireAuth returned 401/403 to the
+// heartbeat itself, distinct from the 200+forceLogout flag above).
+function _handleInvalidSession() {
+  if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+  _clearAuthStorage();
+  window.location.replace(_loginRedirectTarget("invalid=1"));
 }
 
 function _sendHeartbeat() {
   var token     = getAuthToken();
-  var sessionId = sessionStorage.getItem("sessionId") || "";
+  var sessionId = localStorage.getItem("sessionId") || "";
   if (!token || !sessionId) return;
   fetch("/api/sessions/heartbeat", {
     method:  "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
     body:    JSON.stringify({ sessionId: sessionId }),
   }).then(function (res) {
+    if (res.status === 401 || res.status === 403) {
+      _handleInvalidSession();
+      return null;
+    }
     return res.json().catch(function () { return {}; });
   }).then(function (data) {
-    if (data && data.forceLogout) _handleForcedLogout();
-  }).catch(function () { /* silent — heartbeat failures do not affect UX */ });
+    if (!data) return;
+    if (data.forceLogout) { _handleForcedLogout(); return; }
+    // Silent renewal — the server re-signs a fresh token on every heartbeat
+    // so an active session's token keeps sliding forward indefinitely.
+    if (data.token) { localStorage.setItem("authToken", data.token); }
+  }).catch(function () { /* silent — network hiccups do not affect UX */ });
 }
 
 function startHeartbeat() {
@@ -154,7 +170,7 @@ function logout() {
 
   // Notify server (fire-and-forget)
   var token     = getAuthToken();
-  var sessionId = sessionStorage.getItem("sessionId") || "";
+  var sessionId = localStorage.getItem("sessionId") || "";
   if (token && sessionId) {
     try {
       fetch("/api/logout", {
@@ -165,18 +181,11 @@ function logout() {
     } catch (_) {}
   }
 
-  sessionStorage.removeItem("authToken");
-  sessionStorage.removeItem("currentUser");
-  sessionStorage.removeItem("sessionId");
+  _clearAuthStorage();
   // Clear cached app data from localStorage on logout
   ["donors", "tasks", "logs", "settings", "approvals", "workers"].forEach(function (k) {
     localStorage.removeItem(k);
   });
-  // sidebar.js bridges the JWT through localStorage._sp_token/_sp_user so a
-  // softphone.html opened in a new tab can authenticate itself — must be
-  // cleared on logout too, otherwise the token outlives the session.
-  localStorage.removeItem("_sp_token");
-  localStorage.removeItem("_sp_user");
   window.location.href = "login.html";
 }
 

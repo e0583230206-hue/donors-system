@@ -20,7 +20,15 @@ const JWT_SECRET = (function () {
   return s;
 }());
 
-const SESSION_HOURS = Number(process.env.SESSION_TIMEOUT_HOURS || 8);
+// JWT lifetime — deliberately long and independent of SESSION_TIMEOUT_HOURS
+// (that env var used to drive an 8h forced logout; removed by design — see
+// requireLogin() in frontend/js/auth.js). A user stays logged in indefinitely
+// as long as their browser keeps sending heartbeats (every 60s while a tab is
+// open — see /api/sessions/heartbeat), which silently re-signs and returns a
+// fresh token on every call. This TTL is only the fallback: how long a token
+// stays valid if the browser/computer is off and heartbeats stop entirely.
+const JWT_TTL_DAYS    = Number(process.env.JWT_TTL_DAYS || 30);
+const JWT_TTL_SECONDS = JWT_TTL_DAYS * 24 * 3600;
 
 const ROLES = {
   ADMIN:      "ADMIN",
@@ -46,18 +54,26 @@ async function loginWorker(workerId, password) {
   if (!valid) return null;
 
   const role  = normalizeRole(worker.role);
-  const token = jwt.sign(
-    { id: worker.id, name: worker.name, role },
-    JWT_SECRET,
-    { expiresIn: SESSION_HOURS + "h" }
-  );
+  const token = signToken({ id: worker.id, name: worker.name, role });
 
   return {
     token,
     user:              { id: worker.id, name: worker.name, role },
-    expiresIn:         SESSION_HOURS * 3600 * 1000,
+    expiresIn:         JWT_TTL_SECONDS * 1000,
     mustChangePassword: !!worker.must_change_password,
   };
+}
+
+function signToken(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_TTL_SECONDS + "s" });
+}
+
+// Silent renewal — called from the heartbeat route so an active session's
+// token keeps sliding forward and never actually hits JWT_TTL_DAYS in
+// practice. Re-derives the payload from the verified request user rather
+// than trusting anything client-supplied.
+function renewToken(user) {
+  return signToken({ id: user.id, name: user.name, role: user.role });
 }
 
 async function comparePassword(plain, hash) {
@@ -84,9 +100,17 @@ function requireAuth(req, res, next) {
     req.user     = jwt.verify(token, JWT_SECRET);
     req.userRole = req.user.role;
 
-    // Server-side enforcement of must_change_password
+    // Tokens are long-lived now (see JWT_TTL_DAYS), so a deleted or disabled
+    // ("blocked") worker must be rejected on every request, not just at
+    // login — otherwise their still-cryptographically-valid token would keep
+    // working until it naturally expires, up to JWT_TTL_DAYS from now.
     const worker = findWorkerById(req.user.id);
-    if (worker && worker.must_change_password === 1) {
+    if (!worker || worker.status !== "פעיל") {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    // Server-side enforcement of must_change_password
+    if (worker.must_change_password === 1) {
       if (!MUST_CHANGE_EXEMPT.has(req.path)) {
         return res.status(403).json({
           error:   "must_change_password",
@@ -117,6 +141,7 @@ module.exports = {
   ROLES,
   normalizeRole,
   loginWorker,
+  renewToken,
   hashPassword,
   comparePassword,
   requireAuth,

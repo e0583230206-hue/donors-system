@@ -34,7 +34,7 @@ function setupSidebarToggle() {
 
   // Inject sync + sessions links (admin only)
   var _sidebarUser = null;
-  try { _sidebarUser = JSON.parse(sessionStorage.getItem("currentUser") || "null"); } catch (_) {}
+  try { _sidebarUser = JSON.parse(localStorage.getItem("currentUser") || "null"); } catch (_) {}
   var _isAdmin = _sidebarUser && (_sidebarUser.role === "ADMIN" || _sidebarUser.role === "מנהל");
   if (_isAdmin && nav && !nav.querySelector('a[href="sync.html"]')) {
     var syncA = document.createElement("a");
@@ -51,14 +51,8 @@ function setupSidebarToggle() {
     phoneA.href = "softphone.html";
     phoneA.target = "_blank";
     phoneA.textContent = "📞 טלפון רשת";
-    // Pass auth token + user to localStorage so the new tab can authenticate itself
-    // (new tabs don't share sessionStorage, so we bridge via localStorage).
-    phoneA.addEventListener("click", function () {
-      var token = sessionStorage.getItem("authToken") || "";
-      var user  = sessionStorage.getItem("currentUser") || "";
-      if (token) localStorage.setItem("_sp_token", token);
-      if (user)  localStorage.setItem("_sp_user",  user);
-    });
+    // Auth lives in localStorage, which is shared across tabs of the same
+    // origin — the new tab authenticates itself directly, no bridging needed.
     var anchor = nav.querySelector('a[href="ivr-monitor.html"]') || null;
     if (anchor && anchor.nextSibling) {
       nav.insertBefore(phoneA, anchor.nextSibling);
@@ -118,7 +112,7 @@ function setupSidebarToggle() {
   }
 
   // 4. Show current logged-in user above logout button
-  var currentUser = JSON.parse(sessionStorage.getItem("currentUser") || "null");
+  var currentUser = JSON.parse(localStorage.getItem("currentUser") || "null");
   if (currentUser) {
     var sidebar = document.querySelector(".sidebar");
     if (sidebar) {

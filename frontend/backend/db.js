@@ -6,7 +6,13 @@ const { DatabaseSync } = require("node:sqlite");
 const bcrypt = require("bcryptjs");
 const logger = require("./logger");
 
-const SESSION_TIMEOUT_HOURS = Number(process.env.SESSION_TIMEOUT_HOURS || 8);
+// How recent a heartbeat has to be for a still-logged-in session to be shown
+// as "online" on the admin sessions screen. Purely a display concern — unlike
+// the old SESSION_TIMEOUT_HOURS, it never closes the session or logs anyone
+// out; a worker who stops heartbeating just shows as offline while staying
+// logged in (see getActiveSessions()). Configurable so tests don't need to
+// sleep for real minutes to observe the online -> offline transition.
+const SESSION_ONLINE_THRESHOLD_MS = Number(process.env.SESSION_ONLINE_THRESHOLD_MS || 3 * 60 * 1000);
 
 const DB_PATH = process.env.DB_PATH
   ? path.resolve(__dirname, process.env.DB_PATH)
@@ -312,6 +318,14 @@ function clearMustChangePassword(id) {
 
 function deleteWorkerById(id) {
   return db.prepare("DELETE FROM workers WHERE id = ?").run(Number(id));
+}
+
+// Disables ("blocks") a worker without deleting them — status becomes
+// anything other than "פעיל", which both loginWorker() and requireAuth()
+// already treat as not allowed to authenticate or keep an existing session.
+function setWorkerStatus(id, status) {
+  return db.prepare("UPDATE workers SET status = ?, updatedAt = ? WHERE id = ?")
+    .run(String(status).trim(), nowIso(), Number(id));
 }
 
 function updateWorkerPasswordHash(id, passwordHash) {
@@ -1429,37 +1443,23 @@ function countAuditLogsByWorker(workerId) {
 }
 
 function getActiveSessions() {
-  // Auto-expire sessions silent for more than SESSION_TIMEOUT_HOURS
-  var cutoff = new Date(Date.now() - SESSION_TIMEOUT_HOURS * 3600 * 1000).toISOString();
-  var stale = db.prepare("SELECT sessionId, workerId, workerName FROM worker_sessions WHERE status = 'active' AND lastHeartbeat < ?")
-    .all(cutoff);
-
-  if (stale.length > 0) {
-    db.prepare("UPDATE worker_sessions SET logoutAt = ?, status = 'timeout' WHERE status = 'active' AND lastHeartbeat < ?")
-      .run(nowIso(), cutoff);
-    stale.forEach(function (s) {
-      try {
-        insertAuditLog({
-          action:     "session_timeout",
-          entityType: "worker",
-          entityId:   s.workerId,
-          entityName: s.workerName,
-          details:    "פג תוקף session — אין פעילות מעל " + SESSION_TIMEOUT_HOURS + " שעות",
-          workerId:   s.workerId,
-          workerName: s.workerName,
-        });
-      } catch (_) {}
-    });
-  }
+  // Sessions never auto-close from inactivity anymore — a login stays valid
+  // (per this app's design) until explicit logout, admin force-logout, or the
+  // worker being deleted/disabled. "online" here is a pure display flag based
+  // on the most recent heartbeat, so the admin screen can still tell an
+  // actively-working user apart from one who's logged in but has their
+  // browser closed, without ending either session.
+  var onlineCutoff = new Date(Date.now() - SESSION_ONLINE_THRESHOLD_MS).toISOString();
 
   return db.prepare(`
     SELECT ws.id, ws.sessionId, ws.workerId, ws.workerName, ws.loginAt, ws.lastHeartbeat,
-           ws.ip, ws.userAgent, ws.status, w.role AS workerRole
+           ws.ip, ws.userAgent, ws.status, w.role AS workerRole,
+           (ws.lastHeartbeat >= ?) AS online
     FROM worker_sessions ws
     LEFT JOIN workers w ON w.id = ws.workerId
     WHERE ws.status = 'active'
     ORDER BY ws.loginAt DESC
-  `).all();
+  `).all(onlineCutoff);
 }
 
 function getSessionHistory(limit) {
@@ -1856,6 +1856,7 @@ module.exports = {
   findWorkerById,
   createWorkerInDb,
   deleteWorkerById,
+  setWorkerStatus,
   updateWorkerPasswordHash,
   clearMustChangePassword,
   // Donors

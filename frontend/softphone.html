@@ -444,43 +444,16 @@ footer.foot kbd{
 <script>if(typeof JsSIP==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jssip/dist/jssip.min.js"><\/scr'+'ipt>')</script>
 <script src="lib/jquery.min.js"></script>
 <script>if(typeof jQuery==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"><\/scr'+'ipt>')</script>
-<script>
-// When softphone opens in a new tab (_blank), sessionStorage is empty.
-// sidebar.js already saved the JWT to localStorage._sp_token for this case.
-// Copy it to sessionStorage so auth.js / apiFetch work normally.
-(function () {
-  var hasToken = !!sessionStorage.getItem('authToken');
-  var spToken  = localStorage.getItem('_sp_token');
-  console.log('[SP:1] sessionStorage.authToken לפני bridge:', hasToken ? 'יש' : 'אין');
-  console.log('[SP:1] localStorage._sp_token:', spToken ? 'יש' : 'אין');
-
-  if (!hasToken) {
-    if (spToken) {
-      sessionStorage.setItem('authToken', spToken);
-      var spUser = localStorage.getItem('_sp_user');
-      if (spUser) sessionStorage.setItem('currentUser', spUser);
-      console.log('[SP:1] הועתק מ-localStorage ל-sessionStorage. authToken אחרי bridge:', sessionStorage.getItem('authToken') ? 'יש' : 'חסר!');
-    } else {
-      console.log('[SP:1] אין טוקן לא ב-sessionStorage ולא ב-localStorage — requireLogin() יפנה ל-login.');
-    }
-  } else {
-    console.log('[SP:1] טוקן כבר ב-sessionStorage, אין צורך ב-bridge.');
-  }
-  // One-shot bridge only — sidebar.js writes these just before opening this
-  // tab; they must never linger in localStorage past this point (logout
-  // also clears them, in case this tab is never opened at all).
-  localStorage.removeItem('_sp_token');
-  localStorage.removeItem('_sp_user');
-}());
-</script>
 <script src="js/auth.js"></script>
 <script>
 // Fetch SIP config directly — does NOT use apiFetch so a 401 returns null
-// instead of triggering a redirect-to-login loop.
+// instead of triggering a redirect-to-login loop. Auth lives in localStorage,
+// shared across tabs of the same origin, so this tab (opened via target=_blank)
+// already has it — no bridging needed.
 async function fetchSipConfig() {
-  var token = sessionStorage.getItem('authToken') || '';
+  var token = localStorage.getItem('authToken') || '';
   console.log('[SP:2] fetchSipConfig: apiFetch מוגדר =', typeof apiFetch === 'function');
-  console.log('[SP:2] fetchSipConfig: טוקן ב-sessionStorage =', token ? 'יש' : 'חסר!');
+  console.log('[SP:2] fetchSipConfig: טוקן ב-localStorage =', token ? 'יש' : 'חסר!');
   if (!token) {
     console.warn('[SP:2] אין טוקן — לא שולח בקשה ל-/api/sip-config');
     return null;
@@ -1154,7 +1127,7 @@ async function fetchSipConfig() {
   // Show "save to server" button for admins only
   (function () {
     try {
-      var cu = JSON.parse(sessionStorage.getItem('currentUser') || 'null');
+      var cu = JSON.parse(localStorage.getItem('currentUser') || 'null');
       if (cu && (cu.role === 'ADMIN' || cu.role === 'מנהל')) {
         $('#btnSaveSipServer').show();
       }
@@ -1170,7 +1143,7 @@ async function fetchSipConfig() {
     var $btn = $(this);
     $btn.prop('disabled', true).text('שומר…');
     try {
-      var token = sessionStorage.getItem('authToken') || '';
+      var token = localStorage.getItem('authToken') || '';
       var r = await fetch('/api/sip-config', {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },

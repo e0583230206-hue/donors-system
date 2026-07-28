@@ -71,6 +71,7 @@ const { queryAI } = require("./ai");
 const {
   ROLES,
   loginWorker,
+  renewToken,
   hashPassword,
   comparePassword,
   requireAuth,
@@ -442,7 +443,13 @@ app.post("/api/sessions/heartbeat", requireAuth, function (req, res, next) {
     if (session && session.status === "forced_logout") {
       return res.json({ ok: true, forceLogout: true });
     }
-    res.json({ ok: true });
+    // Silent renewal — every successful heartbeat re-signs the JWT with a
+    // fresh JWT_TTL_DAYS window, so a session that keeps heartbeating (any
+    // tab open at least once within that window) never actually hits its
+    // token expiry. requireAuth already re-validated the worker still exists
+    // and is active, so req.user is safe to re-sign as-is.
+    var freshToken = renewToken(req.user);
+    res.json({ ok: true, token: freshToken });
   } catch (err) {
     next(err);
   }

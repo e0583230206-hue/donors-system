@@ -13,9 +13,9 @@ function getSafeRedirect() {
 
 // If already authenticated, skip login and go straight to the requested page.
 (function () {
-  var token = sessionStorage.getItem("authToken");
+  var token = localStorage.getItem("authToken");
   var user  = null;
-  try { user = JSON.parse(sessionStorage.getItem("currentUser")); } catch (_) {}
+  try { user = JSON.parse(localStorage.getItem("currentUser")); } catch (_) {}
   if (token && user) {
     window.location.replace(getSafeRedirect() || "index.html");
   }
@@ -90,10 +90,11 @@ async function login() {
 
     const data = await res.json();
 
-    // Store JWT, session ID, and user info
-    sessionStorage.setItem("authToken",  data.token);
-    sessionStorage.setItem("sessionId",  data.sessionId || "");
-    sessionStorage.setItem("currentUser", JSON.stringify({
+    // Store JWT, session ID, and user info — localStorage so the login
+    // survives closing the browser, a computer restart, or the day changing.
+    localStorage.setItem("authToken",  data.token);
+    localStorage.setItem("sessionId",  data.sessionId || "");
+    localStorage.setItem("currentUser", JSON.stringify({
       id:        data.user.id,
       name:      data.user.name,
       role:      data.user.role,
@@ -117,10 +118,10 @@ async function login() {
     } catch (_) {}
 
     if (data.mustChangePassword) {
-      sessionStorage.setItem("mustChangePassword", "1");
+      localStorage.setItem("mustChangePassword", "1");
       window.location.href = "settings.html?forcePassword=1";
     } else {
-      sessionStorage.removeItem("mustChangePassword");
+      localStorage.removeItem("mustChangePassword");
       window.location.href = getSafeRedirect() || "index.html";
     }
   } catch (_) {
@@ -136,8 +137,8 @@ passwordInput.addEventListener("keydown", function (e) {
   if (e.key === "Enter") login();
 });
 
-if (new URLSearchParams(window.location.search).get("expired") === "1") {
-  showMessage("פג תוקף החיבור — נא להתחבר מחדש", "error");
+if (new URLSearchParams(window.location.search).get("invalid") === "1") {
+  showMessage("ההתחברות אינה תקפה יותר — נא להתחבר מחדש", "error");
 }
 if (new URLSearchParams(window.location.search).get("forced") === "1") {
   showMessage("החיבור שלך נותק על ידי מנהל המערכת — נא להתחבר מחדש", "error");
