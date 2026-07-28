@@ -134,6 +134,49 @@
             </table>
           </div>
         </section>
+
+        <section class="panel" id="pregreetingPanel">
+          <h2>📣 הודעה זמנית לפני הפתיח</h2>
+          <p style="color:var(--muted);margin-bottom:14px;font-size:14px">
+            הודעה קצרה שתושמע (אם היא פעילה) פעם אחת בתחילת כל שיחה, <strong>לפני</strong> הפתיח הקבוע ("שלום וברכה..."). הפתיח הקבוע עצמו אינו מושפע ואינו נמחק לעולם.
+          </p>
+
+          <p id="pregreetingMessage" class="message"></p>
+
+          <div class="form-grid" style="margin-bottom:14px;align-items:center;">
+            <div id="pregreetingStatusBadge" style="font-weight:600;">טוען...</div>
+          </div>
+
+          <div class="form-grid" style="margin-bottom:14px;">
+            <div id="pregreetingPlayerWrap" style="display:none;align-items:center;gap:8px;"></div>
+          </div>
+
+          <div class="form-grid" style="margin-bottom:14px;">
+            <label id="pregreetingUploadLabel" for="pregreetingUploadInput" class="secondary-btn" style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;">
+              ⬆️ העלה קובץ הודעה
+            </label>
+            <input type="file" id="pregreetingUploadInput" accept="audio/*" style="display:none" />
+            <button id="pregreetingEnableBtn" type="button" class="success-btn" style="display:none;">▶️ הפעל הודעה</button>
+            <button id="pregreetingDisableBtn" type="button" class="secondary-btn" style="display:none;">⏸️ כבה הודעה</button>
+            <button id="pregreetingDeleteBtn" type="button" class="danger-btn" style="display:none;">🗑️ מחק הודעה</button>
+          </div>
+
+          <div class="form-grid" style="margin-bottom:6px;">
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);">
+              תאריך ושעת התחלה (אופציונלי)
+              <input type="datetime-local" id="pregreetingStartAt" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);">
+              תאריך ושעת סיום (אופציונלי)
+              <input type="datetime-local" id="pregreetingEndAt" />
+            </label>
+            <button id="pregreetingSaveScheduleBtn" type="button" class="secondary-btn">💾 שמור טווח הפעלה</button>
+            <button id="pregreetingClearScheduleBtn" type="button" class="secondary-btn">✖ נקה טווח</button>
+          </div>
+          <p style="color:var(--muted);font-size:12px;">
+            אם לא ייקבע טווח — ההפעלה/כיבוי ידניים בלבד (הכפתורים למעלה). אם ייקבע טווח — ההודעה תושמע רק בתוכו ותפסיק אוטומטית בסיומו. כל הזמנים לפי אזור הזמן Asia/Jerusalem (השעה כעת: <span id="pregreetingNowHint">—</span>).
+          </p>
+        </section>
       </div>
 
       <div class="tab-panel" data-tab-panel="workers" style="display:none;">

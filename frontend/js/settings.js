@@ -1515,6 +1515,10 @@ reloadWorkers().then(function () { renderWorkers(); });
   }
 
   function matchesSheet(rec) {
+    // PREGREETING-001 has its own dedicated section below (see the
+    // pregreetingPanel IIFE) — it must never show up in any of these 3
+    // general sheets, same reasoning as the paymsg exclusion right below.
+    if (rec.category === "pregreeting") return false;
     if (activeSheet === "paymsg") return rec.category === PAYMSG_CATEGORY;
     if (rec.category === PAYMSG_CATEGORY) return false; // never leaks into sentences/numbers
     var inSheet1 = SHEET1_CATEGORIES.indexOf(rec.category) !== -1;
@@ -2157,4 +2161,233 @@ reloadWorkers().then(function () { renderWorkers(); });
   }
 
   loadRecordings();
+}());
+
+// ── Pregreeting — temporary pre-opening IVR message ─────────────────────────
+// Own IIFE/own scope, deliberately not sharing state with the IVR-audio
+// catalog IIFE above — this is a single fixed row (PREGREETING-001), not a
+// table of many recordings. Reuses the same /api/admin/ivr-audio/* prefix
+// and the same apiFetch/escapeHTML/isAdmin conventions.
+(function () {
+  var panel = document.getElementById("pregreetingPanel");
+  if (!panel || typeof isAdmin !== "function" || !isAdmin()) return;
+
+  var msgEl            = document.getElementById("pregreetingMessage");
+  var statusBadge      = document.getElementById("pregreetingStatusBadge");
+  var playerWrap        = document.getElementById("pregreetingPlayerWrap");
+  var uploadLabel       = document.getElementById("pregreetingUploadLabel");
+  var uploadInput       = document.getElementById("pregreetingUploadInput");
+  var enableBtn         = document.getElementById("pregreetingEnableBtn");
+  var disableBtn        = document.getElementById("pregreetingDisableBtn");
+  var deleteBtn          = document.getElementById("pregreetingDeleteBtn");
+  var startAtInput      = document.getElementById("pregreetingStartAt");
+  var endAtInput         = document.getElementById("pregreetingEndAt");
+  var saveScheduleBtn   = document.getElementById("pregreetingSaveScheduleBtn");
+  var clearScheduleBtn  = document.getElementById("pregreetingClearScheduleBtn");
+  var nowHint           = document.getElementById("pregreetingNowHint");
+
+  // Single in-flight guard shared by EVERY action in this panel (upload,
+  // enable/disable, delete, schedule save/clear) — the simplest possible way
+  // to guarantee no two of these can ever race each other from double
+  // clicks, since only one meaningful action makes sense at a time here
+  // anyway (unlike the big multi-row catalog above, which has no such guard
+  // — see settings.js history / IVR audio management architecture notes).
+  var busy = false;
+  var currentState = null;
+  var activeAudioEl = null;
+
+  function showMsg(text, type) {
+    if (!msgEl) return;
+    msgEl.innerText = text;
+    msgEl.className = "message show " + (type || "success");
+    clearTimeout(showMsg._t);
+    showMsg._t = setTimeout(function () { msgEl.innerText = ""; msgEl.className = "message"; }, 4000);
+  }
+
+  function setBusy(isBusy) {
+    busy = isBusy;
+    [uploadInput, enableBtn, disableBtn, deleteBtn, saveScheduleBtn, clearScheduleBtn].forEach(function (el) {
+      if (el) el.disabled = isBusy;
+    });
+    if (uploadLabel) {
+      uploadLabel.style.pointerEvents = isBusy ? "none" : "";
+      uploadLabel.style.opacity       = isBusy ? "0.6"  : "";
+    }
+  }
+
+  function buildPlayButton(fileUrl) {
+    var audioEl = new Audio(fileUrl);
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ivr-audio-icon-btn";
+    btn.title = "נגן תצוגה מקדימה";
+    btn.textContent = "▶";
+    btn.addEventListener("click", function () {
+      if (audioEl.paused) {
+        if (activeAudioEl && activeAudioEl !== audioEl) activeAudioEl.pause();
+        activeAudioEl = audioEl;
+        var p = audioEl.play();
+        if (p && p.catch) p.catch(function (err) { showMsg("לא ניתן לנגן את הקובץ: " + err.message, "error"); });
+      } else {
+        audioEl.pause();
+      }
+    });
+    audioEl.addEventListener("play",  function () { btn.textContent = "⏸"; });
+    audioEl.addEventListener("pause", function () { btn.textContent = "▶"; });
+    audioEl.addEventListener("ended", function () { btn.textContent = "▶"; });
+    return btn;
+  }
+
+  function render() {
+    if (!currentState || !statusBadge) return;
+    var s = currentState;
+
+    if (s.active) {
+      statusBadge.innerHTML = '<span style="color:#1a7a1a">🟢 פעילה כרגע — מושמעת לפני הפתיח</span>';
+    } else if (s.enabled && s.hasFile) {
+      statusBadge.innerHTML = '<span style="color:#b06a00">🟡 מופעלת, אך כרגע מחוץ לטווח הזמן שנקבע</span>';
+    } else if (s.hasFile) {
+      statusBadge.innerHTML = '<span style="color:#777">⚪ כבויה (לא תושמע בשיחות)</span>';
+    } else {
+      statusBadge.innerHTML = '<span style="color:#777">— טרם הועלה קובץ הודעה</span>';
+    }
+
+    if (playerWrap) {
+      playerWrap.innerHTML = "";
+      if (s.hasFile && s.fileUrl) {
+        playerWrap.style.display = "flex";
+        playerWrap.appendChild(buildPlayButton(s.fileUrl));
+        var label = document.createElement("span");
+        label.style.color = "var(--muted)";
+        label.style.fontSize = "13px";
+        label.textContent = "קובץ ההודעה הנוכחי (תצוגה מקדימה)";
+        playerWrap.appendChild(label);
+      } else {
+        playerWrap.style.display = "none";
+      }
+    }
+
+    if (uploadLabel) uploadLabel.textContent = s.hasFile ? "🔁 החלף קובץ הודעה" : "⬆️ העלה קובץ הודעה";
+    if (enableBtn)  enableBtn.style.display  = s.hasFile && !s.enabled ? "inline-flex" : "none";
+    if (disableBtn) disableBtn.style.display = s.hasFile && s.enabled  ? "inline-flex" : "none";
+    if (deleteBtn)  deleteBtn.style.display  = s.hasFile ? "inline-flex" : "none";
+
+    // Never stomp on text the admin is actively typing into these two
+    // fields — only sync from server state when they're not focused.
+    if (startAtInput && document.activeElement !== startAtInput) startAtInput.value = s.startAt || "";
+    if (endAtInput   && document.activeElement !== endAtInput)   endAtInput.value   = s.endAt   || "";
+    if (nowHint) nowHint.textContent = s.now || "—";
+  }
+
+  async function loadStatus() {
+    try {
+      var res = await apiFetch("/api/admin/ivr-audio/pregreeting");
+      if (!res.ok) throw new Error("שגיאה בטעינת מצב ההודעה הזמנית");
+      currentState = await res.json();
+      render();
+    } catch (err) {
+      if (statusBadge) statusBadge.textContent = "שגיאה בטעינה";
+      showMsg(err.message, "error");
+    }
+  }
+
+  async function uploadFile(file) {
+    if (busy) return;
+    setBusy(true);
+    showMsg("מעלה קובץ...");
+    try {
+      var fd = new FormData();
+      fd.append("audio", file);
+      // Raw fetch, not apiFetch — apiFetch always forces
+      // Content-Type: application/json, which breaks multipart/form-data
+      // (the browser needs to set its own boundary). Only Authorization is
+      // needed here — same pattern as uploadAudio() above.
+      var headers = {};
+      if (typeof getAuthToken === "function") {
+        var token = getAuthToken();
+        if (token) headers["Authorization"] = "Bearer " + token;
+      }
+      var res = await fetch("/api/admin/ivr-audio/pregreeting/upload", { method: "POST", headers: headers, body: fd });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה בהעלאה");
+      await loadStatus();
+      showMsg("הקובץ הועלה ✓ — יש להפעיל את ההודעה (למטה) כדי שתושמע בשיחות");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setEnabled(enabled) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      var res = await apiFetch("/api/admin/ivr-audio/pregreeting/enabled", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: enabled }),
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה בעדכון");
+      await loadStatus();
+      showMsg(enabled ? "ההודעה הופעלה ✓" : "ההודעה כובתה");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteMessage() {
+    if (busy) return;
+    if (!confirm("למחוק את ההודעה הזמנית? הפתיח הקבוע לא ייפגע.")) return;
+    setBusy(true);
+    try {
+      var res = await apiFetch("/api/admin/ivr-audio/pregreeting", { method: "DELETE" });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה במחיקה");
+      await loadStatus();
+      showMsg("ההודעה הזמנית נמחקה");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSchedule(clear) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      var body = clear
+        ? { startAt: "", endAt: "" }
+        : { startAt: startAtInput ? startAtInput.value : "", endAt: endAtInput ? endAtInput.value : "" };
+      var res = await apiFetch("/api/admin/ivr-audio/pregreeting/schedule", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || "שגיאה בשמירת הטווח");
+      await loadStatus();
+      showMsg(clear ? "טווח ההפעלה נוקה ✓" : "טווח ההפעלה נשמר ✓");
+    } catch (err) {
+      showMsg("שגיאה: " + err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (uploadInput) {
+    uploadInput.addEventListener("change", function () {
+      if (uploadInput.files[0]) uploadFile(uploadInput.files[0]);
+      uploadInput.value = "";
+    });
+  }
+  if (enableBtn)  enableBtn.addEventListener("click", function ()  { setEnabled(true); });
+  if (disableBtn) disableBtn.addEventListener("click", function () { setEnabled(false); });
+  if (deleteBtn)  deleteBtn.addEventListener("click", deleteMessage);
+  if (saveScheduleBtn)  saveScheduleBtn.addEventListener("click",  function () { saveSchedule(false); });
+  if (clearScheduleBtn) clearScheduleBtn.addEventListener("click", function () { saveSchedule(true); });
+
+  loadStatus();
 }());

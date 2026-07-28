@@ -66,6 +66,11 @@ check("passthroughAudioContext.resolveAudioId: מחזיר את fallbackText כמ
   assert.deepStrictEqual(ctx.resolveAudioId("OPEN-001", "טקסט גיבוי"), { text: "טקסט גיבוי" });
 });
 
+check("passthroughAudioContext.getPregreetingFiles: תמיד [] — אין טקסט חלופי להודעה הזמנית", function () {
+  const ctx = passthroughAudioContext();
+  assert.deepStrictEqual(ctx.getPregreetingFiles(), []);
+});
+
 // ── createAudioContext (DI מלא) ──────────────────────────────────────────────
 check("resolveOrText: טקסט קיים במפה → קורא ל-resolveAudio עם (id, הטקסט המקורי)", function () {
   let capturedArgs = null;
@@ -113,6 +118,24 @@ check("resolveAudioId: תמיד קורא ישירות ל-resolveAudio עם audio
   const result = ctx.resolveAudioId("NUM-DIGIT-005", "חמישה");
   assert.deepStrictEqual(capturedArgs, ["NUM-DIGIT-005", "חמישה"]);
   assert.deepStrictEqual(result, { text: "חמישה" });
+});
+
+check("getPregreetingFiles: מעביר ישירות את התוצאה מ-deps.getPregreetingFiles", function () {
+  const item = { fileLink: "https://fake/PREGREETING-001.wav", fileName: "PREGREETING-001" };
+  const ctx = createAudioContext({
+    textToAudioId: {},
+    resolveAudio: function () { throw new Error("should not be called"); },
+    getPregreetingFiles: function () { return [item]; },
+  });
+  assert.deepStrictEqual(ctx.getPregreetingFiles(), [item]);
+});
+
+check("getPregreetingFiles: deps.getPregreetingFiles הושמט (למשל בדיקות ישנות) → [] בבטחה, לא זורק", function () {
+  const ctx = createAudioContext({
+    textToAudioId: {},
+    resolveAudio: function () { throw new Error("should not be called"); },
+  });
+  assert.deepStrictEqual(ctx.getPregreetingFiles(), []);
 });
 
 // ── buildAudioContext: ניתוב לפי מצב/טלפון (בלי לגעת ב-DB/דיסק בפועל — ראו הערה למעלה) ─

@@ -62,6 +62,10 @@ const {
   countAuditLogsByWorker,
   getActiveSessions,
   getSessionHistory,
+  PREGREETING_AUDIO_ID,
+  setPregreetingEnabled,
+  setPregreetingSchedule,
+  resetPregreetingFileState,
 } = require("./db");
 
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
@@ -116,6 +120,16 @@ const {
   convertToTmpWav:      convConvertToTmpWav,
 } = require("./scripts/convert-ivr-audio-to-wav");
 const { mirrorLogEntriesToAuditLog } = require("./data-audit-mirror.service");
+
+// Temporary pre-greeting IVR message (plays once before OPEN-001) — reuses
+// the exact same upload/lock/lifecycle machinery wired above; only the
+// enabled/schedule gate and its 5 admin routes are new. See
+// ivr-pregreeting.service.js.
+const {
+  isPregreetingActiveNow,
+  isValidScheduleValue,
+  nowInJerusalem,
+} = require("./ivr-pregreeting.service");
 
 const PORT         = Number(process.env.PORT || 3000);
 const IVR_KEY      = process.env.IVR_KEY || "";
@@ -601,6 +615,201 @@ var ivrAudioUpload = multer({
     cb(ok ? null : new Error("סוג קובץ לא נתמך — יש להעלות קובץ שמע"), ok);
   },
 }).single("audio");
+
+// ── Pregreeting — temporary pre-opening IVR message ─────────────────────────
+// All 5 routes below sit under the same "/api/admin/ivr-audio" prefix as
+// everything else in this section, so they're already covered by the
+// apiLimiter + requireRole([ROLES.ADMIN]) applied once at the top of this
+// section (line ~524) — no separate auth wiring needed. None of their path
+// shapes ("pregreeting", "pregreeting/upload", "pregreeting/enabled",
+// "pregreeting/schedule") can ever collide with the generic ":id"-based
+// slot routes mounted right after this block.
+//
+// Reuses the exact same multer instance, format-conversion
+// (paymsgLifecycle.convertUploadedFile), atomic slot-write
+// (commitStagedUpload/approvePending) and per-audioId lock (paymsgLock) as
+// every other recording's upload — see ivr-audio-paymsg-lifecycle.service.js.
+// The only difference from a normal recording: upload auto-approves in the
+// same request (no separate "אשר" step — this is a simple on/off temporary
+// message, not a reviewed catalog sentence), and DELETE clears the active
+// slot too (a normal recording's DELETE never touches slot 1/2 — see
+// ivr-audio-paymsg.routes.js — but here "delete" means "remove the whole
+// temporary message", which by definition includes whatever's currently
+// active).
+
+// Best-effort delete of `filename` + its derived (-pcm8k.wav) counterpart —
+// mirrors ivr-audio-paymsg-lifecycle.service.js's internal safeUnlink, which
+// isn't exported (private to that module's closure). Never throws.
+function safeUnlinkPregreetingFile(filename) {
+  if (!filename) return;
+  [filename, convComputeDerivedFilename(filename)].forEach(function (name) {
+    var containment = convIsPathContained(IVR_AUDIO_UPLOADS_DIR, name);
+    if (!containment.ok) return;
+    try {
+      if (fs.existsSync(containment.resolvedPath)) fs.unlinkSync(containment.resolvedPath);
+    } catch (e) {
+      console.warn("[pregreeting] מחיקת קובץ ישן נכשלה, נדרש ניקוי ידני: " + containment.resolvedPath + " — " + e.message);
+    }
+  });
+}
+
+app.get("/api/admin/ivr-audio/pregreeting", function (req, res, next) {
+  try {
+    var row = getIvrAudioRecordingById(PREGREETING_AUDIO_ID);
+    if (!row) return res.status(404).json({ error: "שורת ההודעה הזמנית לא נמצאה" });
+    res.json({
+      audioId: row.audioId,
+      hasFile: !!row.audioFile1,
+      fileUrl: row.audioFile1 ? "/uploads/ivr-audio/" + encodeURIComponent(row.audioFile1) : null,
+      status: row.status,
+      enabled: !!row.enabled,
+      startAt: row.startAt || null,
+      endAt: row.endAt || null,
+      active: isPregreetingActiveNow(row),
+      updatedAt: row.updatedAt,
+      now: nowInJerusalem(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/api/admin/ivr-audio/pregreeting/upload", function (req, res, next) {
+  // Reuses the shared ivrAudioUpload multer instance exactly as-is — it
+  // derives the stored filename from req.params.id/req.params.slot, which
+  // this route (unlike the generic :id/:slot ones) doesn't naturally have,
+  // so they're set explicitly before handing off to the same middleware.
+  req.params.id = PREGREETING_AUDIO_ID;
+  req.params.slot = "3";
+
+  if (!paymsgLock.tryLock(PREGREETING_AUDIO_ID)) {
+    return res.status(409).json({ error: "פעולה אחרת כבר מתבצעת על ההודעה הזמנית, נסו שוב בעוד רגע" });
+  }
+
+  ivrAudioUpload(req, res, function (err) {
+    try {
+      if (err) return res.status(400).json({ error: err.message });
+      if (!req.file) return res.status(400).json({ error: "לא נשלח קובץ שמע" });
+
+      var converted = paymsgLifecycle.convertUploadedFile(req.file.filename);
+      if (!converted.ok) return res.status(422).json({ error: converted.error });
+
+      var staged = paymsgLifecycle.commitStagedUpload(PREGREETING_AUDIO_ID, req.file.filename);
+      if (!staged.ok) return res.status(staged.status || 400).json({ error: staged.error });
+
+      // Auto-approve in the same request — a temporary message has no
+      // separate editorial review step; upload IS the replace action. Does
+      // NOT touch enabled/startAt/endAt — uploading/replacing the file never
+      // changes whether it's turned on or its schedule (separate concerns,
+      // separate routes below).
+      var approved = paymsgLifecycle.approvePending(PREGREETING_AUDIO_ID);
+      if (!approved.ok) return res.status(approved.status || 400).json({ error: approved.error });
+
+      try {
+        insertAuditLog({
+          action: "ivr_pregreeting_upload", entityType: "ivr_audio_recording", entityId: PREGREETING_AUDIO_ID, entityName: PREGREETING_AUDIO_ID,
+          details: "הועלה/הוחלף קובץ ההודעה הזמנית לפני הפתיח",
+          workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+        });
+      } catch (_) {}
+
+      res.json({ ok: true, recording: approved.recording });
+    } finally {
+      paymsgLock.unlock(PREGREETING_AUDIO_ID);
+    }
+  });
+});
+
+app.delete("/api/admin/ivr-audio/pregreeting", function (req, res, next) {
+  try {
+    if (!paymsgLock.tryLock(PREGREETING_AUDIO_ID)) {
+      return res.status(409).json({ error: "פעולה אחרת כבר מתבצעת על ההודעה הזמנית, נסו שוב בעוד רגע" });
+    }
+    try {
+      // DB-first, disk-after — same ordering as every other delete in this
+      // file: the row must stop pointing at the files BEFORE they're
+      // unlinked, so a crash between the two steps never leaves a dangling
+      // reference to a missing file.
+      var result = resetPregreetingFileState();
+      [result.before.audioFile1, result.before.audioFile2, result.before.audioFile3]
+        .filter(Boolean)
+        .forEach(safeUnlinkPregreetingFile);
+
+      try {
+        insertAuditLog({
+          action: "ivr_pregreeting_delete", entityType: "ivr_audio_recording", entityId: PREGREETING_AUDIO_ID, entityName: PREGREETING_AUDIO_ID,
+          details: "נמחקה ההודעה הזמנית לפני הפתיח (הפתיח הקבוע לא נפגע)",
+          workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+        });
+      } catch (_) {}
+
+      res.json({ ok: true, recording: result.after });
+    } finally {
+      paymsgLock.unlock(PREGREETING_AUDIO_ID);
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put("/api/admin/ivr-audio/pregreeting/enabled", function (req, res, next) {
+  try {
+    var enabled = !!(req.body || {}).enabled;
+    var row = getIvrAudioRecordingById(PREGREETING_AUDIO_ID);
+    if (!row) return res.status(404).json({ error: "שורת ההודעה הזמנית לא נמצאה" });
+    if (enabled && (!row.audioFile1 || row.status !== "אושר")) {
+      return res.status(400).json({ error: "אין קובץ הודעה זמינה להפעלה — יש להעלות קובץ קודם" });
+    }
+
+    var updated = setPregreetingEnabled(enabled);
+
+    try {
+      insertAuditLog({
+        action: "ivr_pregreeting_enable", entityType: "ivr_audio_recording", entityId: PREGREETING_AUDIO_ID, entityName: PREGREETING_AUDIO_ID,
+        details: enabled ? "ההודעה הזמנית לפני הפתיח הופעלה" : "ההודעה הזמנית לפני הפתיח כובתה",
+        workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+      });
+    } catch (_) {}
+
+    res.json({ ok: true, recording: updated, active: isPregreetingActiveNow(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put("/api/admin/ivr-audio/pregreeting/schedule", function (req, res, next) {
+  try {
+    var body = req.body || {};
+    var startAt = body.startAt ? String(body.startAt).trim() : "";
+    var endAt   = body.endAt   ? String(body.endAt).trim()   : "";
+
+    if (!isValidScheduleValue(startAt) || !isValidScheduleValue(endAt)) {
+      return res.status(400).json({ error: "תאריך/שעה לא תקינים — פורמט נדרש: YYYY-MM-DDTHH:mm" });
+    }
+    if (startAt && endAt && startAt >= endAt) {
+      return res.status(400).json({ error: "מועד ההתחלה חייב להיות לפני מועד הסיום" });
+    }
+
+    var row = getIvrAudioRecordingById(PREGREETING_AUDIO_ID);
+    if (!row) return res.status(404).json({ error: "שורת ההודעה הזמנית לא נמצאה" });
+
+    var updated = setPregreetingSchedule(startAt || null, endAt || null);
+
+    try {
+      insertAuditLog({
+        action: "ivr_pregreeting_schedule", entityType: "ivr_audio_recording", entityId: PREGREETING_AUDIO_ID, entityName: PREGREETING_AUDIO_ID,
+        details: (startAt || endAt)
+          ? "נקבע טווח הפעלה להודעה הזמנית: " + (startAt || "ללא התחלה") + " — " + (endAt || "ללא סיום")
+          : "טווח ההפעלה של ההודעה הזמנית הוסר (חזרה להפעלה/כיבוי ידניים)",
+        workerId: req.user.id, workerName: req.user.name, ip: req.ip,
+      });
+    } catch (_) {}
+
+    res.json({ ok: true, recording: updated, active: isPregreetingActiveNow(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // PUT /:id (approve branch + plain field-update fallback), POST
 // /:id/audio/:slot (stage a pending upload), DELETE /:id/audio/:slot

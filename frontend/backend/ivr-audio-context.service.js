@@ -30,6 +30,7 @@
 //     lookup for anything that already has a known, hardcoded audioId.
 const { parseAudioMode, shouldUseAudioForCall } = require("./ivr-audio-mode.service");
 const { resolveAudioForProduction } = require("./ivr-audio-resolver.service");
+const { buildPregreetingFilesForProduction } = require("./ivr-pregreeting.service");
 const { normalizePhone } = require("./donor.service");
 
 let textToAudioIdCache = null;
@@ -59,12 +60,18 @@ function passthroughAudioContext() {
   return {
     resolveOrText: function (text) { return { text: text }; },
     resolveAudioId: function (audioId, fallbackText) { return { text: fallbackText }; },
+    // Pregreeting has no TTS equivalent — when audio is off for this call,
+    // it simply doesn't play (never a {text} substitute), same as it would
+    // if IVR_AUDIO_MODE gated it off entirely. See ivr-pregreeting.service.js.
+    getPregreetingFiles: function () { return []; },
   };
 }
 
 // deps (לבדיקות — DI מלא, לא נוגע ב-DB/דיסק אמיתיים):
 //   textToAudioId -> { [hebrewText]: audioId }
 //   resolveAudio(audioId, fallbackText) -> {fileLink,fileName} | {text}
+//   getPregreetingFiles() -> [] | [{fileLink,fileName}] (optional — tests
+//     that don't care about the pregreeting feature may omit it)
 function createAudioContext(deps) {
   return {
     resolveOrText: function (text) {
@@ -76,6 +83,9 @@ function createAudioContext(deps) {
     resolveAudioId: function (audioId, fallbackText) {
       return deps.resolveAudio(audioId, fallbackText);
     },
+    getPregreetingFiles: function () {
+      return typeof deps.getPregreetingFiles === "function" ? deps.getPregreetingFiles() : [];
+    },
   };
 }
 
@@ -83,6 +93,7 @@ function realAudioContext() {
   return createAudioContext({
     textToAudioId: textToAudioIdMap(),
     resolveAudio: resolveAudioForProduction,
+    getPregreetingFiles: buildPregreetingFilesForProduction,
   });
 }
 

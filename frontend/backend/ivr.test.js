@@ -329,6 +329,76 @@ check("10. buildResponse כולו לא זורק חריגה גם כש-audio זו�
   assert.doesNotThrow(function () { ivr.buildResponse({}, donor, makeThrowingAudio()); });
 });
 
+// ═══ 11. הודעה זמנית לפני הפתיח (pregreeting) ═══════════════════════════════
+// audio.getPregreetingFiles() is the injection point (see
+// ivr-audio-context.service.js/ivr-pregreeting.service.js) — ivr.js itself
+// only ever calls it and prepends whatever it returns before OPENING, on the
+// exact same first-turn gate. These tests only prove ivr.js's OWN wiring
+// (call it, prepend it, gate it) — the schedule/enabled logic itself is
+// tested in ivr-pregreeting.service.test.js.
+
+function makeAudioWithPregreeting(pregreetingFiles) {
+  var base = makeAlwaysResolvingAudio();
+  base.getPregreetingFiles = function () { return pregreetingFiles; };
+  return base;
+}
+
+check("11. אין pregreeting (ברירת מחדל, mock בלי getPregreetingFiles כלל) → OPEN-001 עדיין ראשון, כרגיל", function () {
+  var identState = { kind: "self_menu", donor: { fullName: "רבקה כהן" } };
+  var res = ivr.buildIdentificationResponse({}, identState, makeAlwaysResolvingAudio());
+  var files = res.files;
+  assert.strictEqual(files.length, 4, "בלי pregreeting האורך נשאר בדיוק כמו לפני התכונה");
+  assert.strictEqual(files[0].fileName, "OPEN-001");
+});
+
+check("11. pregreeting מחזיר [] (כבוי/לא בטווח) → OPEN-001 עדיין ראשון, בלי איבר נוסף", function () {
+  var identState = { kind: "self_menu", donor: { fullName: "רבקה כהן" } };
+  var res = ivr.buildIdentificationResponse({}, identState, makeAudioWithPregreeting([]));
+  var files = res.files;
+  assert.strictEqual(files.length, 4);
+  assert.strictEqual(files[0].fileName, "OPEN-001");
+});
+
+check("11. pregreeting פעילה (מחזירה fileLink) על תור ראשון → מופיעה ראשונה, לפני OPEN-001, פעם אחת בלבד", function () {
+  var identState = { kind: "self_menu", donor: { fullName: "רבקה כהן" } };
+  var pregreetingItem = { fileLink: "https://fake/PREGREETING-001.wav", fileName: "PREGREETING-001" };
+  var res = ivr.buildIdentificationResponse({}, identState, makeAudioWithPregreeting([pregreetingItem]));
+  var files = res.files;
+  assert.strictEqual(files.length, 5, "איבר אחד נוסף לעומת המקרה בלי pregreeting");
+  assert.deepStrictEqual(files[0], pregreetingItem, "פריט 1 חייב להיות ההודעה הזמנית");
+  assert.strictEqual(files[1].fileName, "OPEN-001", "פריט 2 (מיד אחרי) חייב להיות הפתיח הקבוע");
+  assert.strictEqual(files[2].fileName, "IDENT-001");
+  assert.deepStrictEqual(files[3], { text: "רבקה כהן" });
+  assert.strictEqual(files[4].fileName, "IDENT-002");
+});
+
+check("11. לא תור ראשון (identChoice מוגדר) → pregreeting לא מופיעה בכלל, גם אם ה-audio 'מפעיל' אותה", function () {
+  var identState = { kind: "self_menu", donor: { fullName: "רבקה כהן" } };
+  var pregreetingItem = { fileLink: "https://fake/PREGREETING-001.wav", fileName: "PREGREETING-001" };
+  var res = ivr.buildIdentificationResponse({ identChoice: "x" }, identState, makeAudioWithPregreeting([pregreetingItem]));
+  var files = res.files;
+  assert.strictEqual(files.length, 3, "זהה בדיוק למקרה בלי pregreeting על תור לא-ראשון — לא נוספה הודעה חוזרת");
+  files.forEach(function (f) { assert.notStrictEqual(f.fileName, "PREGREETING-001"); });
+});
+
+check("11. buildResponse (אחרי זיהוי, לא תור ראשון בכלל) אף פעם לא קורא ל-getPregreetingFiles", function () {
+  var called = false;
+  var audio = makeAlwaysResolvingAudio();
+  audio.getPregreetingFiles = function () { called = true; return []; };
+  var donor = baseDonor({ currentDebt: { amount: 25, purpose: "פרנס", purposeType: "פרנס" } });
+  ivr.buildResponse({}, donor, audio);
+  assert.strictEqual(called, false, "buildResponse הוא תמיד המשך שיחה, אחרי buildIdentificationResponse — pregreeting לא רלוונטי כאן");
+});
+
+check("11. audio.getPregreetingFiles זורק חריגה → מדלגים בבטחה ל-OPEN-001, לא קורס", function () {
+  var identState = { kind: "self_menu", donor: { fullName: "רבקה כהן" } };
+  var audio = makeAlwaysResolvingAudio();
+  audio.getPregreetingFiles = function () { throw new Error("boom"); };
+  var res;
+  assert.doesNotThrow(function () { res = ivr.buildIdentificationResponse({}, identState, audio); });
+  assert.strictEqual(res.files[0].fileName, "OPEN-001");
+});
+
 // ═══ סיכום ═══════════════════════════════════════════════════════════════════
 const failed = results.filter(function (r) { return !r.ok; });
 results.forEach(function (r) {

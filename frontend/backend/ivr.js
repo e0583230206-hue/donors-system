@@ -178,6 +178,7 @@ function p(query, name) {
 var DEFAULT_AUDIO = {
   resolveOrText: function (text) { return { text: text }; },
   resolveAudioId: function (audioId, fallbackText) { return { text: fallbackText }; },
+  getPregreetingFiles: function () { return []; },
 };
 
 // Text-based fallback lookup — kept ONLY for genuinely open-ended dynamic
@@ -199,6 +200,18 @@ function rid(audio, audioId, fallbackText) {
     return (audio || DEFAULT_AUDIO).resolveAudioId(audioId, fallbackText);
   } catch (e) {
     return txt(fallbackText);
+  }
+}
+
+// The optional temporary pre-greeting message — see
+// ivr-audio-context.service.js/ivr-pregreeting.service.js. Returns [] (skip,
+// safe no-op) when disabled/out-of-schedule/missing/on error — never a
+// {text} substitute, unlike every other rid()/ridT() call in this file.
+function preGreetingSegment(audio) {
+  try {
+    return (audio || DEFAULT_AUDIO).getPregreetingFiles();
+  } catch (e) {
+    return [];
   }
 }
 
@@ -471,8 +484,12 @@ function buildIdentificationResponse(query, identState, audio) {
   // OPENING plays exactly once per call — on the very first request, before
   // any identification param has been submitted at all. Every retry/submenu
   // after that omits it (matches how every other prompt in this file works).
+  // The optional temporary pre-greeting message (if currently enabled and,
+  // when scheduled, inside its window) plays immediately before OPENING, on
+  // this exact same first-turn gate — never repeated on retries/menu
+  // transitions, and never played on its own without OPENING right after it.
   var isFirstTurn = query.identChoice === undefined && query.selfIdentInput === undefined;
-  var opening = isFirstTurn ? [ridT(audio, "OPENING")] : [];
+  var opening = isFirstTurn ? preGreetingSegment(audio).concat([ridT(audio, "OPENING")]) : [];
 
   // IDENT_MULTIPLE_MATCHES → IDENT-009, IDENT_NOT_FOUND → IDENT-008 — both
   // explicit IDs (T_AUDIO_ID), never a text search.

@@ -1654,8 +1654,72 @@ function initIvrAudioRecordings() {
     )
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_ivr_audio_status ON ivr_audio_recordings(status)");
+
+  // enabled/startAt/endAt — added for the temporary "pre-greeting" message
+  // (see ivr-pregreeting.service.js). Generic columns on every row for the
+  // same reason audioFile2/audioFile3 are: adding them once here is simpler
+  // than a second table, and they are meaningless/unused for every row
+  // except PREGREETING-001 — nothing else in the system reads them.
+  try { db.exec("ALTER TABLE ivr_audio_recordings ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_audio_recordings ADD COLUMN startAt TEXT"); } catch (_) {}
+  try { db.exec("ALTER TABLE ivr_audio_recordings ADD COLUMN endAt TEXT"); } catch (_) {}
 }
 initIvrAudioRecordings();
+
+// ── Pregreeting (temporary pre-opening IVR message) ─────────────────────────
+// A single fixed row, reusing the exact same audioFile1/2/3+status lifecycle
+// (upload/convert/approve/delete) as every other ivr_audio_recordings row —
+// see ivr-pregreeting.service.js and ivr-audio-paymsg.routes.js. "PREGREETING-001"
+// is duplicated as a literal (not imported) in ivr-pregreeting.service.js too,
+// same reasoning as ivr-audio-resolver.service.js's GENERIC_FALLBACK_TEXT:
+// keeps that file's pure core DB-free without a circular require back here.
+const PREGREETING_AUDIO_ID = "PREGREETING-001";
+
+function ensurePregreetingRowExists() {
+  if (getIvrAudioRecordingById(PREGREETING_AUDIO_ID)) return;
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO ivr_audio_recordings
+      (audioId, category, sourceTextHe, translation, usageDescription, audioFile1, audioFile2, audioFile3, status, notes, enabled, startAt, endAt, createdAt, updatedAt)
+    VALUES (?, 'pregreeting', ?, '', ?, '', '', '', 'חסר', '', 0, NULL, NULL, ?, ?)
+  `).run(
+    PREGREETING_AUDIO_ID,
+    "הודעה זמנית לפני הפתיח",
+    "מושמעת (כשהיא פעילה) פעם אחת לפני OPEN-001, בתחילת השיחה בלבד",
+    now, now
+  );
+}
+ensurePregreetingRowExists();
+
+function setPregreetingEnabled(enabled) {
+  db.prepare("UPDATE ivr_audio_recordings SET enabled=?, updatedAt=? WHERE audioId=?")
+    .run(enabled ? 1 : 0, nowIso(), PREGREETING_AUDIO_ID);
+  return getIvrAudioRecordingById(PREGREETING_AUDIO_ID);
+}
+
+function setPregreetingSchedule(startAt, endAt) {
+  db.prepare("UPDATE ivr_audio_recordings SET startAt=?, endAt=?, updatedAt=? WHERE audioId=?")
+    .run(startAt || null, endAt || null, nowIso(), PREGREETING_AUDIO_ID);
+  return getIvrAudioRecordingById(PREGREETING_AUDIO_ID);
+}
+
+// Full reset — clears the active/previous/pending audio slots, status,
+// enabled flag and schedule together in one atomic UPDATE. Used only by the
+// pregreeting "delete" action (DELETE /api/admin/ivr-audio/pregreeting),
+// which — unlike the generic 3-slot lifecycle's delete (slot 3/pending
+// only) — intentionally clears the ACTIVE slot too: this row isn't a
+// permanent catalog sentence, it's an optional temporary message the admin
+// can fully remove. Returns the row's PRE-reset file names so the caller can
+// best-effort unlink them from disk.
+function resetPregreetingFileState() {
+  const before = getIvrAudioRecordingById(PREGREETING_AUDIO_ID);
+  db.prepare(`
+    UPDATE ivr_audio_recordings
+    SET audioFile1='', audioFile2='', audioFile3='', status='חסר', enabled=0, startAt=NULL, endAt=NULL, updatedAt=?
+    WHERE audioId=?
+  `).run(nowIso(), PREGREETING_AUDIO_ID);
+  return { before: before, after: getIvrAudioRecordingById(PREGREETING_AUDIO_ID) };
+}
 
 // Runs at most once. Three possible outcomes:
 //  - table has the OLD schema (audioFilename/yiddishText columns) → full
@@ -1941,4 +2005,9 @@ module.exports = {
   clearIvrAudioRecordingFileSlot,
   setIvrAudioRecordingSlots,
   IVR_AUDIO_CANONICAL_RECORDINGS,
+  // Pregreeting (temporary pre-opening IVR message)
+  PREGREETING_AUDIO_ID,
+  setPregreetingEnabled,
+  setPregreetingSchedule,
+  resetPregreetingFileState,
 };
