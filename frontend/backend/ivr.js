@@ -274,14 +274,30 @@ function spellDigitsForTTS(input) {
   return String(input || "").replace(/\D/g, "").split("").join(" ");
 }
 
-function record(name) {
-  return {
+function record(name, fileName) {
+  var mod = {
     type: "record",
     name: name,
     max: 60,
     min: 1,
     confirm: false,
   };
+  if (fileName) mod.fileName = fileName;
+  return mod;
+}
+
+// Deterministic Technoline storage name for a caller's recorded voicemail —
+// keyed by callId (not phone) so it never collides across calls, and lets
+// the download side (ivrFilesApi.php?action=fileDownload&fileName=...) look
+// the file up without depending on ambiguous FILE_<name>/ivrName semantics
+// in the record module's own response (see docs — record only documents
+// PATH_/FILEID_ output, not how to fetch the bytes back).
+// Exported so ivr.service.js reconstructs the exact same name when saving
+// the DB row, instead of trusting an echoed-back value.
+function buildVoiceMessageFileName(query) {
+  var callId = p(query, "PBXcallId") || ("phone-" + p(query, "PBXphone"));
+  var safe = String(callId || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+  return "vm_" + (safe || "unknown");
 }
 
 function hangup() { return { type: "hangup" }; }
@@ -539,7 +555,7 @@ function buildIdentificationResponse(query, identState, audio) {
       // mainChoice=3 below) — no new recording mechanism.
       return [
         simpleMessage([ridT(audio, "IDENT_MAX_ATTEMPTS"), ridT(audio, "LEAVE_MESSAGE")]),
-        record("voiceMessage"),
+        record("voiceMessage", buildVoiceMessageFileName(query)),
       ];
 
     default:
@@ -704,7 +720,7 @@ function buildResponse(query, donor, audio, paymsgAudio) {
     }
     return [
       simpleMessage([ridT(audio, "LEAVE_MESSAGE")]),
-      record("voiceMessage"),
+      record("voiceMessage", buildVoiceMessageFileName(query)),
     ];
   }
 
@@ -771,4 +787,5 @@ module.exports = {
   PAYMSG_S_CODE,
   buildPaymsgSystemMessages,
   creditCardModule,
+  buildVoiceMessageFileName,
 };

@@ -66,6 +66,10 @@ const {
   setPregreetingEnabled,
   setPregreetingSchedule,
   resetPregreetingFileState,
+  listIvrVoiceMessages,
+  getIvrVoiceMessageById,
+  updateIvrVoiceMessageStatus,
+  IVR_VOICE_MESSAGE_STATUSES,
 } = require("./db");
 
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
@@ -1303,6 +1307,118 @@ app.get(
       var callId = String(req.params.callId).trim();
       if (!callId) return res.status(400).json({ error: "callId is required" });
       res.json(getCallLogsByCallId(callId));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── IVR Voice Messages (caller-left voicemails) ───────────────────────────────
+app.get(
+  "/api/ivr/voice-messages",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var status = req.query.status ? String(req.query.status) : undefined;
+      res.json(listIvrVoiceMessages({ status: status, limit: req.query.limit }));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+app.patch(
+  "/api/ivr/voice-messages/:id",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: "invalid id" });
+
+      var status = String((req.body || {}).status || "").trim();
+      if (IVR_VOICE_MESSAGE_STATUSES.indexOf(status) === -1) {
+        return res.status(400).json({ error: "סטטוס לא תקין. חייב להיות אחד מ: " + IVR_VOICE_MESSAGE_STATUSES.join(", ") });
+      }
+
+      var updated = updateIvrVoiceMessageStatus(id, status);
+      if (!updated) return res.status(404).json({ error: "הודעה לא נמצאה" });
+
+      insertAuditLog({
+        action:     "ivr_voice_message_status",
+        entityType: "ivr_voice_message",
+        entityId:   id,
+        entityName: null,
+        details:    "סטטוס הודעה קולית עודכן ל-" + status,
+        workerId:   req.user && req.user.id,
+        workerName: req.user && req.user.name,
+        ip:         req.ip,
+      });
+
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// Streams the recording's audio bytes from Technoline through our own
+// server — the browser never sees TECHNOLINE_API_KEY or Technoline's URL
+// directly (see ivrExtensionsApiDocs.html: ivrFilesApi.php requires apiKey;
+// the /ivr callback endpoint itself also runs over plain HTTP — neither
+// belongs anywhere near the browser).
+app.get(
+  "/api/ivr/voice-messages/:id/audio",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: "invalid id" });
+
+      var msg = getIvrVoiceMessageById(id);
+      if (!msg) return res.status(404).json({ error: "הודעה לא נמצאה" });
+
+      var apiKey = process.env.TECHNOLINE_API_KEY || "";
+      if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
+
+      var params = new URLSearchParams({
+        action:    "fileDownload",
+        apiKey:    apiKey,
+        fileName:  msg.fileName,
+        extension: msg.extension || "",
+        play:      "1",
+      });
+
+      logger.info("IvrVoiceMessage", "→ fileDownload | id:", id, "| fileName:", msg.fileName);
+      var techRes;
+      try {
+        techRes = await fetch("https://app.ipsales.co.il/ivrFilesApi.php?" + params.toString(), {
+          method: "GET",
+          signal: AbortSignal.timeout(20000),
+        });
+      } catch (fetchErr) {
+        // Network failure / timeout reaching Technoline itself (as opposed
+        // to Technoline answering with "file not found") — same safe,
+        // clear message as the not-found case, never a raw 500.
+        logger.warn("IvrVoiceMessage", "← fileDownload network error | id:", id, "| " + fetchErr.message);
+        return res.status(502).json({ error: "לא ניתן היה להתחבר לשרת ההקלטות כרגע. נסה שוב מאוחר יותר." });
+      }
+
+      var contentType = techRes.headers.get("content-type") || "";
+      // Technoline returns HTTP 200 with a plain-text body even when the
+      // file doesn't exist / has expired — Content-Type is the only
+      // reliable success signal (see ivrExtensionsApiDocs.html §fileDownload).
+      if (!techRes.ok || contentType.indexOf("audio") === -1) {
+        var failText = "";
+        try { failText = (await techRes.text()).slice(0, 300); } catch (_) {}
+        logger.warn("IvrVoiceMessage", "← fileDownload failed | id:", id, "| HTTP", techRes.status,
+                    "| content-type:", contentType, "| body:", failText);
+        return res.status(404).json({ error: "ההקלטה אינה זמינה (ייתכן שנמחקה או שפג תוקפה)" });
+      }
+
+      var buf = Buffer.from(await techRes.arrayBuffer());
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      return res.send(buf);
     } catch (err) {
       next(err);
     }

@@ -1,4 +1,4 @@
-const { buildResponse, buildIdentificationResponse, MAX_PAYMENT_AMOUNT } = require("./ivr");
+const { buildResponse, buildIdentificationResponse, MAX_PAYMENT_AMOUNT, buildVoiceMessageFileName } = require("./ivr");
 const { buildAudioContext, buildPaymsgAudioContext } = require("./ivr-audio-context.service");
 const { parseAudioMode } = require("./ivr-audio-mode.service");
 const {
@@ -15,7 +15,10 @@ const {
   logCallEnd,
 } = require("./log.service");
 const { parsePositiveAmount, saveIvrPaymentOnce } = require("./payment.service");
-const { updateDonorDebtAfterPayment, insertAuditLog, findPaymentByCallId, findIvrDonationByCallId } = require("./db");
+const {
+  updateDonorDebtAfterPayment, insertAuditLog, findPaymentByCallId, findIvrDonationByCallId,
+  saveIvrVoiceMessageOnce,
+} = require("./db");
 
 // Caller-identification redesign: max failed attempts before falling back to
 // voicemail (decision #1/#2 — same cap for self-identification and
@@ -455,6 +458,37 @@ function wrapAudioForDiagnosticLog(realAudio) {
   };
 }
 
+// Persists the caller's voicemail metadata (not the audio itself — that's
+// fetched on demand from Technoline by the CRM screen) the first time this
+// callId's voice_message step is seen. donor is whatever resolveBeneficiary()
+// already resolved above (null for an unidentified caller who hit
+// max_attempts and was routed to voicemail — stored as a bare phone number,
+// never auto-creating a donor, per product requirement). Reconstructs the
+// exact same fileName ivr.js used when building the record module, rather
+// than trusting Technoline's echoed-back FILE_<name> value, so the download
+// side never depends on ambiguous response semantics. Best-effort: a DB
+// failure here must never break the caller's experience or the TTS reply.
+function saveVoiceMessageOnce(callId, phone, donor, q) {
+  try {
+    var fileName = buildVoiceMessageFileName(q);
+    saveIvrVoiceMessageOnce({
+      pbxCallId:   callId,
+      phone:       phone,
+      donorAppId:  donor ? donor.appDonorId : null,
+      donorName:   donor ? donor.fullName   : null,
+      fileName:    fileName,
+      extension:   String(process.env.TECHNOLINE_IVR_EXTENSION || "9263").trim(),
+      fileId:      lastParam(q, "FILEID_voiceMessage")  || null,
+      filePath:    lastParam(q, "PATH_voiceMessage")    || null,
+      durationSec: lastParam(q, "DURATION_voiceMessage") || null,
+      sizeMb:      lastParam(q, "SIZE_voiceMessage")     || null,
+    });
+  } catch (err) {
+    console.error("[IVR] Failed to save voice message record — call flow unaffected:", err.message,
+                  "| callId:", mask(callId));
+  }
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 function handleIvrQuery(query) {
@@ -557,6 +591,7 @@ function handleIvrQuery(query) {
     safeInsertCallLog(callId, phone, "voice_message_received",
       { donorId: donor ? donor.id : null });
     logCallEnd(callId, phone, "voice_message");
+    saveVoiceMessageOnce(callId, phone, donor, q);
     return { response: buildResponse(q, donor, audio, paymsgAudio) };
   }
 

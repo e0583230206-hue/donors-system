@@ -124,6 +124,24 @@ function initDatabase() {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS ivr_voice_messages (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      pbxCallId   TEXT    UNIQUE,
+      phone       TEXT    NOT NULL,
+      donorAppId  INTEGER,
+      donorName   TEXT,
+      fileName    TEXT    NOT NULL,
+      extension   TEXT,
+      fileId      TEXT,
+      filePath    TEXT,
+      durationSec REAL,
+      sizeMb      REAL,
+      status      TEXT    NOT NULL DEFAULT 'ממתין',
+      createdAt   TEXT    NOT NULL
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS app_state (
       key       TEXT PRIMARY KEY,
       value     TEXT NOT NULL,
@@ -237,6 +255,9 @@ function initDatabase() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_call_sessions_startedAt  ON ivr_call_sessions(startedAt)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_click2call_donorPhone    ON click2call_logs(donorPhone)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_click2call_createdAt     ON click2call_logs(createdAt)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_voice_messages_phone     ON ivr_voice_messages(phone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_voice_messages_status    ON ivr_voice_messages(status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_voice_messages_createdAt ON ivr_voice_messages(createdAt)");
 
   // ── Backfill payments from legacy ivr_donations ─────────────────
   const missingPayments = db.prepare(`
@@ -1134,6 +1155,70 @@ function getRecentClick2CallLogs(limit) {
   `).all(n);
 }
 
+// ── IVR voice messages (caller-left voicemails, recorded via the "record"
+// module and fetched on demand from Technoline's fileDownload action —
+// nothing here stores the audio bytes themselves, only enough to locate and
+// display them) ───────────────────────────────────────────────────────────
+
+// Same INSERT-OR-IGNORE-by-unique-key idempotency pattern as
+// savePaymentInTransaction() above — pbxCallId is UNIQUE, so a callback
+// Technoline resends for the same call (its documented retry behavior on
+// every module API request) never creates a second row.
+var IVR_VOICE_MESSAGE_STATUSES = ["ממתין", "טופל"];
+
+function saveIvrVoiceMessageOnce(details) {
+  var pbxCallId = String(details.pbxCallId || "").trim();
+  if (!pbxCallId) throw new Error("pbxCallId is required");
+
+  var existing = db.prepare("SELECT id FROM ivr_voice_messages WHERE pbxCallId = ? LIMIT 1").get(pbxCallId);
+  if (existing) return { duplicate: true, id: existing.id };
+
+  var info = db.prepare(`
+    INSERT INTO ivr_voice_messages
+      (pbxCallId, phone, donorAppId, donorName, fileName, extension, fileId, filePath, durationSec, sizeMb, status, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    pbxCallId,
+    String(details.phone || "").trim(),
+    details.donorAppId != null ? details.donorAppId : null,
+    details.donorName || null,
+    String(details.fileName || "").trim(),
+    details.extension || null,
+    details.fileId || null,
+    details.filePath || null,
+    details.durationSec != null ? Number(details.durationSec) : null,
+    details.sizeMb != null ? Number(details.sizeMb) : null,
+    IVR_VOICE_MESSAGE_STATUSES[0],
+    nowIso()
+  );
+  return { duplicate: false, id: info.lastInsertRowid };
+}
+
+function listIvrVoiceMessages(opts) {
+  var options = opts || {};
+  var limit = Math.min(Number(options.limit) || 200, 1000);
+  var where = [];
+  var params = [];
+  if (options.status) { where.push("status = ?"); params.push(String(options.status)); }
+  var sql = "SELECT * FROM ivr_voice_messages" +
+    (where.length ? " WHERE " + where.join(" AND ") : "") +
+    " ORDER BY id DESC LIMIT ?";
+  var stmt = db.prepare(sql);
+  return stmt.all.apply(stmt, params.concat([limit]));
+}
+
+function getIvrVoiceMessageById(id) {
+  return db.prepare("SELECT * FROM ivr_voice_messages WHERE id = ?").get(Number(id));
+}
+
+function updateIvrVoiceMessageStatus(id, status) {
+  if (IVR_VOICE_MESSAGE_STATUSES.indexOf(status) === -1) {
+    throw httpError(400, "סטטוס לא תקין: " + status);
+  }
+  var info = db.prepare("UPDATE ivr_voice_messages SET status = ? WHERE id = ?").run(status, Number(id));
+  return info.changes > 0;
+}
+
 // ── App State (key-value store for frontend data) ────────────────────────────
 
 const ALLOWED_APP_STATE_KEYS = new Set([
@@ -1956,6 +2041,12 @@ module.exports = {
   logClick2Call,
   getClick2CallLogs,
   getRecentClick2CallLogs,
+  // IVR voice messages
+  saveIvrVoiceMessageOnce,
+  listIvrVoiceMessages,
+  getIvrVoiceMessageById,
+  updateIvrVoiceMessageStatus,
+  IVR_VOICE_MESSAGE_STATUSES,
   // App state
   getAppState,
   setAppState,

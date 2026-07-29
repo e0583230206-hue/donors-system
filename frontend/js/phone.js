@@ -425,3 +425,146 @@ Database.whenReady(function () {
   fillWorkerSelect(workers);
   renderCallbacks();
 });
+
+// ── IVR Voice Messages ────────────────────────────────────────────────────────
+// Separate from the callbacks feature above: these rows come from the server
+// (ivr_voice_messages table), not from the donors JSON — an unmatched caller
+// has no donor record to attach to, so they can't live in donor.callbacks.
+// Reuses the exact same "ממתין"/"טופל" status vocabulary as callbacks —
+// intentionally not a second status system.
+var ivrVoiceMessagesTable = document.getElementById("ivrVoiceMessagesTable");
+var _ivrVoiceMessageAudio = {}; // id -> HTMLAudioElement (created lazily on first play)
+
+async function loadIvrVoiceMessages() {
+  if (!ivrVoiceMessagesTable || typeof apiFetch !== "function") return;
+  try {
+    var res = await apiFetch("/api/ivr/voice-messages");
+    if (!res.ok) return;
+    var list = await res.json();
+    renderIvrVoiceMessages(Array.isArray(list) ? list : []);
+  } catch (_) {}
+}
+
+function renderIvrVoiceMessages(list) {
+  if (!ivrVoiceMessagesTable) return;
+
+  if (list.length === 0) {
+    ivrVoiceMessagesTable.innerHTML =
+      '<tr class="empty-state-row"><td colspan="5">🎙️ אין הודעות קוליות</td></tr>';
+    return;
+  }
+
+  ivrVoiceMessagesTable.innerHTML = "";
+
+  list.forEach(function (msg) {
+    var row = document.createElement("tr");
+
+    var whoHtml = msg.donorAppId
+      ? escapeHTML(msg.donorName || "תורם") +
+        ' <a class="small-btn" href="donor.html?id=' + encodeURIComponent(msg.donorAppId) + '">כרטיס</a>'
+      : '<span dir="ltr">' + escapeHTML(msg.phone || "—") + "</span>";
+
+    // Stored as UTC ISO (createdAt); displayed explicitly in Asia/Jerusalem —
+    // matches the pattern already used for click2call/payment timelines
+    // (donor.js), not the browser's local timezone.
+    var dateStr = msg.createdAt
+      ? new Date(msg.createdAt).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem", hour12: false })
+      : "—";
+
+    var statusBadge = msg.status === "טופל"
+      ? '<span style="color:#1a7a1a;font-weight:600">✅ טופל</span>'
+      : '<span style="color:#a67c00;font-weight:600">🆕 ממתין</span>';
+
+    var actionHtml = msg.status === "טופל"
+      ? '<button class="warning-btn" onclick="setIvrVoiceMessageStatus(' + msg.id + ', \'ממתין\')">סמן כממתין</button>'
+      : '<button class="success-btn" onclick="setIvrVoiceMessageStatus(' + msg.id + ', \'טופל\')">סמן כטופל</button>';
+
+    row.innerHTML =
+      "<td>" + whoHtml + "</td>" +
+      '<td>' +
+        '<button type="button" class="small-btn" data-msg-id="' + msg.id + '">▶ הפעל</button> ' +
+        '<span class="ivr-vm-player-status" data-msg-status-for="' + msg.id + '" style="font-size:.85em;color:var(--muted)"></span>' +
+      '</td>' +
+      "<td>" + statusBadge + "</td>" +
+      "<td>" + escapeHTML(dateStr) + "</td>" +
+      "<td>" + actionHtml + "</td>";
+
+    ivrVoiceMessagesTable.appendChild(row);
+  });
+
+  Array.prototype.forEach.call(ivrVoiceMessagesTable.querySelectorAll("button[data-msg-id]"), function (btn) {
+    btn.addEventListener("click", function () {
+      toggleIvrVoiceMessagePlayback(Number(btn.getAttribute("data-msg-id")), btn);
+    });
+  });
+}
+
+// Lazily fetches the audio (authenticated, via apiFetch — a plain <audio
+// src="..."> can't carry the Authorization header) as a Blob on first click,
+// then just plays/pauses the same Audio object on subsequent clicks.
+async function toggleIvrVoiceMessagePlayback(id, btn) {
+  var statusEl = ivrVoiceMessagesTable.querySelector('[data-msg-status-for="' + id + '"]');
+  var existing = _ivrVoiceMessageAudio[id];
+
+  if (existing) {
+    if (existing.paused) {
+      existing.play().catch(function () {});
+    } else {
+      existing.pause();
+    }
+    return;
+  }
+
+  btn.disabled = true;
+  if (statusEl) statusEl.textContent = "טוען...";
+
+  try {
+    var res = await apiFetch("/api/ivr/voice-messages/" + id + "/audio");
+    if (!res.ok) {
+      var errBody = null;
+      try { errBody = await res.json(); } catch (_) {}
+      if (statusEl) statusEl.textContent = (errBody && errBody.error) || "🔇 ההקלטה אינה זמינה";
+      btn.disabled = false;
+      return;
+    }
+
+    var blob = await res.blob();
+    var url = URL.createObjectURL(blob);
+    var audio = new Audio(url);
+    _ivrVoiceMessageAudio[id] = audio;
+
+    audio.addEventListener("play",  function () { btn.textContent = "⏸ השהה"; });
+    audio.addEventListener("pause", function () { btn.textContent = "▶ המשך"; });
+    audio.addEventListener("ended", function () { btn.textContent = "▶ הפעל מההתחלה"; });
+    audio.addEventListener("error", function () {
+      if (statusEl) statusEl.textContent = "🔇 שגיאה בנגינת ההקלטה";
+      delete _ivrVoiceMessageAudio[id];
+      btn.disabled = false;
+    });
+
+    btn.disabled = false;
+    if (statusEl) statusEl.textContent = "";
+    audio.play().catch(function () {});
+  } catch (_) {
+    if (statusEl) statusEl.textContent = "🔇 ההקלטה אינה זמינה";
+    btn.disabled = false;
+  }
+}
+
+async function setIvrVoiceMessageStatus(id, status) {
+  try {
+    var res = await apiFetch("/api/ivr/voice-messages/" + id, {
+      method: "PATCH",
+      body: JSON.stringify({ status: status }),
+    });
+    if (!res.ok) {
+      showMessage("עדכון הסטטוס נכשל", "error");
+      return;
+    }
+    loadIvrVoiceMessages();
+  } catch (_) {
+    showMessage("עדכון הסטטוס נכשל", "error");
+  }
+}
+
+loadIvrVoiceMessages();
