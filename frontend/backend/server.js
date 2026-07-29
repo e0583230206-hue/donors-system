@@ -349,18 +349,19 @@ function timingSafeEq(a, b) {
   }
 }
 
-// Set IVR_DEBUG=true in .env to see raw (unmasked) IVR query params in logs
-// without changing NODE_ENV — same escape hatch ivr.service.js already uses.
-const IVR_DEBUG = process.env.IVR_DEBUG === "true";
 const IVR_LOG_SENSITIVE_KEYS = ["ivrKey", "PBXphone", "selfIdentInput", "beneficiaryIdentInput", "amount", "CONFIRM_payment"];
 
 // Every IVR request/rejection used to be logged with the full raw query
 // string (phones, ivrKey, amounts, confirmation numbers) — this redacts the
 // sensitive fields before anything reaches server logs / PM2 logs, since
 // nginx's `access_log off` for /ivr only protects the nginx log, not this one.
+// Unconditional — previously skipped whenever NODE_ENV wasn't exactly
+// "production" or IVR_DEBUG=true was set, which is exactly the situation a
+// live debugging session runs under, so the one time this mattered most it
+// didn't apply. Diagnostic fields (callId, step names, param keys) were
+// never in IVR_LOG_SENSITIVE_KEYS and still print in full everywhere else in
+// this file — only actual PII/secrets are ever withheld here.
 function sanitizeIvrQueryForLog(query) {
-  var isProd = process.env.NODE_ENV === "production" && !IVR_DEBUG;
-  if (!isProd) return query;
   var out = {};
   Object.keys(query || {}).forEach(function (key) {
     out[key] = IVR_LOG_SENSITIVE_KEYS.indexOf(key) !== -1 ? "[REDACTED]" : query[key];
@@ -1380,15 +1381,25 @@ app.get(
       var apiKey = process.env.TECHNOLINE_API_KEY || "";
       if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
 
-      var params = new URLSearchParams({
-        action:    "fileDownload",
-        apiKey:    apiKey,
-        fileName:  msg.fileName,
-        extension: msg.extension || "",
-        play:      "1",
-      });
+      // Prefer Technoline's own returned identifier (technolineAudio, from
+      // FILE_voiceMessage on the callback) over our requested fileName —
+      // production testing showed the file Technoline actually creates only
+      // STARTS WITH our requested name, not matches it exactly, so a
+      // fileName-based lookup can miss a file that genuinely exists. `audio`
+      // is documented as the most precise way to identify a file; `fileName`
+      // (+ `extension` to narrow the search) is the fallback for older rows
+      // saved before technolineAudio was captured.
+      var lookup = msg.technolineAudio
+        ? { audio: msg.technolineAudio }
+        : { fileName: msg.fileName, extension: msg.extension || "" };
 
-      logger.info("IvrVoiceMessage", "→ fileDownload | id:", id, "| fileName:", msg.fileName);
+      var params = new URLSearchParams(Object.assign({
+        action: "fileDownload",
+        apiKey: apiKey,
+        play:   "1",
+      }, lookup));
+
+      logger.info("IvrVoiceMessage", "→ fileDownload | id:", id, "| lookup:", JSON.stringify(lookup));
       var techRes;
       try {
         techRes = await fetch("https://app.ipsales.co.il/ivrFilesApi.php?" + params.toString(), {
@@ -1408,10 +1419,20 @@ app.get(
       // file doesn't exist / has expired — Content-Type is the only
       // reliable success signal (see ivrExtensionsApiDocs.html §fileDownload).
       if (!techRes.ok || contentType.indexOf("audio") === -1) {
-        var failText = "";
-        try { failText = (await techRes.text()).slice(0, 300); } catch (_) {}
+        // fetch's .text() already decodes the body as UTF-8 regardless of
+        // the (often wrong/misleading) declared Content-Type — Technoline's
+        // error responses are JSON ({"status":"ERROR","note":"..."}) even
+        // though they're served as text/html, so try that first for a clean
+        // reading; JSON.stringify() on the raw text is the fallback so any
+        // genuinely non-JSON body still prints as an unambiguous, safely
+        // escaped string instead of raw (possibly control-character-laden)
+        // bytes dumped straight into the log.
+        var rawFailText = "";
+        try { rawFailText = (await techRes.text()).slice(0, 500); } catch (_) {}
+        var failLogged = rawFailText;
+        try { failLogged = JSON.stringify(JSON.parse(rawFailText)); } catch (_) { failLogged = JSON.stringify(rawFailText); }
         logger.warn("IvrVoiceMessage", "← fileDownload failed | id:", id, "| HTTP", techRes.status,
-                    "| content-type:", contentType, "| body:", failText);
+                    "| content-type:", contentType, "| lookup:", JSON.stringify(lookup), "| body:", failLogged);
         return res.status(404).json({ error: "ההקלטה אינה זמינה (ייתכן שנמחקה או שפג תוקפה)" });
       }
 

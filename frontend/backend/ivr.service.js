@@ -463,25 +463,38 @@ function wrapAudioForDiagnosticLog(realAudio) {
 // callId's voice_message step is seen. donor is whatever resolveBeneficiary()
 // already resolved above (null for an unidentified caller who hit
 // max_attempts and was routed to voicemail — stored as a bare phone number,
-// never auto-creating a donor, per product requirement). Reconstructs the
-// exact same fileName ivr.js used when building the record module, rather
-// than trusting Technoline's echoed-back FILE_<name> value, so the download
-// side never depends on ambiguous response semantics. Best-effort: a DB
-// failure here must never break the caller's experience or the TTS reply.
+// never auto-creating a donor, per product requirement).
+//
+// technolineAudio (FILE_voiceMessage) is Technoline's OWN record of what it
+// actually named the saved file — production testing showed the file it
+// creates only STARTS WITH our requested fileName (buildVoiceMessageFileName)
+// rather than matching it byte-for-byte (Technoline likely appends something
+// to keep names unique), so a fileName-based download lookup can miss a file
+// that genuinely exists. The download side now prefers this echoed-back
+// value (matches fileDownload's `audio` param — documented as "the most
+// precise way" to identify a file) and only falls back to our own
+// reconstructed fileName if Technoline didn't echo one back. Best-effort: a
+// DB failure here must never break the caller's experience or the TTS reply.
 function saveVoiceMessageOnce(callId, phone, donor, q) {
   try {
     var fileName = buildVoiceMessageFileName(q);
+    // PBXextensionId is Technoline's own field on the live callback (confirmed
+    // via production testing) — preferred over the TECHNOLINE_IVR_EXTENSION
+    // env var default, which may be unset or stale.
+    var extension = lastParam(q, "PBXextensionId") ||
+      String(process.env.TECHNOLINE_IVR_EXTENSION || "9263").trim();
     saveIvrVoiceMessageOnce({
-      pbxCallId:   callId,
-      phone:       phone,
-      donorAppId:  donor ? donor.appDonorId : null,
-      donorName:   donor ? donor.fullName   : null,
-      fileName:    fileName,
-      extension:   String(process.env.TECHNOLINE_IVR_EXTENSION || "9263").trim(),
-      fileId:      lastParam(q, "FILEID_voiceMessage")  || null,
-      filePath:    lastParam(q, "PATH_voiceMessage")    || null,
-      durationSec: lastParam(q, "DURATION_voiceMessage") || null,
-      sizeMb:      lastParam(q, "SIZE_voiceMessage")     || null,
+      pbxCallId:       callId,
+      phone:           phone,
+      donorAppId:      donor ? donor.appDonorId : null,
+      donorName:       donor ? donor.fullName   : null,
+      fileName:        fileName,
+      technolineAudio: lastParam(q, "FILE_voiceMessage")   || null,
+      extension:       String(extension).trim(),
+      fileId:          lastParam(q, "FILEID_voiceMessage")  || null,
+      filePath:        lastParam(q, "PATH_voiceMessage")    || null,
+      durationSec:     lastParam(q, "DURATION_voiceMessage") || null,
+      sizeMb:          lastParam(q, "SIZE_voiceMessage")     || null,
     });
   } catch (err) {
     console.error("[IVR] Failed to save voice message record — call flow unaffected:", err.message,

@@ -98,8 +98,8 @@ async function main() {
   // ── Fixtures: תורם ידוע + שתי הודעות (אחת עם תורם, אחת בלי) ──────────────────
   db.setAppState("donors", [{ id: 701, phone: "0501234567", fullName: "שרה לוי" }]);
 
-  let knownMsgId, unknownMsgId;
-  await check("[הכנה] יצירת הודעה קולית מתורם מוכר + הודעה ממספר לא מוכר", async function () {
+  let knownMsgId, unknownMsgId, techAudioMsgId;
+  await check("[הכנה] יצירת הודעה קולית מתורם מוכר + הודעה ממספר לא מוכר + הודעה עם technolineAudio", async function () {
     const known = db.saveIvrVoiceMessageOnce({
       pbxCallId: "ROUTE-TEST-KNOWN-1", phone: "0501234567", donorAppId: 701, donorName: "שרה לוי",
       fileName: "vm_ROUTE-TEST-KNOWN-1", extension: "9263",
@@ -108,9 +108,16 @@ async function main() {
       pbxCallId: "ROUTE-TEST-UNKNOWN-1", phone: "0509990000",
       fileName: "vm_ROUTE-TEST-UNKNOWN-1", extension: "9263",
     });
+    // מדמה שורה שנשמרה עם השם שטכנוליין החזירה בפועל (FILE_voiceMessage) —
+    // לא בהכרח זהה ל-fileName שביקשנו.
+    const withTechAudio = db.saveIvrVoiceMessageOnce({
+      pbxCallId: "ROUTE-TEST-TECHAUDIO-1", phone: "0501234567", donorAppId: 701, donorName: "שרה לוי",
+      fileName: "vm_ROUTE-TEST-TECHAUDIO-1", technolineAudio: "vm_ROUTE-TEST-TECHAUDIO-1_xyz789", extension: "9263",
+    });
     knownMsgId = known.id;
     unknownMsgId = unknown.id;
-    assert.ok(knownMsgId && unknownMsgId);
+    techAudioMsgId = withTechAudio.id;
+    assert.ok(knownMsgId && unknownMsgId && techAudioMsgId);
   });
 
   // ── GET list ──────────────────────────────────────────────────────────────
@@ -193,6 +200,22 @@ async function main() {
     );
   });
 
+  await check("GET .../audio כשיש technolineAudio שמור -> משתמש ב-audio=<technolineAudio>, לא ב-fileName (הדרך המדויקת יותר לפי התיעוד)", async function () {
+    const fakeAudioBytes = Buffer.from([0x49, 0x44, 0x33]);
+    await withMockedFetch(
+      async function (url) {
+        assert.ok(String(url).indexOf("audio=vm_ROUTE-TEST-TECHAUDIO-1_xyz789") !== -1,
+                   "צריך לחפש לפי technolineAudio, לא לפי fileName שביקשנו");
+        assert.ok(String(url).indexOf("fileName=") === -1, "כשיש technolineAudio, אסור לשלוח גם fileName");
+        return new Response(fakeAudioBytes, { status: 200, headers: { "content-type": "audio/mp3" } });
+      },
+      async function () {
+        const res = await apiRequest("GET", "/api/ivr/voice-messages/" + techAudioMsgId + "/audio", undefined, adminToken);
+        assert.strictEqual(res.status, 200);
+      }
+    );
+  });
+
   await check("GET .../audio כשטכנוליין מחזירה 200 עם טקסט רגיל (קובץ לא קיים/פג תוקף) -> 404 ברור, לא קורס ולא מוגש כאודיו", async function () {
     await withMockedFetch(
       async function () {
@@ -202,6 +225,24 @@ async function main() {
         const res = await apiRequest("GET", "/api/ivr/voice-messages/" + unknownMsgId + "/audio", undefined, adminToken);
         assert.strictEqual(res.status, 404);
         assert.ok(res.body && res.body.error, "חייבת לחזור הודעת שגיאה ברורה, לא גוף טקסט גולמי מטכנוליין");
+      }
+    );
+  });
+
+  await check("GET .../audio כשטכנוליין מחזירה שגיאת JSON תחת Content-Type: text/html (הצורה האמיתית שאומתה בבדיקת ייצור) -> 404 ברור, לא קורס", async function () {
+    // אומת ישירות מול app.ipsales.co.il (ivrFilesApi.php) עם apiKey לא תקין:
+    // {"status":"ERROR","note":"Unrecognized system"} מוגש עם
+    // Content-Type: text/html; charset=UTF-8 — בדיוק כמו שבדיקת הייצור הראתה.
+    await withMockedFetch(
+      async function () {
+        return new Response('{"status":"ERROR","note":"קובץ לא נמצא"}', {
+          status: 200, headers: { "content-type": "text/html; charset=UTF-8" },
+        });
+      },
+      async function () {
+        const res = await apiRequest("GET", "/api/ivr/voice-messages/" + knownMsgId + "/audio", undefined, adminToken);
+        assert.strictEqual(res.status, 404);
+        assert.ok(res.body && res.body.error);
       }
     );
   });
@@ -226,6 +267,40 @@ async function main() {
     } finally {
       process.env.TECHNOLINE_API_KEY = original;
     }
+  });
+
+  // ── PII redaction in /ivr logs (production found phone numbers printed in
+  // full — sanitizeIvrQueryForLog used to skip redaction whenever NODE_ENV
+  // wasn't exactly "production" or IVR_DEBUG was set, which is exactly the
+  // situation a live debugging session runs under) ────────────────────────────
+
+  const ivrKey = process.env.IVR_KEY; // populated by dotenv when ./server was required above
+  const testPhone = "0507654321";
+
+  await check("GET /ivr עם voiceMessage: מספר הטלפון לעולם לא מודפס גלוי בלוג השרת, גם כשההודעה בכל זאת נשמרת כראוי", async function () {
+    if (!ivrKey) return; // no IVR_KEY configured in this environment — nothing to verify against
+
+    const originalLog = console.log;
+    const captured = [];
+    console.log = function (...args) { captured.push(args.map(String).join(" ")); };
+    try {
+      const res = await fetch(
+        baseUrl + "/ivr?ivrKey=" + encodeURIComponent(ivrKey) +
+        "&PBXphone=" + testPhone + "&PBXcallId=CALL-PII-LOG-1&PBXextensionId=9263&voiceMessage=1",
+        { method: "GET" }
+      );
+      assert.strictEqual(res.status, 200);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const joined = captured.join("\n");
+    assert.ok(joined.indexOf(testPhone) === -1, "מספר הטלפון הגולמי הופיע בלוג השרת — הוא היה חייב להיות מצונזר");
+
+    // מוודא שהמספר בכל זאת עובד בפועל (לא נבלע/נשבר) — נשמר ב-DB כרגיל.
+    const row = db.listIvrVoiceMessages({ limit: 1000 }).find(function (r) { return r.pbxCallId === "CALL-PII-LOG-1"; });
+    assert.ok(row, "ההודעה עדיין חייבת להישמר כרגיל — הצנזור הוא רק בלוג, לא בפונקציונליות");
+    assert.strictEqual(row.phone, testPhone);
   });
 
   // ── סיכום ─────────────────────────────────────────────────────────────────────

@@ -105,9 +105,11 @@ function accumulatedVoiceMessageQuery(overrides) {
   return Object.assign({
     PBXcallId: "CALL-VM-INT-1",
     PBXphone:  "0501112222",
+    PBXextensionId: "9263", // שדה אמיתי שטכנוליין שולחת ב-callback (אומת בבדיקת ייצור)
     mainChoice: "3",
     identChoice: "1", // מזוהה כתורם עצמו (self) — הגיע דרך התפריט הראשי
     voiceMessage: "1",
+    FILE_voiceMessage: "vm_CALL-VM-INT-1_a1b2c3", // השם ש"טכנוליין" באמת שמרה — לא בהכרח זהה למה שביקשנו
     FILEID_voiceMessage: "999",
     PATH_voiceMessage: "/rec/vm_CALL-VM-INT-1.wav",
     DURATION_voiceMessage: "12",
@@ -126,6 +128,35 @@ check("handleIvrQuery: הודעה מתורם מוכר (ANI תואם) => נשמר
   assert.strictEqual(rows[0].donorName, "יעקב כהן (תורם ידוע)");
   assert.strictEqual(rows[0].phone, "0501112222");
   assert.strictEqual(rows[0].status, "ממתין");
+});
+
+check("handleIvrQuery: technolineAudio נשמר מ-FILE_voiceMessage (השם שטכנוליין באמת יצרה, לא רק מה שביקשנו)", function () {
+  var q = accumulatedVoiceMessageQuery({ PBXcallId: "CALL-VM-TECHAUDIO-1" });
+  handleIvrQuery(q);
+
+  var row = db.listIvrVoiceMessages({ limit: 1000 }).find(function (r) { return r.pbxCallId === "CALL-VM-TECHAUDIO-1"; });
+  assert.ok(row);
+  assert.strictEqual(row.technolineAudio, "vm_CALL-VM-INT-1_a1b2c3");
+  // fileName (הבקשה שלנו) עדיין נשמר בנפרד, לצורך debug/fallback — לא נדרס.
+  assert.ok(row.fileName && row.fileName.indexOf("vm_") === 0);
+});
+
+check("handleIvrQuery: extension נלקח מ-PBXextensionId האמיתי שמגיע ב-callback, לא רק מ-.env", function () {
+  var q = accumulatedVoiceMessageQuery({ PBXcallId: "CALL-VM-EXT-1", PBXextensionId: "4501" });
+  handleIvrQuery(q);
+
+  var row = db.listIvrVoiceMessages({ limit: 1000 }).find(function (r) { return r.pbxCallId === "CALL-VM-EXT-1"; });
+  assert.ok(row);
+  assert.strictEqual(row.extension, "4501");
+});
+
+check("handleIvrQuery: PBXextensionId חסר => נופל בחזרה ל-TECHNOLINE_IVR_EXTENSION/9263, לא קורס", function () {
+  var q = accumulatedVoiceMessageQuery({ PBXcallId: "CALL-VM-EXT-2", PBXextensionId: undefined });
+  assert.doesNotThrow(function () { handleIvrQuery(q); });
+
+  var row = db.listIvrVoiceMessages({ limit: 1000 }).find(function (r) { return r.pbxCallId === "CALL-VM-EXT-2"; });
+  assert.ok(row);
+  assert.ok(row.extension, "עדיין חייב להישמר ערך extension כלשהו (ברירת מחדל)");
 });
 
 check("handleIvrQuery: הודעה ממספר לא מוכר (ANI לא תואם אף תורם) => נשמרת בלי donorAppId, בלי יצירת תורם חדש", function () {

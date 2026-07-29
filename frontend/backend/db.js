@@ -125,19 +125,20 @@ function initDatabase() {
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS ivr_voice_messages (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      pbxCallId   TEXT    UNIQUE,
-      phone       TEXT    NOT NULL,
-      donorAppId  INTEGER,
-      donorName   TEXT,
-      fileName    TEXT    NOT NULL,
-      extension   TEXT,
-      fileId      TEXT,
-      filePath    TEXT,
-      durationSec REAL,
-      sizeMb      REAL,
-      status      TEXT    NOT NULL DEFAULT 'ממתין',
-      createdAt   TEXT    NOT NULL
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      pbxCallId       TEXT    UNIQUE,
+      phone           TEXT    NOT NULL,
+      donorAppId      INTEGER,
+      donorName       TEXT,
+      fileName        TEXT    NOT NULL,
+      technolineAudio TEXT,
+      extension       TEXT,
+      fileId          TEXT,
+      filePath        TEXT,
+      durationSec     REAL,
+      sizeMb          REAL,
+      status          TEXT    NOT NULL DEFAULT 'ממתין',
+      createdAt       TEXT    NOT NULL
     )
   `);
 
@@ -232,6 +233,11 @@ function initDatabase() {
   // request of the call first reaches beneficiary resolution (identification
   // now happens on an earlier request — see resolveBeneficiary() callers).
   try { db.exec("ALTER TABLE ivr_call_sessions ADD COLUMN identificationLogged INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+  // Technoline's own name for the saved recording (FILE_voiceMessage) —
+  // added after production testing showed the file it creates only STARTS
+  // WITH our requested fileName, not matches it exactly, breaking
+  // fileName-based downloads for rows saved before this column existed.
+  try { db.exec("ALTER TABLE ivr_voice_messages ADD COLUMN technolineAudio TEXT"); } catch (_) {}
 
   try {
     const missing = db.prepare("SELECT COUNT(*) AS count FROM ivr_call_logs WHERE timestamp IS NULL").get();
@@ -1175,14 +1181,15 @@ function saveIvrVoiceMessageOnce(details) {
 
   var info = db.prepare(`
     INSERT INTO ivr_voice_messages
-      (pbxCallId, phone, donorAppId, donorName, fileName, extension, fileId, filePath, durationSec, sizeMb, status, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (pbxCallId, phone, donorAppId, donorName, fileName, technolineAudio, extension, fileId, filePath, durationSec, sizeMb, status, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     pbxCallId,
     String(details.phone || "").trim(),
     details.donorAppId != null ? details.donorAppId : null,
     details.donorName || null,
     String(details.fileName || "").trim(),
+    details.technolineAudio || null,
     details.extension || null,
     details.fileId || null,
     details.filePath || null,
