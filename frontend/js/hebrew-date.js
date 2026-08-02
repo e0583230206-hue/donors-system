@@ -258,5 +258,6 @@
     getParsha: getParsha,
     getLocalDateTime: getLocalDateTime,
     getFullHebrewDateInfo: getFullHebrewDateInfo,
+    getLocalDateKey: getLocalDateKey,
   };
 })(window);

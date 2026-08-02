@@ -401,6 +401,28 @@ var donorAllPhones = function (d) {
   return [d.phone, d.phone2, d.phone3, d.phone4].map(normPhone).filter(Boolean);
 };
 
+// Reads a cell's raw value (Date object / number / string) without the
+// String(v).trim() coercion colVal() does — needed for the date column,
+// where stringifying a Date first would throw away its actual value.
+var rawColVal = function (row, keys) {
+  for (var i = 0; i < keys.length; i++) {
+    var v = row[keys[i]];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  return null;
+};
+
+function registerDonorInLookupMaps(maps, d) {
+  if (d.idNumber) {
+    var idKey = String(d.idNumber).replace(/\D/g, "");
+    if (idKey && !(idKey in maps.byIdNumber)) maps.byIdNumber[idKey] = d;
+  }
+  var phones = donorAllPhones(d);
+  for (var j = 0; j < phones.length; j++) {
+    if (!(phones[j] in maps.byPhone)) maps.byPhone[phones[j]] = d;
+  }
+}
+
 // Precomputes idNumber/phone → donor lookup maps once per import instead of
 // rescanning existingDonors (and rebuilding donorAllPhones(d) each time) for
 // every phone of every imported row — that was O(rows * donors), and a real
@@ -408,20 +430,9 @@ var donorAllPhones = function (d) {
 // tab for many seconds. Preserves the original "first match in array order
 // wins" semantics since earlier donors are never overwritten in the map.
 function buildDonorLookupMaps(existingDonors) {
-  var byIdNumber = Object.create(null);
-  var byPhone    = Object.create(null);
-  for (var i = 0; i < existingDonors.length; i++) {
-    var d = existingDonors[i];
-    if (d.idNumber) {
-      var idKey = String(d.idNumber).replace(/\D/g, "");
-      if (idKey && !(idKey in byIdNumber)) byIdNumber[idKey] = d;
-    }
-    var phones = donorAllPhones(d);
-    for (var j = 0; j < phones.length; j++) {
-      if (!(phones[j] in byPhone)) byPhone[phones[j]] = d;
-    }
-  }
-  return { byIdNumber: byIdNumber, byPhone: byPhone };
+  var maps = { byIdNumber: Object.create(null), byPhone: Object.create(null) };
+  for (var i = 0; i < existingDonors.length; i++) registerDonorInLookupMaps(maps, existingDonors[i]);
+  return maps;
 }
 
 function findExistingDonor(rowPhones, rowIdNumber, existingDonors, lookupMaps) {
@@ -437,10 +448,102 @@ function findExistingDonor(rowPhones, rowIdNumber, existingDonors, lookupMaps) {
   return null;
 }
 
+// Keeps a field's already-known value; only fills it from `incoming` when it's
+// still empty. Used so import rows can never blank out or overwrite existing
+// donor details — only add what was missing.
+function mergeDonorField(current, incoming) {
+  return (current && String(current).trim() !== "") ? current : (incoming || "");
+}
+
+// Matches the donor form's own purposeType select (#purposeSelect / #editDonationPurposeSelect
+// in donor.html): a known category is stored as-is, anything else becomes "אחר" + customPurpose,
+// exactly like a human picking "אחר" and typing a custom purpose in the form would.
+var KNOWN_DONATION_PURPOSES = ["גליון מתאחדת", "פרנס"];
+
+function resolvePurpose(raw) {
+  var trimmed = (raw || "").trim();
+  if (!trimmed) return { purposeType: "אחר", finalPurpose: "כללי", customPurpose: "" };
+  var known = KNOWN_DONATION_PURPOSES.indexOf(trimmed) !== -1 ? trimmed : null;
+  if (known) return { purposeType: known, finalPurpose: known, customPurpose: "" };
+  return { purposeType: "אחר", finalPurpose: trimmed, customPurpose: trimmed };
+}
+
+function resolveCurrency(raw, fallback) {
+  var t = (raw || "").trim();
+  if (!t) return fallback;
+  var upper = t.toUpperCase();
+  if (upper === "USD" || t.indexOf("$") !== -1 || t.indexOf("דולר") !== -1) return "USD";
+  if (upper === "ILS" || upper === "NIS" || t.indexOf("₪") !== -1 || t.indexOf("שקל") !== -1) return "ILS";
+  return fallback;
+}
+
+// Accepts a JS Date (when the workbook was read with cellDates:true), a raw
+// Excel serial date number (fallback for cells that slip through as numbers),
+// or a text date (dd/mm/yyyy or anything the native parser understands).
+function parseRowDate(val) {
+  if (val === undefined || val === null || val === "") return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val === "number") {
+    var excelEpochMs = Date.UTC(1899, 11, 30);
+    var d = new Date(excelEpochMs + val * 86400000);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  var str = String(val).trim();
+  if (!str) return null;
+  var m = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) {
+    var day = parseInt(m[1], 10), month = parseInt(m[2], 10), year = parseInt(m[3], 10);
+    if (year < 100) year += 2000;
+    var d2 = new Date(year, month - 1, day);
+    return isNaN(d2.getTime()) ? null : d2;
+  }
+  var d3 = new Date(str);
+  return isNaN(d3.getTime()) ? null : d3;
+}
+
+// Parses every donation-level column for one row. Returns null when the row
+// carries no amount — such a row only touches donor fields, no donation is
+// created for it.
+function buildDonationEntry(row, rowIndex) {
+  var parsedAmt = parseCurrencyAmt(colVal(row, ["סכום", "amount"]));
+  var amount = parsedAmt.value;
+  if (isNaN(amount) || amount <= 0) return null;
+
+  var paidAmt = parseCurrencyAmt(colVal(row, ["שולם", "paid"])).value || 0;
+  var remRaw  = colVal(row, ["נשאר חייב", "remainingDebt"]);
+  var remainingDebt = remRaw !== ""
+    ? (parseCurrencyAmt(remRaw).value || 0)
+    : Math.max(0, amount - (isNaN(paidAmt) ? 0 : paidAmt));
+  var paid = amount > 0 && remainingDebt <= 0;
+
+  var purpose  = resolvePurpose(colVal(row, ["גליון", "קטגוריה", "סוג תרומה", "מטרה", "purpose", "category"]));
+  var currency = resolveCurrency(colVal(row, ["מטבע", "currency"]), parsedAmt.currency);
+
+  return {
+    rowIndex: rowIndex + 2,
+    amount: amount, currency: currency,
+    paidAmt: paidAmt, remainingDebt: remainingDebt, paid: paid,
+    purposeType: purpose.purposeType, finalPurpose: purpose.finalPurpose, customPurpose: purpose.customPurpose,
+    parsha: colVal(row, ["פרשה", "פרשת", "parsha"]),
+    note:   colVal(row, ["הערת תרומה", "הערה לתרומה", "עבור", "donationNote"]),
+    date:   parseRowDate(rawColVal(row, ["תאריך", "date"])),
+    hebrewYear: colVal(row, ["שנה עברית", "hebrewYear"]),
+  };
+}
+
+// Groups rows by donor (matched on phone/ID — see findExistingDonor) instead
+// of treating each row as its own donor record. Two rows sharing a phone
+// always land on ONE donor with two donations, whether that donor already
+// existed before the import (→ toUpdate) or was just created by an earlier
+// row of this same file (→ toCreate, matched via the batch registration
+// below). Donor detail fields (city/address/...) are never overwritten —
+// only filled in when still empty, across every row touching that donor.
 function buildExcelPreview(rows, existingDonors) {
   var idBase = Date.now();
   var idSeq  = 0;
-  var toCreate = [], toUpdate = [], toSkip = [];
+  var toCreate = [], toSkip = [];
+  var toUpdateMap = Object.create(null);
+  var toUpdateOrder = [];
   var lookupMaps = buildDonorLookupMaps(existingDonors);
 
   rows.forEach(function (row, rowIndex) {
@@ -457,55 +560,89 @@ function buildExcelPreview(rows, existingDonors) {
     var address    = colVal(row, ["כתובת","רחוב","address"]);
     var alfonSerial = colVal(row, ["מ.ס.","מספר אלפון","alfonSerial"]);
     var tagsRaw    = colVal(row, ["תגיות","תגית","tags"]);
-    var notes      = colVal(row, ["הערות","הערה","notes"]);
-    var purpose    = colVal(row, ["עבור","מטרה","פרשת","גליון","פרשה"]);
-    var parsedAmt  = parseCurrencyAmt(colVal(row, ["סכום","amount"]));
-    var amount     = parsedAmt.value;
-    var currency   = parsedAmt.currency;
-    var paidAmt    = parseCurrencyAmt(colVal(row, ["שולם","paid"])).value || 0;
-    var remRaw     = colVal(row, ["נשאר חייב","remainingDebt"]);
-    var remainingDebt = remRaw !== ""
-      ? (parseCurrencyAmt(remRaw).value || 0)
-      : Math.max(0, (isNaN(amount) ? 0 : amount) - (isNaN(paidAmt) ? 0 : paidAmt));
-    var paid = !isNaN(amount) && amount > 0 && remainingDebt <= 0;
+    var donorNotes = colVal(row, ["הערות","הערה","notes"]);
 
-    var skipReason = null;
-    if (!phone && !phone2)  skipReason = "אין טלפון";
-    else if (!fullName)     skipReason = "אין שם";
-
-    if (skipReason) {
-      toSkip.push({ row: rowIndex + 2, name: fullName || "(ריק)", phone: phone || "(ריק)", reason: skipReason });
+    var rowPhones = [phone, phone2, phone3, phone4].filter(Boolean);
+    if (rowPhones.length === 0) {
+      toSkip.push({ row: rowIndex + 2, name: fullName || "(ריק)", phone: "(ריק)", reason: "אין טלפון" });
       return;
     }
 
-    var rowPhones = [phone, phone2, phone3, phone4].filter(Boolean);
-    var existing  = findExistingDonor(rowPhones, idNumber, existingDonors, lookupMaps);
-    var tags      = tagsRaw ? tagsRaw.split(/[,;,]/).map(function(t){ return t.trim(); }).filter(Boolean) : [];
-    var hasDebt   = !isNaN(amount) && amount > 0;
+    var tags = tagsRaw ? tagsRaw.split(/[,;,]/).map(function (t) { return t.trim(); }).filter(Boolean) : [];
+    var donationEntry = buildDonationEntry(row, rowIndex);
+    var existing = findExistingDonor(rowPhones, idNumber, existingDonors, lookupMaps);
 
-    var entry = {
-      rowIndex: rowIndex + 2,
+    // Matches a donor already staged earlier in THIS SAME import (see
+    // registerDonorInLookupMaps call below) — merge into it instead of
+    // creating a duplicate new donor.
+    if (existing && existing.newId) {
+      existing.phone2       = mergeDonorField(existing.phone2, phone2);
+      existing.phone3       = mergeDonorField(existing.phone3, phone3);
+      existing.phone4       = mergeDonorField(existing.phone4, phone4);
+      existing.idNumber     = mergeDonorField(existing.idNumber, idNumber);
+      existing.city         = mergeDonorField(existing.city, city);
+      existing.neighborhood = mergeDonorField(existing.neighborhood, neighborhood);
+      existing.address      = mergeDonorField(existing.address, address);
+      existing.alfonSerial  = mergeDonorField(existing.alfonSerial, alfonSerial);
+      existing.notes        = mergeDonorField(existing.notes, donorNotes);
+      tags.forEach(function (t) { if (existing.tags.indexOf(t) === -1) existing.tags.push(t); });
+      existing.rows.push(rowIndex + 2);
+      if (donationEntry) existing.donations.push(donationEntry);
+      return;
+    }
+
+    // Matches a real donor already in the system — accumulate into one
+    // update group per donor; the real donor object itself is left
+    // untouched until applyExcelImport actually commits the import.
+    if (existing) {
+      var group = toUpdateMap[existing.id];
+      if (!group) {
+        group = {
+          existingId: existing.id, existingName: existing.fullName, phone: existing.phone || "",
+          phone2: "", phone3: "", phone4: "", idNumber: "", city: "", neighborhood: "",
+          address: "", alfonSerial: "", tags: [], notes: "",
+          donations: [], rows: [],
+        };
+        toUpdateMap[existing.id] = group;
+        toUpdateOrder.push(group);
+      }
+      group.phone2       = mergeDonorField(group.phone2, phone2);
+      group.phone3       = mergeDonorField(group.phone3, phone3);
+      group.phone4       = mergeDonorField(group.phone4, phone4);
+      group.idNumber     = mergeDonorField(group.idNumber, idNumber);
+      group.city         = mergeDonorField(group.city, city);
+      group.neighborhood = mergeDonorField(group.neighborhood, neighborhood);
+      group.address      = mergeDonorField(group.address, address);
+      group.alfonSerial  = mergeDonorField(group.alfonSerial, alfonSerial);
+      group.notes        = mergeDonorField(group.notes, donorNotes);
+      tags.forEach(function (t) { if (group.tags.indexOf(t) === -1) group.tags.push(t); });
+      group.rows.push(rowIndex + 2);
+      if (donationEntry) group.donations.push(donationEntry);
+      return;
+    }
+
+    // No match anywhere (real donors or this batch) — a brand new donor
+    // needs a name; everything else about them is optional.
+    if (!fullName) {
+      toSkip.push({ row: rowIndex + 2, name: "(ריק)", phone: phone || phone2 || "(ריק)", reason: "אין שם" });
+      return;
+    }
+
+    var newEntry = {
+      newId: idBase + (++idSeq),
       fullName: fullName, phone: phone || phone2,
       phone2: phone2, phone3: phone3, phone4: phone4,
       idNumber: idNumber, city: city, neighborhood: neighborhood,
       address: address, alfonSerial: alfonSerial,
-      tags: tags, notes: notes, purpose: purpose,
-      amount: amount, currency: currency,
-      paidAmt: paidAmt, remainingDebt: remainingDebt,
-      paid: paid, hasDebt: hasDebt,
+      tags: tags, notes: donorNotes,
+      donations: donationEntry ? [donationEntry] : [],
+      rows: [rowIndex + 2],
     };
-
-    if (existing) {
-      entry.existingId   = existing.id;
-      entry.existingName = existing.fullName;
-      toUpdate.push(entry);
-    } else {
-      entry.newId = idBase + (++idSeq);
-      toCreate.push(entry);
-    }
+    registerDonorInLookupMaps(lookupMaps, newEntry);
+    toCreate.push(newEntry);
   });
 
-  return { toCreate: toCreate, toUpdate: toUpdate, toSkip: toSkip };
+  return { toCreate: toCreate, toUpdate: toUpdateOrder, toSkip: toSkip };
 }
 
 function applyExcelImport(preview) {
@@ -520,54 +657,57 @@ function applyExcelImport(preview) {
   var idBase = Date.now(), idSeq = 0;
   var donorsCreated = 0, donorsUpdated = 0, donationsAdded = 0;
 
-  preview.toCreate.forEach(function (entry) {
-    var pn = normPhone(entry.phone);
+  preview.toCreate.forEach(function (group) {
+    var pn = normPhone(group.phone);
     var d = {
-      id:           entry.newId || (idBase + (++idSeq)),
-      fullName:     entry.fullName,
-      phone:        entry.phone  || "",
-      phone2:       entry.phone2 || "",
-      phone3:       entry.phone3 || "",
-      phone4:       entry.phone4 || "",
-      idNumber:     entry.idNumber || "",
-      city:         entry.city    || "",
-      neighborhood: entry.neighborhood || "",
-      address:      entry.address || "",
-      alfonSerial:  entry.alfonSerial || "",
-      tags:         entry.tags    || [],
-      notes:        entry.notes   || "",
+      id:           group.newId || (idBase + (++idSeq)),
+      fullName:     group.fullName,
+      phone:        group.phone  || "",
+      phone2:       group.phone2 || "",
+      phone3:       group.phone3 || "",
+      phone4:       group.phone4 || "",
+      idNumber:     group.idNumber || "",
+      city:         group.city    || "",
+      neighborhood: group.neighborhood || "",
+      address:      group.address || "",
+      alfonSerial:  group.alfonSerial || "",
+      tags:         group.tags    || [],
+      notes:        group.notes   || "",
       status:       "פעיל",
       ivrApprovedPhones: pn ? [pn] : [],
       donations: [], tasks: [], reminders: [], callbacks: [],
       createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
-    if (entry.hasDebt) { d.donations.push(_buildDonation(entry, idBase + (++idSeq), now)); donationsAdded++; }
+    group.donations.forEach(function (donationEntry) {
+      d.donations.push(_buildDonation(donationEntry, idBase + (++idSeq), now));
+      donationsAdded++;
+    });
     donors.push(d);
     donorsCreated++;
   });
 
-  preview.toUpdate.forEach(function (entry) {
-    var target = donors.find(function (d) { return d.id === entry.existingId; });
+  preview.toUpdate.forEach(function (group) {
+    var target = donors.find(function (d) { return d.id === group.existingId; });
     if (!target) return;
-    if (entry.phone2       && !target.phone2)       target.phone2       = entry.phone2;
-    if (entry.phone3       && !target.phone3)       target.phone3       = entry.phone3;
-    if (entry.phone4       && !target.phone4)       target.phone4       = entry.phone4;
-    if (entry.idNumber     && !target.idNumber)     target.idNumber     = entry.idNumber;
-    if (entry.city         && !target.city)         target.city         = entry.city;
-    if (entry.neighborhood && !target.neighborhood) target.neighborhood = entry.neighborhood;
-    if (entry.address      && !target.address)      target.address      = entry.address;
-    if (entry.alfonSerial  && !target.alfonSerial)  target.alfonSerial  = entry.alfonSerial;
-    if (entry.tags && entry.tags.length > 0) {
+    if (group.phone2       && !target.phone2)       target.phone2       = group.phone2;
+    if (group.phone3       && !target.phone3)       target.phone3       = group.phone3;
+    if (group.phone4       && !target.phone4)       target.phone4       = group.phone4;
+    if (group.idNumber     && !target.idNumber)     target.idNumber     = group.idNumber;
+    if (group.city         && !target.city)         target.city         = group.city;
+    if (group.neighborhood && !target.neighborhood) target.neighborhood = group.neighborhood;
+    if (group.address      && !target.address)      target.address      = group.address;
+    if (group.alfonSerial  && !target.alfonSerial)  target.alfonSerial  = group.alfonSerial;
+    if (group.tags && group.tags.length > 0) {
       var ex = target.tags || [];
-      entry.tags.forEach(function (t) { if (ex.indexOf(t) === -1) ex.push(t); });
+      group.tags.forEach(function (t) { if (ex.indexOf(t) === -1) ex.push(t); });
       target.tags = ex;
     }
-    if (entry.notes && !target.notes) target.notes = entry.notes;
-    if (entry.hasDebt) {
-      if (!target.donations) target.donations = [];
-      target.donations.push(_buildDonation(entry, idBase + (++idSeq), now));
+    if (group.notes && !target.notes) target.notes = group.notes;
+    if (!target.donations) target.donations = [];
+    group.donations.forEach(function (donationEntry) {
+      target.donations.push(_buildDonation(donationEntry, idBase + (++idSeq), now));
       donationsAdded++;
-    }
+    });
     target.updatedAt = now.toISOString();
     donorsUpdated++;
   });
@@ -581,21 +721,31 @@ function applyExcelImport(preview) {
 }
 
 function _buildDonation(entry, id, now) {
+  var baseDate = (entry.date instanceof Date && !isNaN(entry.date.getTime())) ? entry.date : now;
+  // regularDate must stay in lockstep with hebrewDate/weekday below, which are
+  // always anchored to Asia/Jerusalem — a plain toISOString().slice(0,10) is
+  // UTC-based and can land on the wrong calendar day (e.g. an imported date
+  // cell shifting back a day) whenever the two disagree.
+  var regularDate = window.HebrewDate && window.HebrewDate.getLocalDateKey
+    ? window.HebrewDate.getLocalDateKey(baseDate)
+    : baseDate.toISOString().slice(0, 10);
   return {
     id: id,
-    date: now.toISOString(), regularDate: now.toISOString().slice(0, 10),
-    hebrewDate: window.HebrewDate ? window.HebrewDate.getHebrewDateText(now) : "",
-    weekday:    window.HebrewDate ? window.HebrewDate.getHebrewWeekday(now) : "",
+    date: baseDate.toISOString(), regularDate: regularDate,
+    hebrewDate: window.HebrewDate ? window.HebrewDate.getHebrewDateText(baseDate) : "",
+    weekday:    window.HebrewDate ? window.HebrewDate.getHebrewWeekday(baseDate) : "",
+    hebrewYear:    entry.hebrewYear || "",
     amount:        isNaN(entry.amount)  ? 0 : entry.amount,
     currency:      entry.currency || "ILS",
-    finalPurpose:  entry.purpose  || "כללי",
-    purposeType:   "אחר",
-    customPurpose: entry.purpose  || "",
+    parsha:        entry.parsha || "",
+    finalPurpose:  entry.finalPurpose  || "כללי",
+    purposeType:   entry.purposeType   || "אחר",
+    customPurpose: entry.customPurpose || "",
     paymentMethod: "מזומן",
     paid:          entry.paid,
     paidPartial:   isNaN(entry.paidAmt) ? 0 : entry.paidAmt,
     remainingDebt: entry.remainingDebt,
-    note:          entry.notes || "",
+    note:          entry.note || "",
     approvedStatus:"טיוטא",
     messageStatus: "טיוטא",
     createdAt:     now.toISOString(),
@@ -612,11 +762,15 @@ function showImportPreviewModal(preview) {
     return "<span style='display:inline-block;padding:3px 10px;border-radius:12px;font-size:.82em;font-weight:700;background:" + color + ";color:#fff;'>" + txt + "</span>";
   };
 
+  var totalDonations = preview.toCreate.concat(preview.toUpdate)
+    .reduce(function (sum, g) { return sum + g.donations.length; }, 0);
+
   var summary = document.getElementById("importPreviewSummary");
   if (summary) {
     summary.innerHTML =
       tagStyle("🆕 " + preview.toCreate.length + " תורמים חדשים", "#1a7a1a") + " " +
       tagStyle("✏️ " + preview.toUpdate.length + " יתעדכנו", "#1565c0") + " " +
+      (totalDonations > 0 ? tagStyle("🧾 " + totalDonations + " תרומות", "#6a1b9a") + " " : "") +
       (preview.toSkip.length > 0 ? tagStyle("⚠️ " + preview.toSkip.length + " ידולגו", "#c0392b") : "");
   }
 
@@ -628,22 +782,25 @@ function showImportPreviewModal(preview) {
     } else {
       tbl.innerHTML = "<table style='width:100%;border-collapse:collapse;'>" +
         "<thead><tr style='background:var(--bg2,#f5f5f5);font-size:.82em;'>" +
-        "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>שורה</th>" +
+        "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>שורות</th>" +
         "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>שם</th>" +
         "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>טלפון</th>" +
-        "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>חוב</th>" +
+        "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>תרומות</th>" +
+        "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>סכום כולל</th>" +
         "<th style='padding:5px 8px;text-align:right;border-bottom:1px solid var(--border,#ddd);'>פעולה</th>" +
         "</tr></thead><tbody>" +
-        allRows.map(function (r) {
-          var action = r.existingId
+        allRows.map(function (g) {
+          var action = g.existingId
             ? "<span style='color:#1565c0;font-size:.8em;'>עדכון</span>"
             : "<span style='color:#1a7a1a;font-size:.8em;'>חדש</span>";
-          var debt = r.hasDebt ? "₪" + Number(r.remainingDebt || 0).toLocaleString() : "—";
+          var name = g.existingId ? g.existingName : g.fullName;
+          var totalAmt = g.donations.reduce(function (s, dn) { return s + (Number(dn.amount) || 0); }, 0);
           return "<tr style='border-bottom:1px solid var(--border,#eee);'>" +
-            "<td style='padding:4px 8px;color:var(--muted);font-size:.8em;'>" + r.rowIndex + "</td>" +
-            "<td style='padding:4px 8px;'>" + escapeHTML(r.fullName) + "</td>" +
-            "<td style='padding:4px 8px;direction:ltr;text-align:right;'>" + escapeHTML(r.phone || "") + "</td>" +
-            "<td style='padding:4px 8px;'>" + debt + "</td>" +
+            "<td style='padding:4px 8px;color:var(--muted);font-size:.8em;'>" + g.rows.join(", ") + "</td>" +
+            "<td style='padding:4px 8px;'>" + escapeHTML(name || "") + "</td>" +
+            "<td style='padding:4px 8px;direction:ltr;text-align:right;'>" + escapeHTML(g.phone || "") + "</td>" +
+            "<td style='padding:4px 8px;'>" + (g.donations.length || "—") + "</td>" +
+            "<td style='padding:4px 8px;'>" + (totalAmt > 0 ? "₪" + totalAmt.toLocaleString() : "—") + "</td>" +
             "<td style='padding:4px 8px;'>" + action + "</td>" +
             "</tr>";
         }).join("") + "</tbody></table>" +
@@ -676,7 +833,7 @@ function handleFileUpload(event) {
   reader.onload = function (e) {
     try {
       var data     = new Uint8Array(e.target.result);
-      var workbook = XLSX.read(data, { type: "array" });
+      var workbook = XLSX.read(data, { type: "array", cellDates: true });
       var sheet    = workbook.Sheets[workbook.SheetNames[0]];
       var rawRows  = XLSX.utils.sheet_to_json(sheet);
 
