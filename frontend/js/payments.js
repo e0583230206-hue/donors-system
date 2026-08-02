@@ -229,9 +229,16 @@ function renderTable(rows) {
   lastRenderedRows = rows;
 
   tableBody.innerHTML = rows.map(function (p, i) {
-    var donorCell = p.donorId
-      ? '<a href="donor.html?id=' + p.donorId + '">' + escapeHTML(p.donorName || "—") + '</a>'
-      : escapeHTML(p.donorName || "לא ידוע");
+    // p.donorId is the SQL payments-table join (a different id space than the
+    // CRM's own donor.id — see the big comment on getPayments() in db.js) and
+    // must NEVER be used to build this link. p.appDonorId is the resolved
+    // app_state.donors[].id that donor.html?id= actually expects; it's null
+    // when the phone has no unambiguous match, in which case we must not
+    // render a link that would 404 into "לא נמצא תורם".
+    var appDonorId = Number(p.appDonorId);
+    var donorCell = appDonorId
+      ? '<a href="donor.html?id=' + appDonorId + '">' + escapeHTML(p.donorName || "—") + '</a>'
+      : escapeHTML(p.donorName || "תורם לא משויך");
 
     return "<tr>" +
       "<td style='white-space:nowrap'>" + escapeHTML(formatDateTime(p.timestamp || p.createdAt)) + "</td>" +

@@ -574,6 +574,53 @@ function savePaymentInTransaction(details) {
 // callers on the CRM side (e.g. donor.html) only know the donor by their
 // app-level id/phone, not this table's id, and normalizing by phone is the
 // one thing both id spaces agree on.
+//
+// attachAppDonorId() below resolves that other, app-level id (app_state
+// donors[].id — what donor.html?id= actually expects) via phone, the one
+// thing both id spaces agree on. Bug history: the payments screen used to
+// link donor.html?id=<p.donorId>, i.e. this SQL table's id, which almost
+// never equals any real app_state donor id — hence "לא נמצא תורם" on click.
+
+// normalizedPhone -> app_state donor id, or `false` if that phone is shared
+// by more than one app-level donor (ambiguous — must not guess which one).
+// Mirrors donorHasPhone() in updateDonorDebtAfterPayment (same field set:
+// phone/phone2/phone3/phone4/phones[]/ivrApprovedPhones[]).
+function buildAppDonorPhoneMap() {
+  var donors = getAppState("donors");
+  var map = Object.create(null);
+  if (!Array.isArray(donors)) return map;
+
+  donors.forEach(function (d) {
+    // app_state is a hand-rolled JSON blob, not a schema-enforced table —
+    // normalize d.id to a real number here so a stray string id (or a
+    // Number(...) vs raw mismatch) can never produce a value that fails the
+    // strict === donor.js does against Number(params.get("id")).
+    var appId = Number(d.id);
+    if (!appId && appId !== 0) return; // NaN / missing id -> unusable, skip this donor entirely
+
+    var fields = [d.phone, d.phone2, d.phone3, d.phone4]
+      .concat(Array.isArray(d.phones) ? d.phones : [])
+      .concat(Array.isArray(d.ivrApprovedPhones) ? d.ivrApprovedPhones : []);
+    var seenOnThisDonor = Object.create(null);
+    fields.forEach(function (raw) {
+      var n = normalizePhoneForDb(raw);
+      if (!n || seenOnThisDonor[n]) return;
+      seenOnThisDonor[n] = true;
+      if (!(n in map)) map[n] = appId;
+      else if (map[n] !== appId) map[n] = false;
+    });
+  });
+  return map;
+}
+
+function attachAppDonorId(row, phoneMap) {
+  if (!row) return row;
+  var n = row.phone ? normalizePhoneForDb(row.phone) : "";
+  var resolved = n ? phoneMap[n] : undefined;
+  row.appDonorId = (resolved || resolved === 0) ? resolved : null;
+  return row;
+}
+
 function getPayments(opts) {
   var options = (typeof opts === "object" && opts !== null) ? opts : { limit: opts };
   var limit   = Math.min(Number(options.limit) || 500, 2000);
@@ -595,11 +642,14 @@ function getPayments(opts) {
 
   var sql  = base + (where.length ? " WHERE " + where.join(" AND ") : "") + " ORDER BY p.id DESC LIMIT ?";
   var stmt = db.prepare(sql);
-  return stmt.all.apply(stmt, params.concat([limit]));
+  var rows = stmt.all.apply(stmt, params.concat([limit]));
+  var phoneMap = buildAppDonorPhoneMap();
+  rows.forEach(function (row) { attachAppDonorId(row, phoneMap); });
+  return rows;
 }
 
 function getPaymentById(id) {
-  return db.prepare(`
+  var row = db.prepare(`
     SELECT p.id, p.callId, p.phone, p.donorId, p.amount, p.status, p.source,
            p.confirmationNumber, p.createdAt, p.timestamp, p.cancelledAt,
            d.fullName AS donorName
@@ -607,6 +657,7 @@ function getPaymentById(id) {
     LEFT JOIN donors d ON d.id = p.donorId
     WHERE  p.id = ?
   `).get(Number(id));
+  return attachAppDonorId(row, buildAppDonorPhoneMap());
 }
 
 function cancelPaymentById(id) {
