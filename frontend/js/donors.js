@@ -397,9 +397,23 @@ var colVal = function (row, keys) {
   return "";
 };
 
+// Mirrors donorHasPhone() in backend/db.js (used for IVR caller-ID matching) —
+// same four core fields plus phones[]/ivrApprovedPhones[], so the import's
+// notion of "this donor's phones" matches what the rest of the app already
+// treats as valid identifying numbers for a donor.
 var donorAllPhones = function (d) {
-  return [d.phone, d.phone2, d.phone3, d.phone4].map(normPhone).filter(Boolean);
+  var fields = [d.phone, d.phone2, d.phone3, d.phone4]
+    .concat(Array.isArray(d.phones) ? d.phones : [])
+    .concat(Array.isArray(d.ivrApprovedPhones) ? d.ivrApprovedPhones : []);
+  return fields.map(normPhone).filter(Boolean);
 };
+
+// A phone is only usable as a matching/identifying key once normalized —
+// garbage text normalizes to "" or to something implausibly short/long and
+// must never silently fall through to name-based guessing (see rule 7).
+function isValidNormalizedPhone(p) {
+  return !!p && p.length >= 7 && p.length <= 15;
+}
 
 // Reads a cell's raw value (Date object / number / string) without the
 // String(v).trim() coercion colVal() does — needed for the date column,
@@ -412,6 +426,10 @@ var rawColVal = function (row, keys) {
   return null;
 };
 
+// byPhone maps a normalized phone to the LIST of distinct donors that carry
+// it (not a single donor) — a phone shared by more than one donor is exactly
+// the ambiguous case resolveRowDonorMatch() below must catch instead of
+// silently picking whichever donor happened to register first.
 function registerDonorInLookupMaps(maps, d) {
   if (d.idNumber) {
     var idKey = String(d.idNumber).replace(/\D/g, "");
@@ -419,7 +437,8 @@ function registerDonorInLookupMaps(maps, d) {
   }
   var phones = donorAllPhones(d);
   for (var j = 0; j < phones.length; j++) {
-    if (!(phones[j] in maps.byPhone)) maps.byPhone[phones[j]] = d;
+    if (!maps.byPhone[phones[j]]) maps.byPhone[phones[j]] = [];
+    if (maps.byPhone[phones[j]].indexOf(d) === -1) maps.byPhone[phones[j]].push(d);
   }
 }
 
@@ -427,25 +446,49 @@ function registerDonorInLookupMaps(maps, d) {
 // rescanning existingDonors (and rebuilding donorAllPhones(d) each time) for
 // every phone of every imported row — that was O(rows * donors), and a real
 // import (thousands of rows against thousands of donors) could freeze the
-// tab for many seconds. Preserves the original "first match in array order
-// wins" semantics since earlier donors are never overwritten in the map.
+// tab for many seconds.
 function buildDonorLookupMaps(existingDonors) {
   var maps = { byIdNumber: Object.create(null), byPhone: Object.create(null) };
   for (var i = 0; i < existingDonors.length; i++) registerDonorInLookupMaps(maps, existingDonors[i]);
   return maps;
 }
 
-function findExistingDonor(rowPhones, rowIdNumber, existingDonors, lookupMaps) {
-  var maps = lookupMaps || buildDonorLookupMaps(existingDonors);
-  if (rowIdNumber) {
+// The phone is the primary, determining identifier for matching a row to a
+// donor — this is the ONLY thing that decides "existing donor" vs "new
+// donor". idNumber is never an independent lookup path; it is only ever used
+// to CROSS-CHECK a phone match that was already found (rule 6) — if the
+// row's ID number is on record for some OTHER donor than the one the phone
+// matched, that is a contradiction the import must not silently resolve by
+// guessing. Name is never used to match an existing donor at all (rule 4).
+//
+// rowValidPhones must already be normalized + filtered to isValidNormalizedPhone.
+function resolveRowDonorMatch(rowValidPhones, rowIdNumber, lookupMaps) {
+  var phoneMatches = [];
+  for (var ri = 0; ri < rowValidPhones.length; ri++) {
+    var donorsForPhone = lookupMaps.byPhone[rowValidPhones[ri]];
+    if (!donorsForPhone) continue;
+    for (var di = 0; di < donorsForPhone.length; di++) {
+      if (phoneMatches.indexOf(donorsForPhone[di]) === -1) phoneMatches.push(donorsForPhone[di]);
+    }
+  }
+
+  if (phoneMatches.length > 1) {
+    return { status: "ambiguous", donors: phoneMatches };
+  }
+
+  var phoneMatch = phoneMatches.length === 1 ? phoneMatches[0] : null;
+
+  if (phoneMatch && rowIdNumber) {
     var idKey = rowIdNumber.replace(/\D/g, "");
-    if (idKey && maps.byIdNumber[idKey]) return maps.byIdNumber[idKey];
+    if (idKey) {
+      var idNumberDonor = lookupMaps.byIdNumber[idKey];
+      if (idNumberDonor && idNumberDonor !== phoneMatch) {
+        return { status: "conflict", phoneDonor: phoneMatch, idDonor: idNumberDonor };
+      }
+    }
   }
-  for (var ri = 0; ri < rowPhones.length; ri++) {
-    var rp = normPhone(rowPhones[ri]);
-    if (rp && maps.byPhone[rp]) return maps.byPhone[rp];
-  }
-  return null;
+
+  return { status: phoneMatch ? "matched" : "not_found", donor: phoneMatch };
 }
 
 // Keeps a field's already-known value; only fills it from `incoming` when it's
@@ -535,7 +578,7 @@ function buildDonationEntry(row, rowIndex) {
   };
 }
 
-// Groups rows by donor (matched on phone/ID — see findExistingDonor) instead
+// Groups rows by donor (matched on phone — see resolveRowDonorMatch) instead
 // of treating each row as its own donor record. Two rows sharing a phone
 // always land on ONE donor with two donations, whether that donor already
 // existed before the import (→ toUpdate) or was just created by an earlier
@@ -566,15 +609,33 @@ function buildExcelPreview(rows, existingDonors) {
     var tagsRaw    = colVal(row, ["תגיות","תגית","tags"]);
     var donorNotes = colVal(row, ["הערות","הערה","notes"]);
 
-    var rowPhones = [phone, phone2, phone3, phone4].filter(Boolean);
-    if (rowPhones.length === 0) {
-      toSkip.push({ row: rowIndex + 2, name: fullName || "(ריק)", phone: "(ריק)", reason: "אין טלפון" });
+    var rawPhones   = [phone, phone2, phone3, phone4].filter(Boolean);
+    var validPhones = rawPhones.map(normPhone).filter(isValidNormalizedPhone);
+    if (validPhones.length === 0) {
+      toSkip.push({ row: rowIndex + 2, name: fullName || "(ריק)", phone: phone || phone2 || "(ריק)", reason: "טלפון ריק או לא תקין" });
       return;
     }
 
     var tags = tagsRaw ? tagsRaw.split(/[,;,]/).map(function (t) { return t.trim(); }).filter(Boolean) : [];
     var donationEntry = buildDonationEntry(row, rowIndex);
-    var existing = findExistingDonor(rowPhones, idNumber, existingDonors, lookupMaps);
+    var match = resolveRowDonorMatch(validPhones, idNumber, lookupMaps);
+
+    if (match.status === "ambiguous") {
+      var ambiguousNames = match.donors.map(function (d) { return d.fullName || "(ללא שם)"; }).join(", ");
+      toSkip.push({ row: rowIndex + 2, name: fullName || "(ריק)", phone: phone || phone2 || "(ריק)", reason: "מספר טלפון כפול במערכת — נמצא אצל: " + ambiguousNames });
+      return;
+    }
+
+    if (match.status === "conflict") {
+      toSkip.push({
+        row: rowIndex + 2, name: fullName || "(ריק)", phone: phone || phone2 || "(ריק)",
+        reason: "סתירה בין טלפון לתעודת זהות — הטלפון שייך ל-" + (match.phoneDonor.fullName || "(ללא שם)") +
+          ", אך תעודת הזהות בשורה שייכת ל-" + (match.idDonor.fullName || "(ללא שם)"),
+      });
+      return;
+    }
+
+    var existing = match.donor;
 
     // Matches a donor already staged earlier in THIS SAME import (see
     // registerDonorInLookupMaps call below) — merge into it instead of
@@ -632,9 +693,14 @@ function buildExcelPreview(rows, existingDonors) {
       return;
     }
 
+    // Primary phone must itself normalize to something valid — a garbage
+    // "phone" cell (e.g. "phone" holds text, "phone2" holds the real number)
+    // must never end up stored as if it were the donor's real phone.
+    var primaryRawPhone = rawPhones.filter(function (p) { return isValidNormalizedPhone(normPhone(p)); })[0] || "";
+
     var newEntry = {
       newId: idBase + (++idSeq),
-      fullName: fullName, phone: phone || phone2,
+      fullName: fullName, phone: primaryRawPhone,
       phone2: phone2, phone3: phone3, phone4: phone4,
       idNumber: idNumber, city: city, neighborhood: neighborhood,
       address: address, alfonSerial: alfonSerial,
