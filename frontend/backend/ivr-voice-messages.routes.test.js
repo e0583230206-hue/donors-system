@@ -200,18 +200,64 @@ async function main() {
     );
   });
 
-  await check("GET .../audio כשיש technolineAudio שמור -> משתמש ב-audio=<technolineAudio>, לא ב-fileName (הדרך המדויקת יותר לפי התיעוד)", async function () {
+  // fileName+extension is the PRIMARY lookup (confirmed against the real
+  // production account — fileName+extension returned a genuine audio/mp3
+  // file with an ID3 signature, while audio=<technolineAudio> returned
+  // HTTP 200 with a 54-byte text/html body for the exact same recording).
+  // technolineAudio is only ever tried as a fallback if fileName fails.
+
+  await check("GET .../audio: fileName מצליח מיד גם כשיש technolineAudio שמור -> audio לא נשלח בכלל (fileName הוא הראשי)", async function () {
     const fakeAudioBytes = Buffer.from([0x49, 0x44, 0x33]);
+    let calls = 0;
     await withMockedFetch(
       async function (url) {
-        assert.ok(String(url).indexOf("audio=vm_ROUTE-TEST-TECHAUDIO-1_xyz789") !== -1,
-                   "צריך לחפש לפי technolineAudio, לא לפי fileName שביקשנו");
-        assert.ok(String(url).indexOf("fileName=") === -1, "כשיש technolineAudio, אסור לשלוח גם fileName");
+        calls++;
+        assert.ok(String(url).indexOf("fileName=vm_ROUTE-TEST-TECHAUDIO-1") !== -1);
+        assert.ok(String(url).indexOf("audio=") === -1, "אסור לנסות audio= כשה-fileName כבר הצליח");
         return new Response(fakeAudioBytes, { status: 200, headers: { "content-type": "audio/mp3" } });
       },
       async function () {
         const res = await apiRequest("GET", "/api/ivr/voice-messages/" + techAudioMsgId + "/audio", undefined, adminToken);
         assert.strictEqual(res.status, 200);
+      }
+    );
+    assert.strictEqual(calls, 1, "ניסיון אחד בלבד (fileName) — אין צורך בפולבק");
+  });
+
+  await check("GET .../audio: fileName נכשל (JSON-כ-text/html) אבל technolineAudio מצליח -> עדיין 200, שני הניסיונות בסדר הנכון", async function () {
+    const fakeAudioBytes = Buffer.from([0x49, 0x44, 0x33, 0x99]);
+    const callOrder = [];
+    await withMockedFetch(
+      async function (url) {
+        if (String(url).indexOf("fileName=") !== -1) {
+          callOrder.push("fileName");
+          return new Response('{"status":"ERROR","note":"קובץ לא נמצא"}', { status: 200, headers: { "content-type": "text/html; charset=UTF-8" } });
+        }
+        if (String(url).indexOf("audio=vm_ROUTE-TEST-TECHAUDIO-1_xyz789") !== -1) {
+          callOrder.push("audio");
+          return new Response(fakeAudioBytes, { status: 200, headers: { "content-type": "audio/mp3" } });
+        }
+        throw new Error("unexpected lookup: " + url);
+      },
+      async function () {
+        const res = await apiRequest("GET", "/api/ivr/voice-messages/" + techAudioMsgId + "/audio", undefined, adminToken);
+        assert.strictEqual(res.status, 200);
+        const buf = Buffer.from(await res.res.arrayBuffer());
+        assert.ok(buf.equals(fakeAudioBytes));
+      }
+    );
+    assert.deepStrictEqual(callOrder, ["fileName", "audio"], "fileName חייב להתנסות ראשון, audio רק כפולבק אחריו");
+  });
+
+  await check("GET .../audio: גם fileName וגם technolineAudio נכשלים -> 404 נקי, לא קורס", async function () {
+    await withMockedFetch(
+      async function () {
+        return new Response('{"status":"ERROR","note":"קובץ לא נמצא"}', { status: 200, headers: { "content-type": "text/html; charset=UTF-8" } });
+      },
+      async function () {
+        const res = await apiRequest("GET", "/api/ivr/voice-messages/" + techAudioMsgId + "/audio", undefined, adminToken);
+        assert.strictEqual(res.status, 404);
+        assert.ok(res.body && res.body.error);
       }
     );
   });

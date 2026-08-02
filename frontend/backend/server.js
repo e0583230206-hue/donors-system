@@ -1381,44 +1381,62 @@ app.get(
       var apiKey = process.env.TECHNOLINE_API_KEY || "";
       if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
 
-      // Prefer Technoline's own returned identifier (technolineAudio, from
-      // FILE_voiceMessage on the callback) over our requested fileName —
-      // production testing showed the file Technoline actually creates only
-      // STARTS WITH our requested name, not matches it exactly, so a
-      // fileName-based lookup can miss a file that genuinely exists. `audio`
-      // is documented as the most precise way to identify a file; `fileName`
-      // (+ `extension` to narrow the search) is the fallback for older rows
-      // saved before technolineAudio was captured.
-      var lookup = msg.technolineAudio
-        ? { audio: msg.technolineAudio }
-        : { fileName: msg.fileName, extension: msg.extension || "" };
-
-      var params = new URLSearchParams(Object.assign({
-        action: "fileDownload",
-        apiKey: apiKey,
-        play:   "1",
-      }, lookup));
-
-      logger.info("IvrVoiceMessage", "→ fileDownload | id:", id, "| lookup:", JSON.stringify(lookup));
-      var techRes;
-      try {
-        techRes = await fetch("https://app.ipsales.co.il/ivrFilesApi.php?" + params.toString(), {
-          method: "GET",
-          signal: AbortSignal.timeout(20000),
-        });
-      } catch (fetchErr) {
-        // Network failure / timeout reaching Technoline itself (as opposed
-        // to Technoline answering with "file not found") — same safe,
-        // clear message as the not-found case, never a raw 500.
-        logger.warn("IvrVoiceMessage", "← fileDownload network error | id:", id, "| " + fetchErr.message);
-        return res.status(502).json({ error: "לא ניתן היה להתחבר לשרת ההקלטות כרגע. נסה שוב מאוחר יותר." });
+      // fileName+extension is the PRIMARY lookup — confirmed against the real
+      // production account: fileName+extension returned a genuine audio/mp3
+      // file (ID3 signature, ~113KB), while audio=<technolineAudio> returned
+      // HTTP 200 with content-type text/html and a 54-byte body (Technoline's
+      // JSON-shaped error, mislabeled) for the SAME row. The doc's claim that
+      // `audio` is "the most precise way" does not hold for this account —
+      // trust the measured result, not the doc wording. technolineAudio is
+      // kept only as a secondary fallback attempt, and even then a "success"
+      // is never assumed from HTTP 200 alone — only an actual audio/* body
+      // counts, exactly as fileName's own primary attempt is judged.
+      var lookupAttempts = [
+        { label: "fileName", params: { fileName: msg.fileName, extension: msg.extension || "" } },
+      ];
+      if (msg.technolineAudio) {
+        lookupAttempts.push({ label: "audio", params: { audio: msg.technolineAudio } });
       }
 
-      var contentType = techRes.headers.get("content-type") || "";
-      // Technoline returns HTTP 200 with a plain-text body even when the
-      // file doesn't exist / has expired — Content-Type is the only
-      // reliable success signal (see ivrExtensionsApiDocs.html §fileDownload).
-      if (!techRes.ok || contentType.indexOf("audio") === -1) {
+      var techRes = null, lastFailLog = null;
+      for (var i = 0; i < lookupAttempts.length; i++) {
+        var attempt = lookupAttempts[i];
+        var params = new URLSearchParams(Object.assign({
+          action: "fileDownload",
+          apiKey: apiKey,
+          play:   "1",
+        }, attempt.params));
+
+        logger.info("IvrVoiceMessage", "→ fileDownload | id:", id, "| attempt:", attempt.label,
+                    "| params:", JSON.stringify(attempt.params));
+        var r;
+        try {
+          r = await fetch("https://app.ipsales.co.il/ivrFilesApi.php?" + params.toString(), {
+            method: "GET",
+            signal: AbortSignal.timeout(20000),
+          });
+        } catch (fetchErr) {
+          // Network failure / timeout reaching Technoline itself (as opposed
+          // to Technoline answering with "file not found") — same safe,
+          // clear message as the not-found case, never a raw 500. Not
+          // attempt-specific, so stop entirely rather than retry the
+          // fallback against an unreachable host.
+          logger.warn("IvrVoiceMessage", "← fileDownload network error | id:", id, "| attempt:", attempt.label,
+                      "| " + fetchErr.message);
+          return res.status(502).json({ error: "לא ניתן היה להתחבר לשרת ההקלטות כרגע. נסה שוב מאוחר יותר." });
+        }
+
+        var ct = r.headers.get("content-type") || "";
+        // Technoline returns HTTP 200 with a non-audio body even when the
+        // file doesn't exist / the lookup key is wrong — Content-Type
+        // actually being audio/* is the only reliable success signal (see
+        // ivrExtensionsApiDocs.html §fileDownload, confirmed by production
+        // testing above).
+        if (r.ok && ct.indexOf("audio") !== -1) {
+          techRes = r;
+          break;
+        }
+
         // fetch's .text() already decodes the body as UTF-8 regardless of
         // the (often wrong/misleading) declared Content-Type — Technoline's
         // error responses are JSON ({"status":"ERROR","note":"..."}) even
@@ -1428,11 +1446,13 @@ app.get(
         // escaped string instead of raw (possibly control-character-laden)
         // bytes dumped straight into the log.
         var rawFailText = "";
-        try { rawFailText = (await techRes.text()).slice(0, 500); } catch (_) {}
-        var failLogged = rawFailText;
-        try { failLogged = JSON.stringify(JSON.parse(rawFailText)); } catch (_) { failLogged = JSON.stringify(rawFailText); }
-        logger.warn("IvrVoiceMessage", "← fileDownload failed | id:", id, "| HTTP", techRes.status,
-                    "| content-type:", contentType, "| lookup:", JSON.stringify(lookup), "| body:", failLogged);
+        try { rawFailText = (await r.text()).slice(0, 500); } catch (_) {}
+        try { lastFailLog = JSON.stringify(JSON.parse(rawFailText)); } catch (_) { lastFailLog = JSON.stringify(rawFailText); }
+        logger.warn("IvrVoiceMessage", "← fileDownload failed | id:", id, "| attempt:", attempt.label,
+                    "| HTTP", r.status, "| content-type:", ct, "| body:", lastFailLog);
+      }
+
+      if (!techRes) {
         return res.status(404).json({ error: "ההקלטה אינה זמינה (ייתכן שנמחקה או שפג תוקפה)" });
       }
 
