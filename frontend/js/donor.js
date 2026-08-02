@@ -38,6 +38,7 @@ const saveNotesButton = document.getElementById("saveNotesButton");
 const notesMessage = document.getElementById("notesMessage");
 
 const amountInput = document.getElementById("amountInput");
+const gilayonInput = document.getElementById("gilayonInput");
 const parshaInput = document.getElementById("parshaInput");
 const purposeSelect = document.getElementById("purposeSelect");
 const customPurposeInput = document.getElementById("customPurposeInput");
@@ -67,6 +68,7 @@ const donationsTable = document.getElementById("donationsTable");
 
 const editDonationModal = document.getElementById("editDonationModal");
 const editDonationAmountInput = document.getElementById("editDonationAmountInput");
+const editDonationGilayonInput = document.getElementById("editDonationGilayonInput");
 const editDonationParshaInput = document.getElementById("editDonationParshaInput");
 const editDonationPurposeSelect = document.getElementById("editDonationPurposeSelect");
 const editDonationCustomPurposeInput = document.getElementById("editDonationCustomPurposeInput");
@@ -243,12 +245,16 @@ function generateDonorLetterContent() {
   let donationsDetailsHTML = "";
   if (donor.donations.length > 0) {
     var hasNotes = donor.donations.some(function (d) { return d.note && d.note.trim(); });
+    var hasGilayon = donor.donations.some(function (d) { return d.gilayon && d.gilayon.trim(); });
 
     donationsDetailsHTML = "<h3 style='margin-top:25px;margin-bottom:12px;border-bottom:2px solid #333;padding-bottom:8px;font-size:16px;color:black;'>פירוט תרומות וחובות:</h3>";
     donationsDetailsHTML += "<table style='width:100%;border-collapse:collapse;margin-top:10px;'>";
     donationsDetailsHTML += "<thead><tr style='background-color:#e8e8e8;border:1px solid #333;'>";
     donationsDetailsHTML += "<th style='padding:10px;text-align:right;border:1px solid #ccc;font-weight:bold;color:black;'>תאריך</th>";
     donationsDetailsHTML += "<th style='padding:10px;text-align:right;border:1px solid #ccc;font-weight:bold;color:black;'>תאריך עברי</th>";
+    if (hasGilayon) {
+      donationsDetailsHTML += "<th style='padding:10px;text-align:right;border:1px solid #ccc;font-weight:bold;color:black;'>גליון</th>";
+    }
     donationsDetailsHTML += "<th style='padding:10px;text-align:right;border:1px solid #ccc;font-weight:bold;color:black;'>פרשה</th>";
     donationsDetailsHTML += "<th style='padding:10px;text-align:right;border:1px solid #ccc;font-weight:bold;color:black;'>מטרה</th>";
     donationsDetailsHTML += "<th style='padding:10px;text-align:right;border:1px solid #ccc;font-weight:bold;color:black;'>סכום</th>";
@@ -264,6 +270,9 @@ function generateDonorLetterContent() {
       donationsDetailsHTML += "<tr style='border:1px solid #ccc;'>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + formatRegularDate(donation.date || donation.regularDate) + "</td>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + escapeHTML(donation.hebrewDate || formatHebrewDate(donation.date)) + "</td>";
+      if (hasGilayon) {
+        donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + (donation.gilayon ? escapeHTML(donation.gilayon) : "---") + "</td>";
+      }
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + escapeHTML(donation.parsha || "---") + "</td>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;color:black;'>" + escapeHTML(donation.finalPurpose || donation.purpose || "---") + "</td>";
       donationsDetailsHTML += "<td style='padding:10px;border:1px solid #ccc;text-align:right;color:black;'>" + formatMoney(donation.amount || 0, donation.currency) + "</td>";
@@ -756,7 +765,7 @@ function renderDonationsTable() {
   if (donor.donations.length === 0) {
     donationsTable.innerHTML = `
       <tr class="empty-state-row">
-        <td colspan="8">💰 אין עדיין תרומות לתורם זה</td>
+        <td colspan="9">💰 אין עדיין תרומות לתורם זה</td>
       </tr>
     `;
     return;
@@ -767,6 +776,7 @@ function renderDonationsTable() {
 
     row.innerHTML = `
       <td>${escapeHTML(donation.hebrewDate)}</td>
+      <td>${escapeHTML(donation.gilayon || "---")}</td>
       <td>${escapeHTML(donation.parsha || "---")}</td>
       <td>${escapeHTML(donation.finalPurpose)}</td>
       <td>${formatMoney(donation.amount, donation.currency)}</td>
@@ -820,6 +830,7 @@ function openEditDonationModal(id) {
   donationEditIdempotencyKey = generateIdempotencyKey();
 
   editDonationAmountInput.value = donation.amount;
+  editDonationGilayonInput.value = donation.gilayon || "";
   editDonationParshaInput.value = donation.parsha || "";
 
   const knownPurposes = ["גליון מתאחדת", "פרנס"];
@@ -859,6 +870,7 @@ async function saveDonationEdit() {
   if (!donation) return;
 
   const amount = Number(editDonationAmountInput.value);
+  const manualGilayon = editDonationGilayonInput.value.trim();
   const manualParsha = editDonationParshaInput.value.trim();
   const selectedPurpose = editDonationPurposeSelect.value;
   const customPurpose = editDonationCustomPurposeInput.value.trim();
@@ -915,6 +927,7 @@ async function saveDonationEdit() {
 
   const previous = {
     amount: donation.amount,
+    gilayon: donation.gilayon || "",
     parsha: donation.parsha || "",
     finalPurpose: donation.finalPurpose,
     paymentMethod: donation.paymentMethod,
@@ -1026,6 +1039,7 @@ async function saveDonationEdit() {
 
     const changes = [
       { field: "amount", label: "סכום", before: String(previous.amount), after: String(nextAmount) },
+      { field: "gilayon", label: "גליון", before: previous.gilayon, after: manualGilayon },
       { field: "parsha", label: "פרשה", before: previous.parsha, after: manualParsha },
       { field: "finalPurpose", label: "מטרה", before: previous.finalPurpose, after: finalPurpose },
       { field: "paymentMethod", label: "אמצעי תשלום", before: previous.paymentMethod, after: nextPaymentMethod },
@@ -1044,6 +1058,7 @@ async function saveDonationEdit() {
     }
 
     donation.amount = nextAmount;
+    donation.gilayon = manualGilayon;
     donation.parsha = manualParsha;
     donation.purposeType = selectedPurpose;
     donation.customPurpose = customPurpose;
@@ -1303,6 +1318,7 @@ function saveNotes() {
 
 function addDonation() {
   const amount = Number(amountInput.value);
+  const gilayon = gilayonInput ? gilayonInput.value.trim() : "";
   const manualParsha = parshaInput ? parshaInput.value.trim() : "";
   const selectedPurpose = purposeSelect.value;
   const customPurpose = customPurposeInput.value.trim();
@@ -1340,6 +1356,7 @@ function addDonation() {
       ? window.HebrewDate.getHebrewWeekday(now)
       : "",
     amount: amount,
+    gilayon: gilayon,
     parsha: parsha,
     finalPurpose: finalPurpose,
     purposeType: selectedPurpose,
@@ -1371,6 +1388,7 @@ function addDonation() {
   });
 
   amountInput.value = "";
+  if (gilayonInput) gilayonInput.value = "";
   if (parshaInput) parshaInput.value = "";
   customPurposeInput.value = "";
   donationNoteInput.value = "";

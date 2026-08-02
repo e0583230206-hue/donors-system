@@ -281,7 +281,7 @@ function exportDonors() {
 
 function exportDebts() {
   const rows = [
-    ["שם", "טלפון", "מטרה", "חוב", "תאריך לועזי", "תאריך עברי", "הערה"],
+    ["שם", "טלפון", "גליון", "מטרה", "חוב", "תאריך לועזי", "תאריך עברי", "הערה"],
   ];
 
   donors.forEach(function (donor) {
@@ -294,6 +294,7 @@ function exportDebts() {
         rows.push([
           sanitizeCell(donor.fullName            || ""),
           sanitizeCell(donor.phone               || ""),
+          sanitizeCell(donation.gilayon          || ""),
           sanitizeCell(donation.finalPurpose     || ""),
           debt,
           sanitizeCell(donation.regularDate || donation.date || ""),
@@ -492,13 +493,14 @@ function clearPeriodFilter() {
 
 function exportFilteredDonations() {
   var filtered = getFilteredDonations();
-  var rows     = [["שם תורם","טלפון","עיר","קטגוריה","התחייב","שולם","חוב","תאריך","הערה"]];
+  var rows     = [["שם תורם","טלפון","עיר","גליון","קטגוריה","התחייב","שולם","חוב","תאריך","הערה"]];
 
   filtered.forEach(function (d) {
     rows.push([
       sanitizeCell(d.donorName    || ""),
       sanitizeCell(d.donorPhone   || ""),
       sanitizeCell(d.donorCity    || ""),
+      sanitizeCell(d.gilayon      || ""),
       sanitizeCell(d.finalPurpose || ""),
       Number(d.amount        || 0),
       Number(d.paidPartial   || 0),

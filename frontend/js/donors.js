@@ -516,7 +516,7 @@ function buildDonationEntry(row, rowIndex) {
     : Math.max(0, amount - (isNaN(paidAmt) ? 0 : paidAmt));
   var paid = amount > 0 && remainingDebt <= 0;
 
-  var purpose  = resolvePurpose(colVal(row, ["גליון", "קטגוריה", "סוג תרומה", "מטרה", "purpose", "category"]));
+  var purpose  = resolvePurpose(colVal(row, ["קטגוריה", "סוג תרומה", "מטרה", "purpose", "category"]));
   var currency = resolveCurrency(colVal(row, ["מטבע", "currency"]), parsedAmt.currency);
 
   return {
@@ -524,6 +524,10 @@ function buildDonationEntry(row, rowIndex) {
     amount: amount, currency: currency,
     paidAmt: paidAmt, remainingDebt: remainingDebt, paid: paid,
     purposeType: purpose.purposeType, finalPurpose: purpose.finalPurpose, customPurpose: purpose.customPurpose,
+    // Free text stored verbatim on the donation — NOT matched/validated against
+    // anything. "גליון" here is the issue/sheet designation (e.g. "תתקסא"),
+    // unrelated to purposeType/finalPurpose above.
+    gilayon: colVal(row, ["גליון", "gilayon"]),
     parsha: colVal(row, ["פרשה", "פרשת", "parsha"]),
     note:   colVal(row, ["הערת תרומה", "הערה לתרומה", "עבור", "donationNote"]),
     date:   parseRowDate(rawColVal(row, ["תאריך", "date"])),
@@ -737,6 +741,7 @@ function _buildDonation(entry, id, now) {
     hebrewYear:    entry.hebrewYear || "",
     amount:        isNaN(entry.amount)  ? 0 : entry.amount,
     currency:      entry.currency || "ILS",
+    gilayon:       entry.gilayon || "",
     parsha:        entry.parsha || "",
     finalPurpose:  entry.finalPurpose  || "כללי",
     purposeType:   entry.purposeType   || "אחר",
