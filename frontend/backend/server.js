@@ -1718,6 +1718,22 @@ function campaignErrMsg(body) {
   return body.note || body.error || ("שגיאה " + (body.errorCode || ""));
 }
 
+// Outbound Caller-ID for tzintuk/missed-call campaigns ONLY (campaignApi.php
+// action=campaignRun, param `callId` per Technoline's campaignApi.md docs —
+// "Outbound Caller-ID. Must be a phone previously registered via addDid.
+// Omit to use the account's default DID."). Must never be applied to
+// Click2Call, IVR identification, SIP, or any other Technoline action.
+var TECHNOLINE_CALLER_ID_RE = /^0\d{8,9}$/;
+
+function resolveTzintukCallerId() {
+  var raw = String(process.env.TECHNOLINE_TZINTUK_CALLER_ID || "").trim();
+  if (!raw) return { callId: null, error: null };
+  if (!TECHNOLINE_CALLER_ID_RE.test(raw)) {
+    return { callId: null, error: "TECHNOLINE_TZINTUK_CALLER_ID לא תקין (מצופה מספר ישראלי המתחיל ב-0): " + raw };
+  }
+  return { callId: raw, error: null };
+}
+
 // Helper: build phone list from donors, filtered by recipientFilter.
 // Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>" | "ids:<id,id,...>"
 // Phone resolution order:
@@ -1996,6 +2012,12 @@ app.post(
         return res.status(400).json({ error: "יש להזין טקסט להודעה" });
       }
 
+      var tzintukCallerIdManual = resolveTzintukCallerId();
+      if (tzintukCallerIdManual.error) {
+        logger.error("Campaign/Manual", tzintukCallerIdManual.error);
+        return res.status(500).json({ error: tzintukCallerIdManual.error });
+      }
+
       var params = {
         action:          "campaignRun",
         apiKey:          apiKey,
@@ -2006,6 +2028,7 @@ app.post(
         reasonableHours: "no",
         title:           "בדיקה ידנית - " + phone,
       };
+      if (tzintukCallerIdManual.callId) params.callId = tzintukCallerIdManual.callId;
       if (messageKind === "ivr") {
         params.messagesType        = "extensionActivation";
         params.extensionActivation = ivrExtension;
@@ -2131,6 +2154,12 @@ app.post(
         return res.status(400).json({ error: "יש להזין טקסט להודעה" });
       }
 
+      var tzintukCallerId = resolveTzintukCallerId();
+      if (tzintukCallerId.error) {
+        logger.error("Campaign", tzintukCallerId.error);
+        return res.status(500).json({ error: tzintukCallerId.error });
+      }
+
       // Smart defaults — hidden from UI
       var params = {
         action:          "campaignRun",
@@ -2143,6 +2172,7 @@ app.post(
       };
       if (title)    params.title    = title;
       if (sendTime) params.sendTime = sendTime;
+      if (tzintukCallerId.callId) params.callId = tzintukCallerId.callId;
 
       if (messageKind === "ivr") {
         params.messagesType        = "extensionActivation";
