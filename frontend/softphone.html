@@ -37,6 +37,247 @@ body::before{
   display:grid; grid-template-columns: 1.05fr .95fr; gap:24px;
 }
 @media (max-width:920px){ .shell{grid-template-columns:1fr; padding:20px 14px} }
+.wide{grid-column:1/-1}
+
+/* Caller-ID selector */
+.calleridwrap{padding:12px 22px 4px}
+.calleridwrap label{font-size:.8rem; color:#5a6f85; font-weight:600; display:block; margin-bottom:6px}
+.calleridopts{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+.calleridopt{
+  border:2px solid #e0e7ef; border-radius:12px; padding:9px 10px; cursor:pointer;
+  text-align:center; font-size:.85rem; font-weight:600; color:#5a6f85; background:#f8fafc;
+  transition:border-color .15s, background .15s, color .15s;
+}
+.calleridopt .n{font-family:'JetBrains Mono',monospace; direction:ltr; display:block; font-size:.82rem; margin-top:2px; font-weight:500}
+.calleridopt.sel{border-color:#10b981; background:#ecfdf5; color:#065f46}
+.calleridnote{font-size:.72rem; color:#b45309; margin-top:6px; line-height:1.5; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 10px}
+
+/* Full call-history / contacts panels */
+.panelhead{
+  padding:16px 22px 10px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  border-bottom:1px solid #eef1f5;
+}
+.panelhead h2{margin:0; font-size:1.05rem; font-weight:700; color:#0a6b0a}
+.searchbox{position:relative; min-width:220px; flex:1}
+.searchbox input{
+  width:100%; background:#f8fafc; border:2px solid #e0e7ef; color:#0a6b0a;
+  padding:9px 34px 9px 12px; border-radius:10px; font-family:'Heebo',sans-serif; font-size:.88rem;
+}
+.searchbox input:focus{outline:none; border-color:#4caf50; background:#fff}
+.searchbox .ic{position:absolute; left:10px; top:50%; transform:translateY(-50%); color:#9aa7b6; font-size:.9rem}
+.tabs{display:flex; gap:6px; flex-wrap:wrap; padding:10px 22px 0}
+.tab{
+  padding:7px 14px; border-radius:999px; border:1.5px solid #e0e7ef; background:#f8fafc;
+  color:#5a6f85; font-size:.82rem; font-weight:600; cursor:pointer; transition:all .15s;
+}
+.tab:hover{border-color:#4caf50}
+.tab.active{background:#0a6b0a; border-color:#0a6b0a; color:#fff}
+
+.calllist{padding:6px 0}
+.callrow{
+  display:flex; align-items:center; gap:12px; padding:12px 22px; border-bottom:1px solid #f0f3f7; cursor:pointer;
+  transition:background .12s;
+}
+.callrow:hover{background:#f8fafc}
+.callrow .ico{width:38px; height:38px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:15px}
+.callrow .ico.ok{background:#e8f5e9; color:#0a6b0a}
+.callrow .ico.in{background:#e3f2fd; color:#1976d2}
+.callrow .ico.bad{background:#ffebee; color:#c62828}
+.callrow .body{flex:1; min-width:0}
+.callrow .name{font-weight:700; font-size:.92rem; color:#0a6b0a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.callrow .num{font-family:'JetBrains Mono',monospace; font-size:.8rem; color:#5a6f85; direction:ltr; text-align:left; display:inline-block}
+.callrow .meta{font-size:.74rem; color:#9aa7b6; margin-top:2px}
+.callrow .badge{
+  font-size:.7rem; font-weight:700; padding:3px 9px; border-radius:999px; flex-shrink:0;
+}
+.badge.answered{background:#e8f5e9; color:#0a6b0a}
+.badge.missed{background:#ffebee; color:#c62828}
+.badge.rejected{background:#fff3e0; color:#b45309}
+.badge.failed{background:#f3e5f5; color:#6a1b9a}
+.callrow .dur{font-size:.78rem; color:#5a6f85; font-family:'JetBrains Mono',monospace; flex-shrink:0; min-width:44px; text-align:left}
+.callrow .cbbtn{
+  flex-shrink:0; border:1.5px solid #10b981; color:#065f46; background:#ecfdf5; border-radius:10px;
+  padding:6px 10px; font-size:.78rem; font-weight:700; cursor:pointer;
+}
+.callrow .cbbtn:hover{background:#10b981; color:#fff}
+.callempty{padding:36px 22px; text-align:center; color:#9aa7b6; font-size:.9rem}
+.pagerow{display:flex; align-items:center; justify-content:center; gap:10px; padding:14px 22px}
+.pagerow button{
+  border:1.5px solid #e0e7ef; background:#f8fafc; color:#5a6f85; border-radius:10px; padding:7px 14px;
+  font-size:.82rem; font-weight:600; cursor:pointer;
+}
+.pagerow button:disabled{opacity:.4; cursor:not-allowed}
+.pagerow .pageinfo{font-size:.8rem; color:#9aa7b6}
+
+/* Contacts */
+.contactrow{
+  display:flex; align-items:center; gap:12px; padding:11px 22px; border-bottom:1px solid #f0f3f7; cursor:pointer;
+}
+.contactrow:hover{background:#f8fafc}
+.contactrow .av{
+  width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  font-weight:700; font-size:.9rem; flex-shrink:0; color:#fff;
+}
+.contactrow .av.donor{background:linear-gradient(135deg,#0a6b0a,#2e7d32)}
+.contactrow .av.custom{background:linear-gradient(135deg,#1976d2,#1565c0)}
+.contactrow .body{flex:1; min-width:0}
+.contactrow .name{font-weight:700; font-size:.9rem; color:#0a6b0a}
+.contactrow .phones{font-size:.76rem; color:#9aa7b6; direction:ltr; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.tag{font-size:.68rem; font-weight:700; padding:2px 8px; border-radius:999px; flex-shrink:0}
+.tag.donor{background:#e8f5e9; color:#0a6b0a}
+.tag.custom{background:#e3f2fd; color:#1976d2}
+.contactactions{display:flex; gap:6px; flex-shrink:0}
+.iconbtn{
+  border:1.5px solid #e0e7ef; background:#fff; border-radius:8px; width:30px; height:30px;
+  display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:.85rem; color:#5a6f85;
+}
+.iconbtn:hover{border-color:#4caf50; color:#0a6b0a}
+.iconbtn.del:hover{border-color:#ef4444; color:#c62828}
+.addcontactbtn{
+  margin:12px 22px; padding:10px 16px; border-radius:12px; border:none;
+  background:linear-gradient(135deg,#10b981,#059669); color:#fff; font-weight:700; font-size:.88rem; cursor:pointer;
+  box-shadow:0 6px 16px rgba(16,185,129,.25);
+}
+
+/* Simple modal (contact editor, phone/caller-id picker) */
+.modalbg{
+  position:fixed; inset:0; background:rgba(10,20,10,0.55); display:none; align-items:center; justify-content:center;
+  z-index:50; padding:20px;
+}
+.modalbg.show{display:flex}
+.modalbox{
+  background:#fff; border-radius:18px; padding:22px; width:100%; max-width:420px;
+  box-shadow:0 20px 60px rgba(0,0,0,0.3); max-height:88vh; overflow-y:auto;
+}
+.modalbox h3{margin:0 0 14px; font-size:1.05rem; color:#0a6b0a}
+.modalbox .field{margin-bottom:12px}
+.modalbox .field label{font-size:.8rem; color:#5a6f85; font-weight:600; display:block; margin-bottom:5px}
+.modalbox .field input, .modalbox .field textarea{
+  width:100%; background:#f8fafc; border:2px solid #e0e7ef; color:#0a6b0a; padding:10px 12px;
+  border-radius:10px; font-family:'Heebo',sans-serif; font-size:.9rem;
+}
+.modalbox .field textarea{resize:vertical; min-height:60px}
+.modalfoot{display:flex; gap:10px; justify-content:flex-end; margin-top:16px}
+.phonepick{display:flex; flex-direction:column; gap:8px; margin-bottom:14px}
+.phonepick button{
+  text-align:right; padding:10px 12px; border-radius:10px; border:2px solid #e0e7ef; background:#f8fafc;
+  font-family:'JetBrains Mono',monospace; direction:ltr; text-align:left; cursor:pointer; font-size:.9rem; color:#0a6b0a;
+}
+.phonepick button:hover{border-color:#4caf50}
+
+/* Selected-contact chip near the dialer */
+.selchip{
+  display:none; align-items:center; gap:8px; justify-content:center;
+  margin:0 22px 6px; padding:8px 14px; border-radius:999px;
+  background:#ecfdf5; border:1.5px solid #10b981; color:#065f46;
+  font-size:.85rem; font-weight:700;
+}
+.selchip.show{display:inline-flex; margin-inline:22px; align-self:center}
+.selchip .x{
+  cursor:pointer; border:none; background:rgba(0,0,0,0.08); color:#065f46;
+  width:20px; height:20px; border-radius:50%; font-size:.75rem; line-height:1;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+.selchip .x:hover{background:rgba(0,0,0,0.16)}
+
+/* Inline phone chips for multi-number contacts */
+.phonechips{display:flex; flex-wrap:wrap; gap:6px; margin-top:4px}
+.phonechips button{
+  font-family:'JetBrains Mono',monospace; direction:ltr; font-size:.74rem; font-weight:600;
+  border:1.5px solid #e0e7ef; background:#f8fafc; color:#0a6b0a; border-radius:8px; padding:4px 8px; cursor:pointer;
+}
+.phonechips button:hover{border-color:#4caf50; background:#ecfdf5}
+
+/* Donor "open details" action + mute/hold controls */
+.detailsbtn{
+  flex-shrink:0; border:1.5px solid #1976d2; color:#0d47a1; background:#e3f2fd; border-radius:10px;
+  padding:6px 10px; font-size:.76rem; font-weight:700; cursor:pointer; white-space:nowrap;
+}
+.detailsbtn:hover{background:#1976d2; color:#fff}
+
+.callctrls2{
+  display:none; grid-template-columns:1fr 1fr; gap:10px; padding:0 22px 14px;
+}
+.callctrls2.show{display:grid}
+.btn.toggled{background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; border-color:transparent}
+
+/* Mobile section tabs */
+.sectiontabs{display:none; grid-column:1/-1; gap:8px; padding:2px 4px}
+.sectiontabs button{
+  flex:1; padding:11px 10px; border-radius:14px; border:none; cursor:pointer;
+  background:rgba(255,255,255,0.14); color:#fff; font-weight:700; font-size:.85rem;
+  font-family:'Heebo',sans-serif; transition:background .15s;
+}
+.sectiontabs button.active{background:#fff; color:#0a6b0a}
+@media (max-width:920px){
+  .sectiontabs{display:flex}
+  .sec-hidden-mobile{display:none !important}
+}
+
+/* Contacts + History as a two-column row on desktop */
+.lowershell{display:grid; grid-template-columns:1fr 1fr; gap:24px; grid-column:1/-1}
+@media (max-width:920px){ .lowershell{grid-template-columns:1fr} }
+
+/* Toast (reusing js/toast.js logic, styled to match this page) */
+.toast-container{
+  position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+  z-index:200; display:flex; flex-direction:column; gap:8px; align-items:center;
+}
+.toast{
+  background:#0a6b0a; color:#fff; padding:11px 18px; border-radius:999px;
+  font-family:'Heebo',sans-serif; font-size:.86rem; font-weight:600;
+  box-shadow:0 8px 24px rgba(0,0,0,0.25); display:flex; align-items:center; gap:10px;
+  animation:toastin .2s ease-out;
+}
+@keyframes toastin{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:translateY(0)}}
+.toast-undo{
+  background:rgba(255,255,255,0.18); border:none; color:#fff; border-radius:8px;
+  padding:4px 10px; font-size:.8rem; font-weight:700; cursor:pointer;
+}
+.toast-undo:hover{background:rgba(255,255,255,0.3)}
+
+/* Donor-details drawer */
+.drawerbg{
+  position:fixed; inset:0; background:rgba(10,20,10,0.55); display:none;
+  align-items:stretch; justify-content:flex-start; z-index:80;
+}
+.drawerbg.show{display:flex}
+.drawer{
+  background:#f4f7fb; width:min(920px, 96vw); height:100%;
+  box-shadow:24px 0 60px rgba(0,0,0,0.35);
+  display:flex; flex-direction:column;
+  animation:drawerin .22s ease-out;
+}
+@keyframes drawerin{from{transform:translateX(-24px); opacity:.4} to{transform:translateX(0); opacity:1}}
+.drawerhead{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:16px 20px; background:#fff; border-bottom:1px solid #e0e7ef;
+  box-shadow:0 2px 8px rgba(0,0,0,0.05);
+}
+.drawerhead h3{margin:0; font-size:1.05rem; color:#0a6b0a; font-weight:700}
+.drawerhead .sub{font-size:.78rem; color:#9aa7b6; margin-top:2px}
+.drawerclose{
+  border:none; background:#f4f7fb; color:#5a6f85; width:36px; height:36px; border-radius:50%;
+  font-size:1.1rem; cursor:pointer; flex-shrink:0;
+}
+.drawerclose:hover{background:#fee2e2; color:#c62828}
+.drawerframe{flex:1; border:none; width:100%; background:#fff}
+.drawerclose:focus-visible, .btn:focus-visible, .tab:focus-visible, .iconbtn:focus-visible,
+.calleridopt:focus-visible, .key:focus-visible, .tinybtn:focus-visible,
+.contactrow:focus-visible, .callrow:focus-visible, .detailsbtn:focus-visible,
+.phonechips button:focus-visible, .cbbtn:focus-visible, .addcontactbtn:focus-visible,
+.sectiontabs button:focus-visible, .searchbox input:focus-visible{
+  outline:3px solid #2563eb; outline-offset:2px;
+}
+
+@media (max-width:480px){
+  .contactrow{flex-wrap:wrap}
+  .contactrow .body{flex-basis:100%; order:1}
+  .contactrow .tag{order:2}
+  .contactactions{order:3; margin-inline-start:auto}
+  .callrow{flex-wrap:wrap}
+  .callrow .body{flex-basis:100%; order:1; margin-top:4px}
+}
 
 header.top{
   grid-column:1/-1;
@@ -71,13 +312,22 @@ header.top{
 .s-in-call.statepill{background:#d1fae5; border-color:#059669; color:#064e3b}
 .s-failed.statepill{background:#fff5f5; border-color:#fca5a5; color:#991b1b}
 .s-connecting.statepill{background:#fffbeb; border-color:#fbbf24; color:#92400e}
+.s-ringing.statepill{background:#fff7ed; border-color:#fb923c; color:#9a3412}
+.s-onhold.statepill{background:#eff6ff; border-color:#3b82f6; color:#1e3a8a}
 .dot{width:8px; height:8px; border-radius:50%; background:#9aa7b6}
 .s-idle .dot{background:#9aa7b6}
 .s-connecting .dot{background:#f59e0b; animation:pulse 1.2s infinite}
+.s-ringing .dot{background:#fb923c; animation:pulse .9s infinite}
+.s-onhold .dot{background:#3b82f6}
 .s-registered .dot{background:#10b981; box-shadow:0 0 0 4px rgba(16,185,129,.18)}
 .s-failed .dot{background:#ef4444}
 .s-in-call .dot{background:#4caf50; box-shadow:0 0 0 4px rgba(76,175,80,0.18); animation:pulse 1.4s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.mutebadge{
+  display:none; align-items:center; gap:6px; justify-content:center;
+  font-size:.78rem; font-weight:700; color:#b45309; margin-top:2px;
+}
+.mutebadge.show{display:inline-flex}
 
 .card{
   background:#fff;
@@ -324,17 +574,29 @@ footer.foot kbd{
     </div>
   </header>
 
+  <div class="sectiontabs" id="sectionTabs">
+    <button class="active" data-sec="secDialer">📞 חייגן</button>
+    <button data-sec="secContacts">👥 אנשי קשר</button>
+    <button data-sec="secHistory">📋 היסטוריה</button>
+  </div>
+
   <!-- Dialer card -->
-  <section class="card dialer">
+  <section class="card dialer" id="secDialer" data-tabgroup="secDialer">
     <div class="head">
       <h2>חייגן</h2>
       <span class="hint">הקש מספר או השתמש בלוחיות</span>
+    </div>
+
+    <div class="selchip" id="selChip">
+      <span id="selChipText">—</span>
+      <button class="x" id="selChipClear" title="נקה בחירה" aria-label="נקה בחירה">✕</button>
     </div>
 
     <div class="display">
       <div class="who" id="who">&nbsp;</div>
       <div class="num empty" id="num">__________</div>
       <div class="timer" id="timer">&nbsp;</div>
+      <div class="mutebadge" id="muteBadge">🔇 מושתק</div>
       <div class="dtmf-ribbon" id="dtmfRibbon"></div>
     </div>
 
@@ -364,16 +626,27 @@ footer.foot kbd{
 
     <div class="pad" id="pad"></div>
 
+    <div class="calleridwrap">
+      <label>מזהה מתקשר יוצא (המספר שיוצג למי שמתקשרים אליו)</label>
+      <div class="calleridopts" id="callerIdOpts"></div>
+      <div class="calleridnote">⚠ הבחירה נשמרת בהיסטוריית השיחות, אך טכנוליין טרם אישרה מנגנון החלפת מזהה מתקשר עבור שלוחת ה-SIP הזו — ייתכן שהצד השני עדיין יראה את המספר המוגדר כברירת מחדל בשלוחה.</div>
+    </div>
+
     <div class="actions" id="actionsRow">
       <button class="btn" id="btnBack" title="מחיקה (Backspace)">⌫ מחיקה</button>
       <button class="btn primary" id="btnCall">📞 התקשר</button>
       <button class="btn danger" id="btnHangup" disabled>↩ נתק</button>
     </div>
 
+    <div class="callctrls2" id="callCtrls2">
+      <button class="btn" id="btnMute">🎤 השתק</button>
+      <button class="btn" id="btnHold">⏸️ החזק</button>
+    </div>
+
   </section>
 
   <!-- Right column -->
-  <aside class="panel">
+  <aside class="panel" data-tabgroup="secDialer">
 
     <!-- Settings -->
     <section class="card">
@@ -415,16 +688,6 @@ footer.foot kbd{
 
     <section class="card">
       <div class="head">
-        <h2>היסטוריית שיחות</h2>
-        <span class="hint"><a href="#" id="clearHistory" style="color:#9aa7b6;text-decoration:none">נקה</a></span>
-      </div>
-      <div class="history" id="history">
-        <div class="history-empty">אין שיחות עדיין</div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="head">
         <h2>יומן</h2>
         <span class="hint">SIP signaling</span>
       </div>
@@ -433,9 +696,89 @@ footer.foot kbd{
 
   </aside>
 
+  <div class="lowershell">
+    <!-- Contacts -->
+    <section class="card" id="secContacts" data-tabgroup="secContacts">
+      <div class="panelhead">
+        <h2>👥 אנשי קשר</h2>
+        <div class="searchbox">
+          <input type="text" id="contactSearch" placeholder="חיפוש לפי שם, טלפון, ת.ז., עיר או כתובת…">
+          <span class="ic">🔍</span>
+        </div>
+      </div>
+      <div id="contactList"><div class="callempty">טוען…</div></div>
+      <button class="addcontactbtn" id="btnAddContact">➕ איש קשר חדש</button>
+    </section>
+
+    <!-- Full persistent call history -->
+    <section class="card" id="secHistory" data-tabgroup="secHistory">
+      <div class="panelhead">
+        <h2>📋 היסטוריית שיחות</h2>
+        <div class="searchbox">
+          <input type="text" id="callSearch" placeholder="חיפוש לפי שם או מספר טלפון…">
+          <span class="ic">🔍</span>
+        </div>
+      </div>
+      <div class="tabs" id="callTabs">
+        <span class="tab active" data-group="all">הכול</span>
+        <span class="tab" data-group="missed">שיחות שלא נענו</span>
+        <span class="tab" data-group="incoming">נכנסות</span>
+        <span class="tab" data-group="outgoing">יוצאות</span>
+        <span class="tab" data-group="failed">נדחו/נכשלו</span>
+      </div>
+      <div class="calllist" id="callList"><div class="callempty">טוען…</div></div>
+      <div class="pagerow" id="callPager"></div>
+    </section>
+  </div>
+
   <footer class="foot">
     קיצורי מקלדת: <kbd>0-9</kbd> חייג &nbsp;·&nbsp; <kbd>Backspace</kbd> מחיקה &nbsp;·&nbsp; <kbd>Enter</kbd> התקשר &nbsp;·&nbsp; <kbd>Esc</kbd> נתק
   </footer>
+</div>
+
+<!-- Contact editor / details modal — CUSTOM CONTACTS ONLY, never a donor card -->
+<div class="modalbg" id="contactModal">
+  <div class="modalbox">
+    <h3 id="contactModalTitle">איש קשר חדש</h3>
+    <div style="font-size:.76rem;color:#9aa7b6;margin:-8px 0 12px">איש קשר מותאם אישית (לא תורם)</div>
+    <div class="field"><label>שם</label><input type="text" id="cf_name"></div>
+    <div class="field"><label>טלפון ראשי</label><input type="text" id="cf_primary" dir="ltr"></div>
+    <div class="field"><label>טלפונים נוספים (מופרדים בפסיק)</label><input type="text" id="cf_additional" dir="ltr"></div>
+    <div class="field"><label>הערות</label><textarea id="cf_notes"></textarea></div>
+    <div class="modalfoot">
+      <button class="tinybtn" id="btnContactCancel">ביטול</button>
+      <button class="tinybtn go" id="btnContactSave">💾 שמור</button>
+    </div>
+  </div>
+</div>
+
+<!-- Phone + caller-id picker (for calling a contact with more than one phone) -->
+<div class="modalbg" id="callPickModal">
+  <div class="modalbox">
+    <h3 id="callPickTitle">בחר מספר להתקשרות</h3>
+    <div class="phonepick" id="callPickPhones"></div>
+    <label style="font-size:.8rem;color:#5a6f85;font-weight:600;display:block;margin-bottom:6px">מזהה מתקשר יוצא</label>
+    <div class="calleridopts" id="callPickCallerIdOpts" style="margin-bottom:14px"></div>
+    <div class="modalfoot">
+      <button class="tinybtn" id="btnCallPickCancel">ביטול</button>
+    </div>
+  </div>
+</div>
+
+<!-- Donor-details drawer — reuses the real donor.html card via an embedded
+     iframe (donor.html?id=..&embed=1); never a second implementation of the
+     donor card. See openDonorDrawer()/closeDonorDrawer() below. -->
+<div class="drawerbg" id="donorDrawerBg">
+  <div class="drawer" id="donorDrawer" role="dialog" aria-modal="true" aria-labelledby="donorDrawerTitle">
+    <div class="drawerhead">
+      <div>
+        <h3 id="donorDrawerTitle">כרטיס תורם</h3>
+        <div class="sub">נפתח בתוך הסופטפון — לא עוזב את הדף</div>
+      </div>
+      <button class="drawerclose" id="btnCloseDonorDrawer" title="סגור (Esc)" aria-label="סגור">✕ סגור</button>
+    </div>
+    <iframe class="drawerframe" id="donorDrawerFrame" src="about:blank" title="כרטיס תורם"></iframe>
+  </div>
 </div>
 
 <audio id="remoteAudio" autoplay></audio>
@@ -445,6 +788,8 @@ footer.foot kbd{
 <script src="lib/jquery.min.js"></script>
 <script>if(typeof jQuery==='undefined')document.write('<scr'+'ipt src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"><\/scr'+'ipt>')</script>
 <script src="js/auth.js"></script>
+<script src="js/toast.js"></script>
+<script src="js/softphone-call-classifier.js"></script>
 <script>
 // Fetch SIP config directly — does NOT use apiFetch so a 401 returns null
 // instead of triggering a redirect-to-login loop. Auth lives in localStorage,
@@ -504,8 +849,6 @@ async function fetchSipConfig() {
 
   const SETTINGS_LS = 'softphone_settings_200';
   const SPEAKER_LS  = 'softphone_speaker_200';
-  const HIST_LS     = 'softphone_history_200';
-  const HIST_MAX    = 50;
 
   // ---------- logging ----------
   function log(msg, lvl){
@@ -585,8 +928,12 @@ async function fetchSipConfig() {
     }
     resetFailureIfAny();
     if (/^[0-9]$/.test(d) && dialed.replace(/[^0-9]/g,'').length >= MAX_DIGITS) return;
+    if (selectedContactName) clearSelChipOnly();
     dialed += d; flashKey(d); renderNum();
   }
+  // Clears just the visual "selected contact" chip (manual edit diverged
+  // from the selected number) without wiping the digits already typed.
+  function clearSelChipOnly(){ selectedContactName=''; $('#selChip').removeClass('show'); }
   function flashKey(d){
     const $k = $('.key').filter(function(){ return $(this).find('.d').text()===d; }).first();
     if (!$k.length) return;
@@ -797,13 +1144,45 @@ async function fetchSipConfig() {
       console.log('[SIP] newRTCSession | direction:', dir, '| remote:', remoteUri);
       log('newRTCSession [' + (dir==='incoming'?'נכנסת':'יוצאת') + '] remote=' + remoteUri, 'info');
       if (dir==='incoming'){
-        if (session){ try{ sx.terminate({status_code:486,reason_phrase:'Busy Here'}); }catch(e){} return; }
+        if (session){
+          // Already on a call — auto-reject this second incoming call with 486
+          // Busy Here, same as before, but now also log it as its own
+          // incoming_rejected row (a real caller was turned away) without
+          // disturbing the currently active call's log state.
+          try{ sx.terminate({status_code:486,reason_phrase:'Busy Here'}); }catch(e){}
+          const busyFrom = fmtPhone((sx.remote_identity&&sx.remote_identity.uri&&sx.remote_identity.uri.user)||'');
+          const busyNow  = new Date().toISOString();
+          const savedState = callLogState;
+          callLogState = { sipCallId: sx.id, direction:'incoming', remotePhone: busyFrom, startedAt: busyNow, selectedCallerId: null };
+          postCallEvent({ status:'incoming_rejected', endedAt: busyNow, rawSipCause:'Busy (already on another call)' });
+          callLogState = savedState;
+          return;
+        }
         const from = fmtPhone((sx.remote_identity&&sx.remote_identity.uri&&sx.remote_identity.uri.user)||'');
         currentCallNumber=from; renderNum();
         $who.text('שיחה נכנסת מ-'+from);
         log('שיחה נכנסת מ-'+from,'info');
         showIncoming(from, sx);
       }
+
+      // Create the call-log row now, for BOTH directions — JsSIP fires
+      // newRTCSession on outgoing calls too (right after ua.call() creates
+      // the session), so this is the single, reliable "call started" point.
+      const nowIso = new Date().toISOString();
+      const remotePhoneForLog = dir==='outgoing'
+        ? (currentCallNumber||dialed||'')
+        : fmtPhone((sx.remote_identity&&sx.remote_identity.uri&&sx.remote_identity.uri.user)||'');
+      callLogState = {
+        sipCallId:        sx.id,
+        direction:        dir,
+        remotePhone:      remotePhoneForLog,
+        startedAt:        nowIso,
+        ringingAt:        dir==='incoming' ? nowIso : null,
+        answeredAt:       null,
+        selectedCallerId: dir==='outgoing' ? (selectedCallerId||null) : null,
+      };
+      postCallEvent({ status:'in_progress' });
+
       bindSession(sx);
     });
 
@@ -886,7 +1265,7 @@ async function fetchSipConfig() {
     $('#incomingFrom').text(from||'מספר לא ידוע');
     $('#incomingBlock').addClass('show');
     startRingtone();
-    setState('connecting','שיחה נכנסת');
+    setState('ringing','שיחה נכנסת');
     try{ if(window.parent&&window.parent!==window) window.parent.postMessage({type:'softphone-incoming',from:from},'*'); }catch(e){}
   }
   function hideIncoming(){
@@ -922,6 +1301,32 @@ async function fetchSipConfig() {
   }
   function hideFailureState(){ $('#failBlock').removeClass('show'); }
 
+  // ---------- server-backed call logging ----------
+  // One in-flight call's log state at a time (existing code already enforces
+  // a single concurrent session — see the busy-reject branch in
+  // newRTCSession below). sipCallId = JsSIP RTCSession.id (call_id+from_tag,
+  // verified against frontend/lib/jssip.min.js source), used by the server
+  // to upsert instead of duplicate rows for the same session.
+  let callLogState = null;
+
+  function postCallEvent(fields){
+    if (!callLogState) return;
+    const payload = Object.assign({
+      sipCallId:        callLogState.sipCallId,
+      direction:        callLogState.direction,
+      remotePhone:      callLogState.remotePhone,
+      startedAt:        callLogState.startedAt,
+      selectedCallerId: callLogState.selectedCallerId || null,
+    }, fields);
+    apiFetch('/api/softphone/calls/event', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    }).then(function(r){
+      if (r.ok) refreshCallHistory();
+    }).catch(function(e){ console.warn('[SoftphoneLog] event post failed', e); });
+  }
+
   // ---------- session binding ----------
   function bindSession(s){
     session=s;
@@ -945,11 +1350,19 @@ async function fetchSipConfig() {
       const orig   = e.originator||'';
       console.log('[SIP] progress | originator:', orig, '| code:', code, '| reason:', reason);
       log('progress' + (code?' ['+code+(reason?' '+reason:'')+']':'') + (orig?' ('+orig+')':''), 'info');
-      setState('connecting','מצלצל…');
+      setState('ringing','מצלצל…');
       if(dir==='out') $who.text('מצלצל אצל '+(currentCallNumber||peerNum));
+      if (callLogState) {
+        callLogState.ringingAt = callLogState.ringingAt || new Date().toISOString();
+        postCallEvent({ status: 'in_progress', ringingAt: callLogState.ringingAt });
+      }
     });
     s.on('accepted', function(e){
       acceptedAt=Date.now();
+      if (callLogState) {
+        callLogState.answeredAt = new Date().toISOString();
+        postCallEvent({ status: 'in_progress', answeredAt: callLogState.answeredAt });
+      }
       const code   = (e&&e.response&&e.response.status_code)||'';
       const reason = (e&&e.response&&e.response.reason_phrase)||'';
       const orig   = (e&&e.originator)||'';
@@ -962,6 +1375,27 @@ async function fetchSipConfig() {
       $who.text('בשיחה עם '+(currentCallNumber||peerNum));
       currentCallNumber=currentCallNumber||peerNum; renderNum();
       startTimer();
+      $('#callCtrls2').addClass('show');
+    });
+    s.on('muted', function(){
+      $('#btnMute').addClass('toggled').text('🔊 בטל השתקה');
+      $('#muteBadge').addClass('show');
+      log('המיקרופון הושתק', 'info');
+    });
+    s.on('unmuted', function(){
+      $('#btnMute').removeClass('toggled').text('🎤 השתק');
+      $('#muteBadge').removeClass('show');
+      log('ההשתקה בוטלה', 'info');
+    });
+    s.on('hold', function(e){
+      $('#btnHold').addClass('toggled').text('▶️ המשך');
+      if (!$('#failBlock').hasClass('show')) setState('onhold','בהמתנה');
+      log('השיחה הועברה להמתנה ('+((e&&e.originator)||'')+')', 'info');
+    });
+    s.on('unhold', function(e){
+      $('#btnHold').removeClass('toggled').text('⏸️ החזק');
+      if (session && session.isEstablished && session.isEstablished()) setState('in-call','בשיחה');
+      log('השיחה חזרה מהמתנה ('+((e&&e.originator)||'')+')', 'info');
     });
     s.on('confirmed', function(e){
       const orig = (e&&e.originator)||'';
@@ -989,8 +1423,11 @@ async function fetchSipConfig() {
       log('שיחה הסתיימה: '+cause+' ('+orig+')'
           +(ms?' אחרי '+(ms/1000).toFixed(1)+'s':'')
           +(byeHdrs.Reason?' | Reason: '+byeHdrs.Reason:''), 'info');
-      const dur=acceptedAt?Math.round(ms/1000):0;
-      historyAdd({ts:Date.now(),dir,number:peerNum,duration:dur,cause:cause||'ended'});
+      if (callLogState) {
+        const finalStatus = SoftphoneCallClassifier.classifyEnded(s.direction);
+        postCallEvent({ status: finalStatus, endedAt: new Date().toISOString(), rawSipCause: cause });
+        callLogState = null;
+      }
       cleanupCall();
     });
     s.on('failed', function(e){
@@ -1003,7 +1440,11 @@ async function fetchSipConfig() {
       log('שיחה נכשלה: '+cause
           + (statusCode?' ['+statusCode+(reason?' '+reason:'')+']':'')
           + (orig?' ('+orig+')':''), 'err');
-      historyAdd({ts:Date.now(),dir,number:peerNum,duration:0,cause:cause||'failed'});
+      if (callLogState) {
+        const finalStatus = SoftphoneCallClassifier.classifyFailed(s.direction, cause, orig);
+        postCallEvent({ status: finalStatus, endedAt: new Date().toISOString(), rawSipCause: cause });
+        callLogState = null;
+      }
       if(cause==='Canceled'||cause==='Terminated'){ cleanupCall(); return; }
       session=null; stopTimer(); clearDtmf();
       $('#btnHangup').prop('disabled',true);
@@ -1041,20 +1482,15 @@ async function fetchSipConfig() {
     session=null; currentCallNumber=''; dialed='';
     $('#btnHangup').prop('disabled',true); $who.html('&nbsp;');
     stopTimer(); clearDtmf(); hideIncoming(); renderNum();
+    clearSelChipOnly();
+    $('#callCtrls2').removeClass('show');
+    $('#muteBadge').removeClass('show');
+    $('#btnMute').removeClass('toggled').text('🎤 השתק');
+    $('#btnHold').removeClass('toggled').text('⏸️ החזק');
     if(ua&&ua.isRegistered()) setState('registered','מחובר');
   }
 
-  // ---------- call history ----------
-  let history=[];
-  try{ history=JSON.parse(localStorage.getItem(HIST_LS)||'[]')||[]; }catch(e){ history=[]; }
-
-  function historyAdd(entry){
-    history.unshift(entry);
-    if(history.length>HIST_MAX) history.length=HIST_MAX;
-    try{ localStorage.setItem(HIST_LS,JSON.stringify(history)); }catch(e){}
-    renderHistory();
-  }
-  function historyClear(){ history=[]; try{ localStorage.removeItem(HIST_LS); }catch(e){} renderHistory(); }
+  // ---------- call history (server-backed — see refreshCallHistory() below) ----------
   function fmtAgo(ts){
     const d=Math.floor((Date.now()-ts)/1000);
     if(d<60) return 'לפני '+d+' שניות';
@@ -1067,31 +1503,377 @@ async function fetchSipConfig() {
     if(!sec) return '—';
     return String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');
   }
-  function renderHistory(){
-    const $h=$('#history').empty();
-    if(!history.length){ $h.append('<div class="history-empty">אין שיחות עדיין</div>'); return; }
-    history.forEach(function(c){
-      const cls=c.dir==='in'?(c.duration?'in':'missed'):'out';
-      const icon=c.dir==='in'?(c.duration?'↙':'✗'):'↗';
-      const $row=$('<div class="history-row"></div>')
-        .append($('<div class="ico"></div>').addClass(cls).text(icon))
+
+  // Status -> {icon class, icon, badge class, Hebrew label}. Never expose the
+  // raw SIP cause here — that stays in rawSipCause (admin/debug only).
+  const STATUS_UI = {
+    incoming_answered:  { ico:'in',  icon:'↙', badge:'answered', label:'נכנסת · נענתה' },
+    incoming_missed:    { ico:'bad', icon:'✗', badge:'missed',   label:'שיחה שלא נענתה' },
+    incoming_rejected:  { ico:'bad', icon:'⛔', badge:'rejected', label:'נכנסת · נדחתה' },
+    outgoing_answered:  { ico:'ok',  icon:'↗', badge:'answered', label:'יוצאת · נענתה' },
+    outgoing_unanswered:{ ico:'bad', icon:'…', badge:'missed',   label:'יוצאת · לא נענתה' },
+    outgoing_rejected:  { ico:'bad', icon:'⛔', badge:'rejected', label:'יוצאת · נדחתה/תפוס' },
+    outgoing_failed:    { ico:'bad', icon:'⚠', badge:'failed',   label:'יוצאת · נכשלה' },
+    cancelled:          { ico:'bad', icon:'↩', badge:'rejected', label:'בוטלה לפני מענה' },
+    in_progress:        { ico:'ok',  icon:'…', badge:'answered', label:'בביצוע…' },
+  };
+
+  // ---------- server-backed call history panel ----------
+  let callGroup = 'all', callSearchVal = '', callPage = 1;
+  const CALL_PAGE_SIZE = 20;
+
+  async function refreshCallHistory(){
+    const $list = $('#callList');
+    try {
+      const params = new URLSearchParams({ statusGroup: callGroup, page: callPage, pageSize: CALL_PAGE_SIZE });
+      if (callSearchVal) params.set('search', callSearchVal);
+      const r = await apiFetch('/api/softphone/calls?'+params.toString());
+      if (!r.ok) { $list.html('<div class="callempty">שגיאה בטעינת היסטוריית שיחות</div>'); return; }
+      const data = await r.json();
+      renderCallList(data.rows||[]);
+      renderCallPager(data.total||0, data.page||1, data.pageSize||CALL_PAGE_SIZE);
+    } catch(e){
+      $list.html('<div class="callempty">שגיאת רשת בטעינת היסטוריית שיחות</div>');
+    }
+  }
+
+  function renderCallList(rows){
+    const $list = $('#callList').empty();
+    if (!rows.length){ $list.append('<div class="callempty">אין שיחות להצגה</div>'); return; }
+    rows.forEach(function(row){
+      const ui = STATUS_UI[row.status] || { ico:'bad', icon:'?', badge:'failed', label:row.status };
+      const displayName = row.donorName || row.contactName || '';
+      const $row = $('<div class="callrow"></div>')
+        .append($('<div class="ico"></div>').addClass(ui.ico).text(ui.icon))
         .append($('<div class="body"></div>')
-          .append($('<div class="num"></div>').text(c.number||'—'))
-          .append($('<div class="meta"></div>').text(fmtAgo(c.ts))))
-        .append($('<div class="dur"></div>').text(fmtDuration(c.duration)));
+          .append($('<div class="name"></div>').text(displayName || row.remotePhone))
+          .append(displayName ? $('<span class="num"></span>').text(' · '+row.remotePhone) : '')
+          .append($('<div class="meta"></div>').text(
+            fmtAgo(new Date(row.startedAt).getTime()) +
+            (row.talkDurationSec ? ' · שיחה '+fmtDuration(row.talkDurationSec) : '') +
+            (row.selectedCallerId ? ' · מזהה: '+row.selectedCallerId : '')
+          )))
+        .append($('<span class="badge"></span>').addClass(ui.badge).text(ui.label))
+        .append($('<div class="dur"></div>').text(fmtDuration(row.talkDurationSec)));
+
+      if (row.status !== 'in_progress') {
+        const $cb = $('<button class="cbbtn">📞 חזור</button>');
+        $cb.on('click', function(ev){
+          ev.stopPropagation();
+          dialed = String(row.remotePhone).replace(/[^0-9*#+]/g,''); renderNum();
+          window.scrollTo({top:0, behavior:'smooth'});
+        });
+        $row.append($cb);
+      }
+
+      $row.attr('tabindex', '0').attr('role', 'button');
       $row.on('click', function(){
-        if(!c.number) return;
-        dialed=String(c.number).replace(/[^0-9*#+]/g,''); renderNum();
+        if (row.donorId != null) { openDonorDrawer(row.donorId, row.donorName, this); return; }
+        if (row.contactId != null) { openContactModal(row.contactId); return; }
       });
-      $h.append($row);
+      $row.on('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); $(this).trigger('click'); } });
+      $list.append($row);
     });
   }
-  $('#clearHistory').on('click', function(e){ e.preventDefault(); historyClear(); });
-  renderHistory();
+
+  function renderCallPager(total, page, pageSize){
+    const $p = $('#callPager').empty();
+    const totalPages = Math.max(1, Math.ceil(total/pageSize));
+    const $prev = $('<button>‹ הקודם</button>').prop('disabled', page<=1)
+      .on('click', function(){ callPage = Math.max(1, callPage-1); refreshCallHistory(); });
+    const $next = $('<button>הבא ›</button>').prop('disabled', page>=totalPages)
+      .on('click', function(){ callPage = Math.min(totalPages, callPage+1); refreshCallHistory(); });
+    $p.append($prev)
+      .append($('<span class="pageinfo"></span>').text('עמוד '+page+' מתוך '+totalPages+' · '+total+' שיחות'))
+      .append($next);
+  }
+
+  $('#callTabs .tab').on('click', function(){
+    $('#callTabs .tab').removeClass('active'); $(this).addClass('active');
+    callGroup = $(this).data('group'); callPage = 1;
+    refreshCallHistory();
+  });
+  let callSearchDebounce=null;
+  $('#callSearch').on('input', function(){
+    const v = $(this).val();
+    clearTimeout(callSearchDebounce);
+    callSearchDebounce = setTimeout(function(){ callSearchVal=v; callPage=1; refreshCallHistory(); }, 300);
+  });
+
+  // ---------- caller-id selection ----------
+  let callerIdOptions = [];
+  let selectedCallerId = '';
+
+  async function loadCallerIdOptions(){
+    try {
+      const r = await apiFetch('/api/softphone/caller-ids');
+      if (!r.ok) return;
+      const data = await r.json();
+      callerIdOptions = data.options||[];
+      if (!selectedCallerId && callerIdOptions.length) selectedCallerId = callerIdOptions[0].number;
+      renderCallerIdOpts();
+    } catch(e){ log('שגיאה בטעינת מזהי מתקשר יוצאים: '+(e.message||e), 'warn'); }
+  }
+  function buildCallerIdOpts($target){
+    $target.empty();
+    callerIdOptions.forEach(function(opt){
+      const $o = $('<div class="calleridopt"></div>')
+        .toggleClass('sel', opt.number===selectedCallerId)
+        .append($('<span></span>').text(opt.label))
+        .append($('<span class="n"></span>').text(opt.number));
+      $o.on('click', function(){ selectedCallerId = opt.number; renderCallerIdOpts(); });
+      $target.append($o);
+    });
+  }
+  function renderCallerIdOpts(){
+    buildCallerIdOpts($('#callerIdOpts'));
+    buildCallerIdOpts($('#callPickCallerIdOpts'));
+  }
+
+  // ---------- contacts panel ----------
+  let contactSearchVal = '';
+
+  async function refreshContacts(){
+    const $list = $('#contactList');
+    try {
+      const params = contactSearchVal ? ('?search='+encodeURIComponent(contactSearchVal)) : '';
+      const r = await apiFetch('/api/softphone/contacts'+params);
+      if (!r.ok) { $list.html('<div class="callempty">שגיאה בטעינת אנשי קשר</div>'); return; }
+      const data = await r.json();
+      renderContactList(data.contacts||[]);
+    } catch(e){
+      $list.html('<div class="callempty">שגיאת רשת בטעינת אנשי קשר</div>');
+    }
+  }
+
+  function renderContactList(contacts){
+    const $list = $('#contactList').empty();
+    if (!contacts.length){ $list.append('<div class="callempty">לא נמצאו אנשי קשר</div>'); return; }
+    contacts.forEach(function(c){
+      const initial = (c.name||'?').trim().charAt(0)||'?';
+      const phones = c.phones||[];
+      const $body = $('<div class="body"></div>')
+        .append($('<div class="name"></div>').text(c.name||'—'));
+
+      if (phones.length > 1) {
+        // Multiple numbers — show them as individual, separately clickable
+        // chips instead of a single ambiguous "primary phone" action.
+        const $chips = $('<div class="phonechips"></div>');
+        phones.forEach(function(p){
+          $chips.append($('<button type="button"></button>').text(p).on('click', function(ev){
+            ev.stopPropagation();
+            selectContactPhone(p, c.name);
+          }));
+        });
+        $body.append($chips);
+      } else {
+        $body.append($('<div class="phones"></div>').text(phones[0]||''));
+      }
+
+      const $row = $('<div class="contactrow"></div>')
+        .append($('<div class="av"></div>').addClass(c.type).text(initial))
+        .append($body)
+        .append($('<span class="tag"></span>').addClass(c.type).text(c.type==='donor'?'תורם':'איש קשר'));
+
+      const $actions = $('<div class="contactactions"></div>');
+      if (c.type === 'donor') {
+        const $details = $('<button class="detailsbtn" title="פתח פרטים">📇 פתח פרטים</button>').on('click', function(ev){
+          ev.stopPropagation();
+          openDonorDrawer(c.id, c.name, this);
+        });
+        $actions.append($details);
+      } else {
+        const $edit = $('<button class="iconbtn" title="פרטים / עריכה">✏️</button>').on('click', function(ev){ ev.stopPropagation(); openContactEditor(c); });
+        const $del  = $('<button class="iconbtn del" title="מחק">🗑️</button>').on('click', function(ev){ ev.stopPropagation(); deleteContact(c); });
+        $actions.append($edit).append($del);
+      }
+      $row.append($actions);
+
+      // Row click (outside the phone chips / action buttons): select the
+      // primary (first) phone when there's exactly one, or just the first
+      // one as a convenience default when there are several (each is also
+      // individually clickable above). Never navigates away.
+      $row.attr('tabindex', '0').attr('role', 'button');
+      $row.on('click', function(){
+        if (phones.length >= 1) selectContactPhone(phones[0], c.name);
+      });
+      $row.on('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); $(this).trigger('click'); } });
+      $list.append($row);
+    });
+  }
+
+  // ---------- selected-contact chip + dial-input population ----------
+  let selectedContactName = '';
+
+  function selectContactPhone(phone, name){
+    resetFailureIfAny();
+    dialed = String(phone).replace(/[^0-9*#+]/g,'');
+    currentCallNumber = '';
+    renderNum();
+    selectedContactName = name || '';
+    $('#selChipText').text(name ? (name+' · '+dialed) : dialed);
+    $('#selChip').addClass('show');
+    if (window.showToast) showToast('המספר '+dialed+' הוכנס לחייגן');
+    else log('המספר '+dialed+' הוכנס לחייגן', 'ok');
+  }
+  function clearContactSelection(){
+    selectedContactName='';
+    $('#selChip').removeClass('show');
+    dialed=''; renderNum();
+  }
+  $('#selChipClear').on('click', clearContactSelection);
+
+  let contactSearchDebounce=null;
+  $('#contactSearch').on('input', function(){
+    const v = $(this).val();
+    clearTimeout(contactSearchDebounce);
+    contactSearchDebounce = setTimeout(function(){ contactSearchVal=v; refreshContacts(); }, 300);
+  });
+
+  // Opens the donor/contact card behind a call-history row when it's a
+  // custom contact (donors open directly via donor.html — see renderCallList).
+  function openContactModal(contactId){
+    apiFetch('/api/softphone/contacts').then(function(r){ return r.json(); }).then(function(data){
+      const c = (data.contacts||[]).find(function(x){ return x.type==='custom' && x.id===contactId; });
+      if (c) openContactEditor(c);
+    }).catch(function(){});
+  }
+
+  let editingContactId = null;
+  function openContactEditor(c){
+    editingContactId = c ? c.id : null;
+    $('#contactModalTitle').text(c ? 'עריכת איש קשר' : 'איש קשר חדש');
+    $('#cf_name').val(c ? c.name : '');
+    $('#cf_primary').val(c && c.phones && c.phones[0] ? c.phones[0] : '');
+    $('#cf_additional').val(c && c.phones && c.phones.length>1 ? c.phones.slice(1).join(', ') : '');
+    $('#cf_notes').val(c ? (c.notes||'') : '');
+    $('#contactModal').addClass('show');
+  }
+  $('#btnAddContact').on('click', function(){ openContactEditor(null); });
+  $('#btnContactCancel').on('click', function(){ $('#contactModal').removeClass('show'); });
+
+  $('#btnContactSave').on('click', async function(){
+    const name = $('#cf_name').val().trim();
+    const primaryPhone = $('#cf_primary').val().trim();
+    const additionalPhones = $('#cf_additional').val().split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    const notes = $('#cf_notes').val().trim();
+    if (!name || !primaryPhone){ alert('שם וטלפון ראשי הם שדות חובה'); return; }
+    const body = JSON.stringify({ name, primaryPhone, additionalPhones, notes });
+    try {
+      const url    = editingContactId ? ('/api/softphone/contacts/'+editingContactId) : '/api/softphone/contacts';
+      const method = editingContactId ? 'PUT' : 'POST';
+      const r = await apiFetch(url, { method, headers:{'Content-Type':'application/json'}, body });
+      const data = await r.json().catch(function(){ return {}; });
+      if (!r.ok) { alert(data.error || 'שגיאה בשמירת איש קשר'); return; }
+      $('#contactModal').removeClass('show');
+      refreshContacts();
+    } catch(e){ alert('שגיאת רשת: '+(e.message||e)); }
+  });
+
+  async function deleteContact(c){
+    if (!confirm('למחוק את איש הקשר "'+c.name+'"?')) return;
+    try {
+      const r = await apiFetch('/api/softphone/contacts/'+c.id, { method:'DELETE' });
+      if (!r.ok) { const d = await r.json().catch(function(){return {};}); alert(d.error||'שגיאה במחיקה'); return; }
+      refreshContacts();
+    } catch(e){ alert('שגיאת רשת: '+(e.message||e)); }
+  }
+
+  // ---------- phone + caller-id picker (for contacts with 1+ phones) ----------
+  function openCallPickModal(phones, name){
+    if (phones.length === 1) {
+      dialed = String(phones[0]).replace(/[^0-9*#+]/g,''); renderNum();
+      window.scrollTo({top:0, behavior:'smooth'});
+      return;
+    }
+    $('#callPickTitle').text('בחר מספר להתקשרות אל '+(name||''));
+    const $wrap = $('#callPickPhones').empty();
+    phones.forEach(function(p){
+      const $b = $('<button></button>').text(p).on('click', function(){
+        dialed = String(p).replace(/[^0-9*#+]/g,''); renderNum();
+        $('#callPickModal').removeClass('show');
+        window.scrollTo({top:0, behavior:'smooth'});
+      });
+      $wrap.append($b);
+    });
+    buildCallerIdOpts($('#callPickCallerIdOpts'));
+    $('#callPickModal').addClass('show');
+  }
+  $('#btnCallPickCancel').on('click', function(){ $('#callPickModal').removeClass('show'); });
+
+  // ---------- donor-details drawer ----------
+  // Reuses the real donor.html card via an embedded iframe (donor.html?id=..&embed=1)
+  // — no second donor-card implementation. Softphone state (search text, active
+  // tab, selected phone/contact chip, scroll position) is never touched by
+  // opening/closing this: we never navigate, only show/hide an overlay.
+  let drawerReturnFocusEl = null;
+
+  function openDonorDrawer(donorId, donorName, triggerEl){
+    drawerReturnFocusEl = triggerEl || document.activeElement;
+    $('#donorDrawerTitle').text(donorName ? ('כרטיס תורם — '+donorName) : 'כרטיס תורם');
+    $('#donorDrawerFrame').attr('src', 'donor.html?id='+encodeURIComponent(donorId)+'&embed=1');
+    $('#donorDrawerBg').addClass('show');
+    document.body.style.overflow = 'hidden';
+    $('#btnCloseDonorDrawer').trigger('focus');
+  }
+  function closeDonorDrawer(){
+    if (!$('#donorDrawerBg').hasClass('show')) return;
+    $('#donorDrawerBg').removeClass('show');
+    document.body.style.overflow = '';
+    $('#donorDrawerFrame').attr('src', 'about:blank');
+    if (drawerReturnFocusEl && document.body.contains(drawerReturnFocusEl)) {
+      try { drawerReturnFocusEl.focus(); } catch(e){}
+    }
+    drawerReturnFocusEl = null;
+  }
+  $('#btnCloseDonorDrawer').on('click', closeDonorDrawer);
+  $('#donorDrawerBg').on('mousedown', function(e){ if (e.target === this) closeDonorDrawer(); });
+  $(document).on('keydown', function(e){
+    if (e.key === 'Escape' && $('#donorDrawerBg').hasClass('show')) closeDonorDrawer();
+  });
+  // Escape pressed INSIDE the embedded donor.html iframe is a different
+  // document — it can't reach our keydown listener above, so donor.html's
+  // embed mode posts a message here instead (see donor.js/embed bootstrap).
+  window.addEventListener('message', function(ev){
+    if (ev.data && ev.data.type === 'donor-embed-close') closeDonorDrawer();
+  });
+
+  // ---------- mobile section tabs (חייגן / אנשי קשר / היסטוריה) ----------
+  function showMobileSection(sec){
+    $('#sectionTabs button').removeClass('active');
+    $('#sectionTabs button[data-sec="'+sec+'"]').addClass('active');
+    $('[data-tabgroup]').addClass('sec-hidden-mobile');
+    $('[data-tabgroup="'+sec+'"]').removeClass('sec-hidden-mobile');
+  }
+  $('#sectionTabs button').on('click', function(){ showMobileSection($(this).data('sec')); });
+  showMobileSection('secDialer'); // default tab — CSS gates this to narrow screens only
+
+  // ---------- mute / hold (active-call controls) ----------
+  // UI state is driven by JsSIP's own 'muted'/'unmuted'/'hold'/'unhold'
+  // events (wired in bindSession below) rather than a locally-guessed flag —
+  // same "trust the real lifecycle event" principle as call classification.
+  $('#btnMute').on('click', function(){
+    if (!session || !session.isEstablished || !session.isEstablished()) return;
+    try {
+      const muted = session.isMuted && session.isMuted().audio;
+      if (muted) session.unmute({audio:true}); else session.mute({audio:true});
+    } catch(e){ log('שגיאת השתקה: '+(e.message||e), 'err'); }
+  });
+
+  $('#btnHold').on('click', function(){
+    if (!session || !session.isEstablished || !session.isEstablished()) return;
+    try {
+      const onHold = session.isOnHold && session.isOnHold().local;
+      if (onHold) session.unhold(); else session.hold();
+    } catch(e){ log('שגיאת החזקה: '+(e.message||e), 'err'); }
+  });
 
   // ---------- init ----------
   loadSpeakers();
   renderNum();
+  loadCallerIdOptions();
+  refreshCallHistory();
+  refreshContacts();
   log('סופטפון נטען — טוען הגדרות חיבור…','info');
 
   if(navigator.mediaDevices&&navigator.mediaDevices.addEventListener)

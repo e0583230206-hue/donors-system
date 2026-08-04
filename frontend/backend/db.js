@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const bcrypt = require("bcryptjs");
 const logger = require("./logger");
+const callClassifier = require("../js/softphone-call-classifier.js");
 
 // How recent a heartbeat has to be for a still-logged-in session to be shown
 // as "online" on the admin sessions screen. Purely a display concern — unlike
@@ -203,6 +204,70 @@ function initDatabase() {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_worker_sessions_status ON worker_sessions(status)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_worker_sessions_loginAt ON worker_sessions(loginAt)");
+
+  // ── Browser softphone (JsSIP/WebRTC) call history — distinct from
+  // ivr_call_sessions (IVR self-service calls) and click2call_logs (server-
+  // bridged Technoline click2call). One row per SIP session, upserted by
+  // sipCallId (JsSIP RTCSession.id = call_id+from_tag, a stable per-dialog
+  // identifier) so repeated lifecycle events for the same session never
+  // create duplicate rows. See softphone-call-classifier.js for the status
+  // values written here.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS softphone_calls (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      sipCallId        TEXT    NOT NULL UNIQUE,
+      direction        TEXT    NOT NULL,
+      remotePhone      TEXT    NOT NULL,
+      -- NOT a FK to donors(id): this is the app_state.donors[].id (app-level
+      -- donor id, what donor.html?id= expects), a different id space than
+      -- the thin SQLite donors table's own id — see donor.service.js's
+      -- "appDonorId" comment. A real REFERENCES here would wrongly reject
+      -- every donor match (and does, under node:sqlite's default
+      -- foreign_keys=ON, unlike other sqlite libraries used elsewhere here).
+      donorId          INTEGER,
+      donorName        TEXT,
+      contactId        INTEGER REFERENCES softphone_contacts(id),
+      contactName      TEXT,
+      selectedCallerId TEXT,
+      workerId         INTEGER,
+      workerName       TEXT,
+      startedAt        TEXT    NOT NULL,
+      ringingAt        TEXT,
+      answeredAt       TEXT,
+      endedAt          TEXT,
+      ringDurationSec  INTEGER,
+      talkDurationSec  INTEGER,
+      status           TEXT    NOT NULL,
+      failureReason    TEXT,
+      rawSipCause      TEXT,
+      createdAt        TEXT    NOT NULL,
+      updatedAt        TEXT    NOT NULL
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_startedAt ON softphone_calls(startedAt)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_status    ON softphone_calls(status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_direction ON softphone_calls(direction)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_remote    ON softphone_calls(remotePhone)");
+
+  // ── Softphone custom contacts (people who are NOT donors). Donor contacts
+  // are never copied in here — they are always read live from app_state.donors
+  // (the donor source of truth, via donor.service.js's allAppDonors()) and
+  // merged in at the API layer. This table only holds non-donor entries.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS softphone_contacts (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      name               TEXT    NOT NULL,
+      primaryPhone       TEXT    NOT NULL,
+      additionalPhones    TEXT,
+      notes              TEXT,
+      normalizedPhoneKey TEXT    NOT NULL UNIQUE,
+      createdAt          TEXT    NOT NULL,
+      updatedAt          TEXT    NOT NULL,
+      createdByWorkerId  INTEGER,
+      createdByWorkerName TEXT
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_contacts_name ON softphone_contacts(name)");
 
   // ── Migrations ──────────────────────────────────────────────────
   try { db.exec("ALTER TABLE workers ADD COLUMN passwordHash TEXT"); } catch (_) {}
@@ -2051,6 +2116,282 @@ function setIvrAudioRecordingSlots(audioId, fields) {
   return getIvrAudioRecordingById(audioId);
 }
 
+// ── Softphone (JsSIP/WebRTC) call history ────────────────────────────────────
+
+var SOFTPHONE_STATUS_SET = {};
+callClassifier.STATUSES.forEach(function (s) { SOFTPHONE_STATUS_SET[s] = true; });
+
+// Upserts one row per SIP session, keyed by sipCallId (JsSIP RTCSession.id).
+// Each call posts multiple partial events over the session's lifetime
+// (created -> ringing -> answered -> ended, or created -> failed); this never
+// creates more than one row per sipCallId — later events refill only the
+// fields they know about, via COALESCE, except `status` (always the latest
+// classification) and the terminal `endedAt`/duration fields (always the
+// newest computed value once known).
+function upsertSoftphoneCall(fields) {
+  var status = String(fields.status || "").trim();
+  if (!SOFTPHONE_STATUS_SET[status]) {
+    throw httpError(400, "סטטוס שיחה לא תקין: " + status);
+  }
+  var direction = fields.direction === "incoming" ? "incoming" : "outgoing";
+  var sipCallId = String(fields.sipCallId || "").trim();
+  if (!sipCallId) throw httpError(400, "sipCallId חסר");
+  var remotePhone = String(fields.remotePhone || "").trim();
+  if (!remotePhone) throw httpError(400, "remotePhone חסר");
+
+  // Duration math must use the MERGED timestamps (this event's fields
+  // COALESCEd with whatever the row already has from earlier events for the
+  // same sipCallId) — using only this event's own fields would recompute
+  // ring duration from startedAt instead of the already-known ringingAt on
+  // every later event that doesn't repeat it (e.g. the terminal
+  // ended/failed event usually only carries endedAt).
+  var existing = db.prepare("SELECT * FROM softphone_calls WHERE sipCallId = ?").get(sipCallId);
+  var durations = callClassifier.computeDurations({
+    startedAt:  fields.startedAt  || (existing && existing.startedAt)  || null,
+    ringingAt:  fields.ringingAt  || (existing && existing.ringingAt)  || null,
+    answeredAt: fields.answeredAt || (existing && existing.answeredAt) || null,
+    endedAt:    fields.endedAt    || (existing && existing.endedAt)    || null,
+  });
+  var now = nowIso();
+
+  db.prepare(`
+    INSERT INTO softphone_calls (
+      sipCallId, direction, remotePhone, donorId, donorName, contactId, contactName,
+      selectedCallerId, workerId, workerName, startedAt, ringingAt, answeredAt, endedAt,
+      ringDurationSec, talkDurationSec, status, failureReason, rawSipCause, createdAt, updatedAt
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(sipCallId) DO UPDATE SET
+      donorId          = COALESCE(excluded.donorId, donorId),
+      donorName        = COALESCE(excluded.donorName, donorName),
+      contactId        = COALESCE(excluded.contactId, contactId),
+      contactName      = COALESCE(excluded.contactName, contactName),
+      selectedCallerId = COALESCE(excluded.selectedCallerId, selectedCallerId),
+      ringingAt        = COALESCE(ringingAt, excluded.ringingAt),
+      answeredAt       = COALESCE(answeredAt, excluded.answeredAt),
+      endedAt          = COALESCE(excluded.endedAt, endedAt),
+      ringDurationSec  = COALESCE(excluded.ringDurationSec, ringDurationSec),
+      talkDurationSec  = COALESCE(excluded.talkDurationSec, talkDurationSec),
+      status           = excluded.status,
+      failureReason    = COALESCE(excluded.failureReason, failureReason),
+      rawSipCause      = COALESCE(excluded.rawSipCause, rawSipCause),
+      updatedAt        = excluded.updatedAt
+  `).run(
+    sipCallId,
+    direction,
+    remotePhone,
+    fields.donorId != null ? Number(fields.donorId) : null,
+    fields.donorName || null,
+    fields.contactId != null ? Number(fields.contactId) : null,
+    fields.contactName || null,
+    fields.selectedCallerId || null,
+    fields.workerId != null ? Number(fields.workerId) : null,
+    fields.workerName || null,
+    fields.startedAt || now,
+    fields.ringingAt || null,
+    fields.answeredAt || null,
+    fields.endedAt || null,
+    durations.ringDurationSec,
+    durations.talkDurationSec,
+    status,
+    fields.failureReason || callClassifier.safeFailureReason(status),
+    fields.rawSipCause || null,
+    now,
+    now
+  );
+
+  return db.prepare("SELECT * FROM softphone_calls WHERE sipCallId = ?").get(sipCallId);
+}
+
+// filters: { statusGroup: "all"|"missed"|"incoming"|"outgoing"|"failed", search, page, pageSize }
+function getSoftphoneCalls(filters) {
+  filters = filters || {};
+  var page     = Math.max(1, Number(filters.page) || 1);
+  var pageSize = Math.min(200, Math.max(1, Number(filters.pageSize) || 25));
+  var where  = [];
+  var params = [];
+
+  var group = String(filters.statusGroup || "all").trim();
+  if (group === "missed") {
+    where.push("status IN ('incoming_missed')");
+  } else if (group === "incoming") {
+    where.push("direction = 'incoming'");
+  } else if (group === "outgoing") {
+    where.push("direction = 'outgoing'");
+  } else if (group === "failed") {
+    where.push("status IN ('incoming_rejected','outgoing_rejected','outgoing_failed','outgoing_unanswered','cancelled')");
+  }
+
+  if (filters.search) {
+    var s = "%" + String(filters.search).trim() + "%";
+    where.push("(remotePhone LIKE ? OR donorName LIKE ? OR contactName LIKE ?)");
+    params.push(s, s, s);
+  }
+
+  var whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
+  var stmtCount = db.prepare("SELECT COUNT(*) AS count FROM softphone_calls " + whereSql);
+  var total = stmtCount.get.apply(stmtCount, params);
+  var stmtRows = db.prepare(
+    "SELECT * FROM softphone_calls " + whereSql + " ORDER BY startedAt DESC, id DESC LIMIT ? OFFSET ?"
+  );
+  var rows = stmtRows.all.apply(stmtRows, params.concat([pageSize, (page - 1) * pageSize]));
+
+  return { rows: rows, total: total.count, page: page, pageSize: pageSize };
+}
+
+function getSoftphoneCallById(id) {
+  return db.prepare("SELECT * FROM softphone_calls WHERE id = ?").get(Number(id));
+}
+
+function deleteSoftphoneCall(id) {
+  var info = db.prepare("DELETE FROM softphone_calls WHERE id = ?").run(Number(id));
+  return info.changes > 0;
+}
+
+// ── Softphone custom contacts (non-donor entries only) ───────────────────────
+
+function normalizeContactPhoneKey(phone) {
+  return normalizePhoneForDb(phone);
+}
+
+function findSoftphoneContactByNormalizedPhone(normalizedPhone) {
+  if (!normalizedPhone) return undefined;
+  return db.prepare("SELECT * FROM softphone_contacts WHERE normalizedPhoneKey = ?").get(normalizedPhone);
+}
+
+// Matches primaryPhone OR any entry in additionalPhones — used to auto-link
+// an incoming/outgoing softphone call to a custom contact.
+function findSoftphoneContactByAnyPhone(normalizedPhone) {
+  if (!normalizedPhone) return undefined;
+  var byPrimary = findSoftphoneContactByNormalizedPhone(normalizedPhone);
+  if (byPrimary) return parseContactRow(byPrimary);
+  var all = db.prepare("SELECT * FROM softphone_contacts").all();
+  for (var i = 0; i < all.length; i++) {
+    var extra = JSON.parse(all[i].additionalPhones || "[]");
+    if (extra.indexOf(normalizedPhone) !== -1) return parseContactRow(all[i]);
+  }
+  return undefined;
+}
+
+function parseContactRow(row) {
+  if (!row) return row;
+  return Object.assign({}, row, {
+    additionalPhones: row.additionalPhones ? JSON.parse(row.additionalPhones) : [],
+  });
+}
+
+function getSoftphoneContacts(search) {
+  var rows;
+  if (search) {
+    var raw = String(search).trim();
+    var s = "%" + raw + "%";
+    // Phone fields are stored already-normalized (digits + leading zero, no
+    // separators) — so "02-53...", "+972-2-53...", etc. must go through the
+    // same normalization as stored phones before matching, same requirement
+    // as the donor-phone search above (not just a raw digit-strip).
+    var digits = normalizePhoneForDb(raw);
+    if (digits) {
+      var d = "%" + digits + "%";
+      rows = db.prepare(
+        "SELECT * FROM softphone_contacts WHERE name LIKE ? OR notes LIKE ? OR primaryPhone LIKE ? OR additionalPhones LIKE ? ORDER BY name"
+      ).all(s, s, d, d);
+    } else {
+      rows = db.prepare(
+        "SELECT * FROM softphone_contacts WHERE name LIKE ? OR notes LIKE ? ORDER BY name"
+      ).all(s, s);
+    }
+  } else {
+    rows = db.prepare("SELECT * FROM softphone_contacts ORDER BY name").all();
+  }
+  return rows.map(parseContactRow);
+}
+
+// Throws httpError(409) if primaryPhone or any additionalPhone collides with
+// an existing contact's primaryPhone or additionalPhones (normalized).
+function createSoftphoneContact(fields, worker) {
+  var name = String(fields.name || "").trim();
+  if (!name) throw httpError(400, "שם חסר");
+  var primaryPhone = normalizeContactPhoneKey(fields.primaryPhone);
+  if (!primaryPhone) throw httpError(400, "טלפון ראשי לא תקין");
+  var additionalPhones = (Array.isArray(fields.additionalPhones) ? fields.additionalPhones : [])
+    .map(normalizeContactPhoneKey)
+    .filter(Boolean);
+
+  assertNoContactPhoneCollision(primaryPhone, additionalPhones, null);
+
+  var now = nowIso();
+  var info = db.prepare(`
+    INSERT INTO softphone_contacts
+      (name, primaryPhone, additionalPhones, notes, normalizedPhoneKey, createdAt, updatedAt, createdByWorkerId, createdByWorkerName)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    name,
+    primaryPhone,
+    JSON.stringify(additionalPhones),
+    fields.notes ? String(fields.notes).trim() : null,
+    primaryPhone,
+    now,
+    now,
+    worker && worker.id   || null,
+    worker && worker.name || null
+  );
+  return parseContactRow(db.prepare("SELECT * FROM softphone_contacts WHERE id = ?").get(info.lastInsertRowid));
+}
+
+function updateSoftphoneContact(id, fields) {
+  var existing = db.prepare("SELECT * FROM softphone_contacts WHERE id = ?").get(Number(id));
+  if (!existing) throw httpError(404, "איש קשר לא נמצא");
+
+  var name = fields.name !== undefined ? String(fields.name).trim() : existing.name;
+  if (!name) throw httpError(400, "שם חסר");
+  var primaryPhone = fields.primaryPhone !== undefined
+    ? normalizeContactPhoneKey(fields.primaryPhone)
+    : existing.primaryPhone;
+  if (!primaryPhone) throw httpError(400, "טלפון ראשי לא תקין");
+  var additionalPhones = fields.additionalPhones !== undefined
+    ? (Array.isArray(fields.additionalPhones) ? fields.additionalPhones : []).map(normalizeContactPhoneKey).filter(Boolean)
+    : JSON.parse(existing.additionalPhones || "[]");
+
+  assertNoContactPhoneCollision(primaryPhone, additionalPhones, Number(id));
+
+  var now = nowIso();
+  db.prepare(`
+    UPDATE softphone_contacts
+    SET name = ?, primaryPhone = ?, additionalPhones = ?, notes = ?, normalizedPhoneKey = ?, updatedAt = ?
+    WHERE id = ?
+  `).run(
+    name,
+    primaryPhone,
+    JSON.stringify(additionalPhones),
+    fields.notes !== undefined ? (fields.notes ? String(fields.notes).trim() : null) : existing.notes,
+    primaryPhone,
+    now,
+    Number(id)
+  );
+  return parseContactRow(db.prepare("SELECT * FROM softphone_contacts WHERE id = ?").get(Number(id)));
+}
+
+// Checks the given primary+additional phones against every OTHER contact's
+// primaryPhone/additionalPhones (excluding excludeId, used by update).
+function assertNoContactPhoneCollision(primaryPhone, additionalPhones, excludeId) {
+  var allPhones = [primaryPhone].concat(additionalPhones);
+  var others = excludeId != null
+    ? db.prepare("SELECT * FROM softphone_contacts WHERE id != ?").all(excludeId)
+    : db.prepare("SELECT * FROM softphone_contacts").all();
+  for (var i = 0; i < others.length; i++) {
+    var otherPhones = [others[i].primaryPhone].concat(JSON.parse(others[i].additionalPhones || "[]"));
+    for (var j = 0; j < allPhones.length; j++) {
+      if (otherPhones.indexOf(allPhones[j]) !== -1) {
+        throw httpError(409, "מספר הטלפון " + allPhones[j] + " כבר קיים באיש קשר אחר: " + others[i].name);
+      }
+    }
+  }
+}
+
+function deleteSoftphoneContact(id) {
+  var info = db.prepare("DELETE FROM softphone_contacts WHERE id = ?").run(Number(id));
+  return info.changes > 0;
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 initDatabase();
@@ -2159,4 +2500,17 @@ module.exports = {
   setPregreetingEnabled,
   setPregreetingSchedule,
   resetPregreetingFileState,
+  // Softphone (JsSIP/WebRTC) call history
+  upsertSoftphoneCall,
+  getSoftphoneCalls,
+  getSoftphoneCallById,
+  deleteSoftphoneCall,
+  // Softphone custom contacts
+  getSoftphoneContacts,
+  createSoftphoneContact,
+  updateSoftphoneContact,
+  deleteSoftphoneContact,
+  findSoftphoneContactByNormalizedPhone,
+  findSoftphoneContactByAnyPhone,
+  normalizeContactPhoneKey,
 };

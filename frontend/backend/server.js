@@ -70,6 +70,15 @@ const {
   getIvrVoiceMessageById,
   updateIvrVoiceMessageStatus,
   IVR_VOICE_MESSAGE_STATUSES,
+  upsertSoftphoneCall,
+  getSoftphoneCalls,
+  getSoftphoneCallById,
+  deleteSoftphoneCall,
+  getSoftphoneContacts,
+  createSoftphoneContact,
+  updateSoftphoneContact,
+  deleteSoftphoneContact,
+  findSoftphoneContactByAnyPhone,
 } = require("./db");
 
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
@@ -87,7 +96,8 @@ const {
 } = require("./auth.service");
 
 const { handleIvrQuery, ivrErrorResponse } = require("./ivr.service");
-const { getDonorForIvr, normalizePhone }   = require("./donor.service");
+const { getDonorForIvr, normalizePhone, normalizeIdNumber, allAppDonors, getAllDonorPhones } = require("./donor.service");
+const callClassifier = require("../js/softphone-call-classifier.js");
 
 // Isolated Technoline fileLink/fileName trial (OPEN-001 experiment) — see
 // ivr-audio-trial.route.js header. Deliberately does NOT touch ivr.js,
@@ -2538,6 +2548,280 @@ app.get("/api/softphone/context", requireAuth, function (req, res, next) {
     });
   } catch (err) { next(err); }
 });
+
+// ── Softphone: outgoing caller-ID selection (browser SIP calls) ──────────────
+// IMPORTANT — see docs/softphone-caller-id-technoline-question.md: Technoline
+// has NO documented mechanism (as of this writing) for selecting a per-call
+// outbound Caller-ID on a registered SIP/WebRTC extension (unlike callId on
+// campaignRun or callerId on click2call, which ARE documented HTTP-API
+// parameters). This selection is therefore stored as the operator's request
+// only — nothing here modifies the SIP INVITE. Do not treat storage of this
+// value as proof it changes what the donor's phone displays.
+var SOFTPHONE_ALLOWED_CALLER_IDS = [
+  { number: "023766193", label: "מספר ראשי" },
+  { number: "025378787", label: "מספר חדש" },
+];
+var SOFTPHONE_ALLOWED_CALLER_ID_SET = {};
+SOFTPHONE_ALLOWED_CALLER_IDS.forEach(function (c) { SOFTPHONE_ALLOWED_CALLER_ID_SET[c.number] = true; });
+
+app.get("/api/softphone/caller-ids", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function (req, res) {
+  res.json({ options: SOFTPHONE_ALLOWED_CALLER_IDS });
+});
+
+// Matches a normalized phone to an app donor (by any phone field) or a
+// custom softphone contact (by primary/additional phone) — used to attach
+// donorId/donorName/contactId/contactName to a call-history row server-side,
+// so the frontend never has to be trusted for that link.
+function matchSoftphoneCallerIdentity(normalizedPhone) {
+  if (!normalizedPhone) return {};
+  var donors = allAppDonors();
+  for (var i = 0; i < donors.length; i++) {
+    if (getAllDonorPhones(donors[i]).indexOf(normalizedPhone) !== -1) {
+      return {
+        donorId:   donors[i].id != null ? donors[i].id : null,
+        donorName: donors[i].fullName || null,
+      };
+    }
+  }
+  var contact = findSoftphoneContactByAnyPhone(normalizedPhone);
+  if (contact) {
+    return { contactId: contact.id, contactName: contact.name };
+  }
+  return {};
+}
+
+// ── Softphone: call-history lifecycle events ─────────────────────────────────
+// The browser posts one event per JsSIP RTCSession lifecycle stage (created /
+// progress / accepted / ended / failed); classification into the final
+// status happens client-side (softphone-call-classifier.js, exercised by the
+// same module in tests) — this endpoint only validates + persists, upserting
+// by sipCallId so repeated events for one session never duplicate a row.
+app.post(
+  "/api/softphone/calls/event",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var direction = body.direction === "incoming" ? "incoming" : "outgoing";
+      var remotePhone = normalizePhone(body.remotePhone || "");
+      if (!remotePhone) return res.status(400).json({ error: "remotePhone חסר או לא תקין" });
+      var status = String(body.status || "").trim();
+      if (callClassifier.STATUSES.indexOf(status) === -1) {
+        return res.status(400).json({ error: "סטטוס שיחה לא תקין" });
+      }
+
+      var selectedCallerId = body.selectedCallerId ? String(body.selectedCallerId).trim() : null;
+      if (selectedCallerId && !SOFTPHONE_ALLOWED_CALLER_ID_SET[selectedCallerId]) {
+        return res.status(400).json({ error: "מזהה מתקשר יוצא לא מאושר: " + selectedCallerId });
+      }
+
+      var identity = matchSoftphoneCallerIdentity(remotePhone);
+
+      var row = upsertSoftphoneCall({
+        sipCallId:        String(body.sipCallId || "").trim(),
+        direction:        direction,
+        remotePhone:      remotePhone,
+        donorId:          identity.donorId,
+        donorName:        identity.donorName,
+        contactId:        identity.contactId,
+        contactName:      identity.contactName,
+        selectedCallerId: selectedCallerId,
+        workerId:         req.user.id,
+        workerName:       req.user.name,
+        startedAt:        body.startedAt  || null,
+        ringingAt:        body.ringingAt  || null,
+        answeredAt:       body.answeredAt || null,
+        endedAt:          body.endedAt    || null,
+        status:           status,
+        rawSipCause:      body.rawSipCause ? String(body.rawSipCause).slice(0, 200) : null,
+      });
+
+      res.json({ ok: true, call: row });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
+app.get(
+  "/api/softphone/calls",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var result = getSoftphoneCalls({
+        statusGroup: req.query.statusGroup,
+        search:      req.query.search,
+        page:        req.query.page,
+        pageSize:    req.query.pageSize,
+      });
+      res.json(result);
+    } catch (err) { next(err); }
+  }
+);
+
+app.delete(
+  "/api/softphone/calls/:id",
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      var existing = getSoftphoneCallById(id);
+      if (!existing) return res.status(404).json({ error: "רשומת שיחה לא נמצאה" });
+      deleteSoftphoneCall(id);
+      insertAuditLog({
+        action:     "softphone_call_deleted",
+        entityType: "softphone_call",
+        entityId:   id,
+        entityName: existing.remotePhone,
+        details:    "נמחקה רשומת היסטוריית שיחה (" + existing.direction + ", " + existing.status + ")",
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true });
+    } catch (err) { next(err); }
+  }
+);
+
+// ── Softphone: contacts (donors merged live + custom contacts) ───────────────
+
+app.get(
+  "/api/softphone/contacts",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var search = req.query.search ? String(req.query.search).trim() : "";
+      var searchLower = search.toLowerCase();
+      var searchDigits = search.replace(/\D/g, ""); // for ID-number matching only
+      // "0253...", "02-53...", "+972-2-53...", and an already-normalized
+      // number must all find the same contact — run the search term through
+      // the exact same phone normalization used for stored donor phones
+      // (leading zero preserved, 972-prefix converted), not just digit-strip.
+      var searchPhoneDigits = normalizePhone(search);
+
+      var donorContacts = allAppDonors()
+        .filter(function (d) { return d.id !== undefined && d.id !== null && d.id !== ""; })
+        .filter(function (d) {
+          if (!search) return true;
+          var name = (d.fullName || "").toLowerCase();
+          if (name.indexOf(searchLower) !== -1) return true;
+          if (d.city && String(d.city).toLowerCase().indexOf(searchLower) !== -1) return true;
+          if (d.address && String(d.address).toLowerCase().indexOf(searchLower) !== -1) return true;
+          if (searchDigits && d.idNumber && normalizeIdNumber(d.idNumber).indexOf(searchDigits) !== -1) return true;
+          if (searchPhoneDigits && getAllDonorPhones(d).some(function (p) { return p.indexOf(searchPhoneDigits) !== -1; })) return true;
+          return false;
+        })
+        .map(function (d) {
+          return {
+            type:    "donor",
+            id:      d.id,
+            name:    d.fullName || "",
+            phones:  getAllDonorPhones(d),
+            city:    d.city    || "",
+            address: d.address || "",
+          };
+        });
+
+      var customContacts = getSoftphoneContacts(search).map(function (c) {
+        return {
+          type:   "custom",
+          id:     c.id,
+          name:   c.name,
+          phones: [c.primaryPhone].concat(c.additionalPhones),
+          notes:  c.notes,
+        };
+      });
+
+      res.json({ contacts: donorContacts.concat(customContacts) });
+    } catch (err) { next(err); }
+  }
+);
+
+app.post(
+  "/api/softphone/contacts",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var contact = createSoftphoneContact({
+        name:             body.name,
+        primaryPhone:     body.primaryPhone,
+        additionalPhones: body.additionalPhones,
+        notes:            body.notes,
+      }, req.user);
+      insertAuditLog({
+        action:     "softphone_contact_created",
+        entityType: "softphone_contact",
+        entityId:   contact.id,
+        entityName: contact.name,
+        details:    "איש קשר חדש נוצר: " + contact.name,
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true, contact: contact });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
+app.put(
+  "/api/softphone/contacts/:id",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var contact = updateSoftphoneContact(Number(req.params.id), {
+        name:             body.name,
+        primaryPhone:     body.primaryPhone,
+        additionalPhones: body.additionalPhones,
+        notes:            body.notes,
+      });
+      insertAuditLog({
+        action:     "softphone_contact_updated",
+        entityType: "softphone_contact",
+        entityId:   contact.id,
+        entityName: contact.name,
+        details:    "איש קשר עודכן: " + contact.name,
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true, contact: contact });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
+app.delete(
+  "/api/softphone/contacts/:id",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      var existing = getSoftphoneContacts().find(function (c) { return c.id === id; });
+      var deleted = deleteSoftphoneContact(id);
+      if (!deleted) return res.status(404).json({ error: "איש קשר לא נמצא" });
+      insertAuditLog({
+        action:     "softphone_contact_deleted",
+        entityType: "softphone_contact",
+        entityId:   id,
+        entityName: existing ? existing.name : null,
+        details:    "איש קשר נמחק" + (existing ? ": " + existing.name : ""),
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true });
+    } catch (err) { next(err); }
+  }
+);
 
 // ── IVR webhook (Technoline PBX) ──────────────────────────────────────────────
 // Technoline sends all accumulated query params on every step.
