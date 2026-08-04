@@ -418,6 +418,32 @@ function showStatus(text, type) {
   if (type !== "error") setTimeout(function () { el.className = "message"; el.innerText = ""; }, 10000);
 }
 
+// Reused across a manual retry of the same logical send (e.g. the operator
+// clicks send again after a network error, without changing anything) so
+// the server recognizes it as the same request instead of sending twice;
+// reset whenever the audience/message inputs actually change, since that's
+// a genuinely different send, or once a send actually succeeds.
+var _pendingCampaignSendKey = null;
+function _resetCampaignSendKey() { _pendingCampaignSendKey = null; }
+function generateCampaignIdempotencyKey() {
+  if (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+document.querySelectorAll("input[name=audience]").forEach(function (r) { r.addEventListener("change", _resetCampaignSendKey); });
+document.querySelectorAll("input[name=message]").forEach(function (r) { r.addEventListener("change", _resetCampaignSendKey); });
+(function () {
+  var tagSelForKey  = document.getElementById("tagSelect");
+  var citySelForKey = document.getElementById("citySelect");
+  var maxDebtForKey = document.getElementById("maxDebtInput");
+  var msgTextForKey = document.getElementById("msgTextInput");
+  if (tagSelForKey)  tagSelForKey.addEventListener("change", _resetCampaignSendKey);
+  if (citySelForKey) citySelForKey.addEventListener("change", _resetCampaignSendKey);
+  if (maxDebtForKey) maxDebtForKey.addEventListener("input",  _resetCampaignSendKey);
+  if (msgTextForKey) msgTextForKey.addEventListener("input",  _resetCampaignSendKey);
+}());
+
 document.getElementById("sendButton").addEventListener("click", async function () {
   var btn      = this;
   var audVal   = (document.querySelector("input[name=audience]:checked") || {}).value;
@@ -490,12 +516,14 @@ document.getElementById("sendButton").addEventListener("click", async function (
   btn.innerHTML   = 'שולח... <span class="btn-spinner"></span>';
 
   try {
+    if (!_pendingCampaignSendKey) _pendingCampaignSendKey = generateCampaignIdempotencyKey();
     var payload = {
       recipientFilter:   filter,
       messageKind:       msgVal,
       messageText:       msgText,
       quietHours:        true,
       fallbackToPrimary: _fallbackEnabled,
+      idempotencyKey:    _pendingCampaignSendKey,
     };
 
     var res  = await apiFetch("/api/technoline/send", { method: "POST", body: JSON.stringify(payload) });
@@ -506,6 +534,7 @@ document.getElementById("sendButton").addEventListener("click", async function (
       if (data.errorCode) errDetail += " (קוד: " + data.errorCode + ")";
       showStatus("❌ " + errDetail, "error");
     } else {
+      _resetCampaignSendKey(); // this logical send completed — a future click is a new action
       var sent    = data.sentCount    != null ? data.sentCount    : count;
       var success = data.successCount != null ? data.successCount : sent;
       var failed  = data.failedCount  != null ? data.failedCount  : 0;

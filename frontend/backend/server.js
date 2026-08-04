@@ -2208,6 +2208,47 @@ app.post(
   }
 );
 
+// Duplicate-send protection for the campaign send route below. Only the
+// client-side confirm() dialog + button-disable guarded against a repeated
+// submission before — a second tab, a fast double-click before disabled
+// took effect, or a retried request after a perceived timeout could still
+// trigger a real duplicate send to donors. Rather than a blanket
+// same-filter-within-N-seconds lock (which would also block two
+// legitimately different campaigns that happen to share an audience filter,
+// e.g. two separate "debt:200" urgent sends on different days), this
+// follows the same idempotency-key pattern already used by the manual
+// payment endpoints: the client generates one key per send action and
+// resends it on retry; a request that reuses a key already completed
+// successfully gets back the original result instead of sending again.
+// Requests with no key (or a key never seen before) are unaffected.
+var _campaignSendIdempotency = new Map(); // idempotencyKey -> { at, response }
+var CAMPAIGN_SEND_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000;
+
+function getCachedCampaignSend(key) {
+  if (!key) return null;
+  var entry = _campaignSendIdempotency.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.at > CAMPAIGN_SEND_IDEMPOTENCY_TTL_MS) {
+    _campaignSendIdempotency.delete(key);
+    return null;
+  }
+  return entry.response;
+}
+
+function cacheCampaignSend(key, response) {
+  if (!key) return;
+  // Opportunistic cleanup so this map doesn't grow unbounded over a long
+  // PM2 uptime — bounded by TTL, not by size, so this only matters on an
+  // unusually long-running process with heavy campaign traffic.
+  if (_campaignSendIdempotency.size > 500) {
+    var now = Date.now();
+    _campaignSendIdempotency.forEach(function (entry, k) {
+      if (now - entry.at > CAMPAIGN_SEND_IDEMPOTENCY_TTL_MS) _campaignSendIdempotency.delete(k);
+    });
+  }
+  _campaignSendIdempotency.set(key, { at: Date.now(), response: response });
+}
+
 // POST /api/technoline/send  (simplified send screen — hides all campaign API details)
 // POST /api/technoline/campaign/run  (legacy alias kept for backward compat)
 app.post(
@@ -2220,6 +2261,14 @@ app.post(
       if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
 
       var body               = req.body || {};
+      var sendIdempotencyKey = body.idempotencyKey ? String(body.idempotencyKey).trim() : "";
+      if (sendIdempotencyKey) {
+        var cached = getCachedCampaignSend(sendIdempotencyKey);
+        if (cached) {
+          return res.json(Object.assign({}, cached, { idempotent: true }));
+        }
+      }
+
       var title              = String(body.title           || "").trim();
       var messageKind        = String(body.messageKind     || "ivr").trim();   // "ivr" | "text"
       var messageText        = String(body.messageText     || "").trim();
@@ -2402,7 +2451,7 @@ app.post(
         });
       }
 
-      return res.json({
+      var successResponse = {
         ok:                 true,
         campaignId:         techBody.campaignId,
         phones:             techBody.phones,
@@ -2414,7 +2463,9 @@ app.post(
         sentCount:          phones.length,
         successCount:       acceptedCount,
         failedCount:        failedCount,
-      });
+      };
+      if (sendIdempotencyKey) cacheCampaignSend(sendIdempotencyKey, successResponse);
+      return res.json(successResponse);
     } catch (err) {
       next(err);
     }
