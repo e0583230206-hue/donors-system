@@ -109,7 +109,7 @@ function calculateTotals() {
   const rate =
     totalCommitted === 0 ? 0 : Math.round((totalPaid / totalCommitted) * 100);
 
-  donorsTotal.innerText = donors.length;
+  donorsTotal.innerText = donors.length; // replaced with the server-authoritative count below once it resolves
   paidTotal.innerText = formatMoney(totalPaid);
   debtTotal.innerText = formatMoney(totalDebt);
   commitmentsTotal.innerText = formatMoney(totalCommitted);
@@ -610,4 +610,26 @@ Database.whenReady(function () {
   buildCategoryDropdown();
   buildPeriodReport();
   buildMonthlyBreakdown();
+  updateServerDonorCount();
+});
+
+// Server-computed donor count is authoritative — the local-cache count set
+// in calculateTotals() above is only the first paint, before this resolves,
+// and can be stale (see app.js for the same fix on the homepage dashboard).
+async function updateServerDonorCount() {
+  if (typeof apiFetch !== "function") return;
+  try {
+    var res = await apiFetch("/api/dashboard");
+    if (!res.ok) return;
+    var stats = await res.json();
+    if (stats && typeof stats.totalDonors === "number") {
+      donorsTotal.innerText = stats.totalDonors;
+    }
+  } catch (_) {}
+}
+
+window.addEventListener("crm-donors-refreshed", function () {
+  donors = Database.get("donors");
+  calculateTotals();
+  updateServerDonorCount();
 });
