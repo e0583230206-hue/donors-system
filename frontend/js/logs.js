@@ -92,3 +92,82 @@ Database.whenReady(function () {
   logs = Database.get("logs");
   renderLogs();
 });
+
+// ── Audit log (read-only, server-authoritative) ─────────────────────────────
+// Reads the tamper-resistant server_audit_log directly via the existing
+// admin-only /api/admin/audit-log route — this data already existed and was
+// already correctly captured on every mutating action, but had no screen
+// anywhere in the product; staff only ever saw the editable log above.
+// Note: the mirror deliberately never stores raw before/after field values
+// (only which field names changed, if any), so "פרטים" here can't show a
+// full diff — that's a pre-existing, deliberate limitation of the data
+// captured, not something this screen changes.
+
+var AUDIT_ACTION_LABELS = {
+  create: "יצירה",
+  update: "עדכון",
+  delete: "מחיקה",
+  approve: "אישור",
+  cancel: "ביטול",
+  status: "שינוי סטטוס",
+  payment: "תשלום",
+  payment_cancel: "ביטול תשלום",
+  import: "ייבוא",
+  login: "כניסה",
+  login_failed: "כניסה נכשלה",
+  logout: "יציאה",
+  force_logout: "ניתוק כפוי",
+  password_change: "שינוי סיסמה",
+  password_reset: "איפוס סיסמה",
+  worker_create: "יצירת עובד",
+  worker_delete: "מחיקת עובד",
+  campaign_send: "שליחת קמפיין",
+  campaign_send_failed: "כשל בשליחת קמפיין",
+  data_save: "שמירת נתונים",
+};
+
+function auditActionLabel(action) {
+  return AUDIT_ACTION_LABELS[action] || action || "";
+}
+
+function renderAuditLog(entries) {
+  var table = document.getElementById("auditLogTable");
+  if (!table) return;
+  table.innerHTML = "";
+
+  if (!entries || entries.length === 0) {
+    table.innerHTML = '<tr class="empty-state-row"><td colspan="6">אין רשומות ביומן הביקורת</td></tr>';
+    return;
+  }
+
+  entries.forEach(function (e) {
+    var row = document.createElement("tr");
+    row.innerHTML =
+      "<td>" + formatDate(e.createdAt) + "</td>" +
+      "<td>" + escapeHTML(auditActionLabel(e.action)) + "</td>" +
+      "<td>" + escapeHTML(e.entityType || "") + "</td>" +
+      "<td>" + escapeHTML(e.entityName || "") + "</td>" +
+      "<td>" + escapeHTML(e.workerName || "") + "</td>" +
+      "<td>" + escapeHTML(e.details || "") + "</td>";
+    table.appendChild(row);
+  });
+}
+
+async function loadAuditLog() {
+  if (typeof isAdmin !== "function" || !isAdmin()) return;
+  var panel = document.getElementById("auditLogPanel");
+  if (panel) panel.style.display = "";
+  try {
+    var res = await apiFetch("/api/admin/audit-log?limit=500");
+    if (!res.ok) return;
+    var entries = await res.json();
+    renderAuditLog(entries);
+  } catch (_) {
+    // Server-side role check already protects this; a fetch failure here
+    // just leaves the panel empty rather than breaking the rest of the page.
+  }
+}
+
+Database.whenReady(function () {
+  loadAuditLog();
+});
