@@ -254,10 +254,10 @@ function renderStats() {
   }).length;
 }
 
-function renderOpenTasks(openTasks) {
+function renderOpenTasks(openTasks, totalOpenCount) {
   openTasksTable.innerHTML = "";
 
-  if (openTasks.length === 0) {
+  if ((totalOpenCount != null ? totalOpenCount : openTasks.length) === 0) {
     openTasksTable.innerHTML = `
       <tr class="empty-state-row">
         <td colspan="8">📋 אין משימות פתוחות</td>
@@ -363,8 +363,18 @@ function renderTasks() {
     return (b.doneAt || "").localeCompare(a.doneAt || "");
   });
 
+  // Clamp before slicing: if the current page fell out of range (e.g. the
+  // last item on page 2 was just completed/deleted, or a filter shrank the
+  // list), the table used to render an empty slice and falsely claim "no
+  // open tasks" — using the true filtered count, not the paged slice's
+  // length, for that check below fixes the message; clamping here fixes the
+  // pagination bar/table actually landing back on a real page instead of a
+  // now-nonexistent one.
+  var totalPages = Math.ceil(openTasks.length / TASK_PAGE_SIZE);
+  if (taskPage > totalPages - 1) taskPage = Math.max(0, totalPages - 1);
+
   var pagedOpen = openTasks.slice(taskPage * TASK_PAGE_SIZE, (taskPage + 1) * TASK_PAGE_SIZE);
-  renderOpenTasks(pagedOpen);
+  renderOpenTasks(pagedOpen, openTasks.length);
   renderTaskPagination(openTasks.length);
   renderDoneTasks(doneTasks);
 }

@@ -263,10 +263,10 @@ function renderStats(allReminders) {
   }
 }
 
-function renderOpenReminders(openReminders) {
+function renderOpenReminders(openReminders, totalOpenCount) {
   openRemindersTable.innerHTML = "";
 
-  if (openReminders.length === 0) {
+  if ((totalOpenCount != null ? totalOpenCount : openReminders.length) === 0) {
     openRemindersTable.innerHTML = `
       <tr class="empty-state-row">
         <td colspan="8">🔔 אין תזכורות פתוחות</td>
@@ -369,10 +369,18 @@ function renderReminders() {
     return (b.doneAt || "").localeCompare(a.doneAt || "");
   });
 
+  // Same clamp-before-slice fix as tasks.js's renderTasks(): a stale page
+  // (e.g. the last item on page 2 was just completed/deleted) used to
+  // render an empty slice and falsely claim "no open reminders" while the
+  // pagination bar (driven by the true count) shrank away at the same
+  // moment, leaving no way back to page 1 without a manual reload.
+  var totalPages = Math.ceil(openReminders.length / REMINDER_PAGE_SIZE);
+  if (reminderPage > totalPages - 1) reminderPage = Math.max(0, totalPages - 1);
+
   var pagedOpen = openReminders.slice(reminderPage * REMINDER_PAGE_SIZE, (reminderPage + 1) * REMINDER_PAGE_SIZE);
 
   renderStats(allReminders);
-  renderOpenReminders(pagedOpen);
+  renderOpenReminders(pagedOpen, openReminders.length);
   renderReminderPagination(openReminders.length);
   renderDoneReminders(doneReminders);
 }
