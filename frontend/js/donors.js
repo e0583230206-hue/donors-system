@@ -746,7 +746,7 @@ async function applyExcelImport(preview) {
 
   var now  = new Date();
   var idBase = Date.now(), idSeq = 0;
-  var donorsCreated = 0, donorsUpdated = 0, donationsAdded = 0;
+  var donorsCreated = 0, donorsUpdated = 0, donationsAdded = 0, donationsSkippedDuplicate = 0;
 
   preview.toCreate.forEach(function (group) {
     var pn = normPhone(group.phone);
@@ -795,8 +795,26 @@ async function applyExcelImport(preview) {
     }
     if (group.notes && !target.notes) target.notes = group.notes;
     if (!target.donations) target.donations = [];
+
+    // Re-importing the same file (accidentally, or "let me re-run to catch
+    // new rows") used to append every donation row again unconditionally —
+    // a same-day, same-amount, same-purpose row already present on this
+    // donor is treated as a duplicate and skipped instead, rather than
+    // silently doubling the donor's debt/history. Signature is computed the
+    // same way for existing donations (already-stored fields) and freshly
+    // parsed ones (via _buildDonation) so the comparison is apples-to-apples.
+    var existingSignatures = {};
+    target.donations.forEach(function (d) { existingSignatures[_donationSignature(d)] = true; });
+
     group.donations.forEach(function (donationEntry) {
-      target.donations.push(_buildDonation(donationEntry, idBase + (++idSeq), now));
+      var candidate = _buildDonation(donationEntry, idBase + (++idSeq), now);
+      var sig = _donationSignature(candidate);
+      if (existingSignatures[sig]) {
+        donationsSkippedDuplicate++;
+        return;
+      }
+      existingSignatures[sig] = true; // also catches a repeated row within this same file
+      target.donations.push(candidate);
       donationsAdded++;
     });
     target.updatedAt = now.toISOString();
@@ -811,11 +829,21 @@ async function applyExcelImport(preview) {
     renderDonors();
     return;
   }
-  addLog("יבוא מאקסל: " + donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות, " + preview.toSkip.length + " דולגו");
-  AuditLog.record({ action: "import", entityType: "donor", entityId: "", entityName: "ייבוא מאקסל", details: donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות" });
-  showMessage("✅ יבוא הושלם: " + donorsCreated + " תורמים חדשים | " + donorsUpdated + " קיימים עודכנו | " + donationsAdded + " תרומות נוספו" + (preview.toSkip.length > 0 ? " | " + preview.toSkip.length + " שורות דולגו" : ""));
+  addLog("יבוא מאקסל: " + donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות, " + preview.toSkip.length + " דולגו" + (donationsSkippedDuplicate > 0 ? ", " + donationsSkippedDuplicate + " תרומות כפולות נמנעו" : ""));
+  AuditLog.record({ action: "import", entityType: "donor", entityId: "", entityName: "ייבוא מאקסל", details: donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות" + (donationsSkippedDuplicate > 0 ? ", " + donationsSkippedDuplicate + " כפילויות נמנעו" : "") });
+  showMessage("✅ יבוא הושלם: " + donorsCreated + " תורמים חדשים | " + donorsUpdated + " קיימים עודכנו | " + donationsAdded + " תרומות נוספו" +
+    (preview.toSkip.length > 0 ? " | " + preview.toSkip.length + " שורות דולגו" : "") +
+    (donationsSkippedDuplicate > 0 ? " | " + donationsSkippedDuplicate + " תרומות כפולות זוהו ונמנעו" : ""));
   renderDonors();
   if (preview.toSkip.length > 0) { try { renderImportSkippedReport(preview.toSkip); } catch (_) {} }
+}
+
+// Identity used to detect a re-imported duplicate donation on an existing
+// donor: same calendar day + same amount + same purpose + same gilayon.
+// Deliberately excludes id/createdAt/paid-status so a re-import is caught
+// even if the row's paid state was edited manually in between.
+function _donationSignature(d) {
+  return [d.regularDate || "", Number(d.amount || 0), d.finalPurpose || "", d.gilayon || ""].join("|");
 }
 
 function _buildDonation(entry, id, now) {
