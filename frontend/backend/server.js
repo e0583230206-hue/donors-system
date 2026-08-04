@@ -1494,24 +1494,29 @@ app.post(
         return res.status(400).json({ error: "מספר טלפון לא תקין: " + rawPhone });
       }
 
-      const techParams = new URLSearchParams({
+      var click2callCallerId = resolveClick2CallCallerId();
+      if (click2callCallerId.error) {
+        logger.error("Click2Call", click2callCallerId.error);
+        return res.status(500).json({ error: click2callCallerId.error });
+      }
+
+      const techParamsObj = {
         action:     "click2call",
         apiKey:     apiKey,
         extension:  extension,
         target:     phone,
         targetName: donorName || phone,
         ringSec:    30,
-      });
+      };
+      if (click2callCallerId.callerId) techParamsObj.callerId = click2callCallerId.callerId;
+      const techParams = new URLSearchParams(techParamsObj);
 
       // Log exactly what we send (apiKey + donor phone/name redacted)
-      logger.info("Click2Call", "→ Technoline request:", JSON.stringify({
-        action:     "click2call",
+      logger.info("Click2Call", "→ Technoline request:", JSON.stringify(Object.assign({}, techParamsObj, {
         apiKey:     maskSecret(apiKey),
-        extension:  extension,
         target:     logger.redact(phone),
         targetName: logger.redact(donorName || phone),
-        ringSec:    30,
-      }));
+      })));
 
       console.log("[Click2Call] → URL: https://app.ipsales.co.il/ivrFilesApi.php");
       var techRes  = await fetch("https://app.ipsales.co.il/ivrFilesApi.php", {
@@ -1718,13 +1723,14 @@ function campaignErrMsg(body) {
   return body.note || body.error || ("שגיאה " + (body.errorCode || ""));
 }
 
+// Shared Israeli-phone format check for both outbound-caller-id env vars below.
+var TECHNOLINE_CALLER_ID_RE = /^0\d{8,9}$/;
+
 // Outbound Caller-ID for tzintuk/missed-call campaigns ONLY (campaignApi.php
 // action=campaignRun, param `callId` per Technoline's campaignApi.md docs —
 // "Outbound Caller-ID. Must be a phone previously registered via addDid.
 // Omit to use the account's default DID."). Must never be applied to
 // Click2Call, IVR identification, SIP, or any other Technoline action.
-var TECHNOLINE_CALLER_ID_RE = /^0\d{8,9}$/;
-
 function resolveTzintukCallerId() {
   var raw = String(process.env.TECHNOLINE_TZINTUK_CALLER_ID || "").trim();
   if (!raw) return { callId: null, error: null };
@@ -1732,6 +1738,23 @@ function resolveTzintukCallerId() {
     return { callId: null, error: "TECHNOLINE_TZINTUK_CALLER_ID לא תקין (מצופה מספר ישראלי המתחיל ב-0): " + raw };
   }
   return { callId: raw, error: null };
+}
+
+// Outbound Caller-ID for the "התקשר לתורם" Click-to-Call button ONLY
+// (ivrFilesApi.php action=click2call, param `callerId` per Technoline's
+// click2callApiDocs.md — "Outbound caller ID shown to the target when the
+// PBX dials out. Must be one of the account's approved outbound numbers...
+// Omitted → the extension's configured display number is used."). This is a
+// distinct parameter from campaignRun's `callId` above — must never be mixed
+// up with it, and must never be applied to SIP/softphone, IVR identification,
+// or tzintuk campaigns.
+function resolveClick2CallCallerId() {
+  var raw = String(process.env.TECHNOLINE_CLICK2CALL_CALLER_ID || "").trim();
+  if (!raw) return { callerId: null, error: null };
+  if (!TECHNOLINE_CALLER_ID_RE.test(raw)) {
+    return { callerId: null, error: "TECHNOLINE_CLICK2CALL_CALLER_ID לא תקין (מצופה מספר ישראלי המתחיל ב-0): " + raw };
+  }
+  return { callerId: raw, error: null };
 }
 
 // Helper: build phone list from donors, filtered by recipientFilter.
