@@ -897,7 +897,7 @@ function cancelManualDonationPayment(params) {
 
     try {
       insertAuditLog({
-        action:     "update",
+        action:     "payment_cancel",
         entityType: "payment",
         entityId:   params.appDonorId,
         entityName: null,
@@ -910,6 +910,111 @@ function cancelManualDonationPayment(params) {
 
     db.exec("COMMIT");
     return { donation: donation, payment: getPaymentById(paymentId) };
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch (_) {}
+    throw err;
+  }
+}
+
+// Records a genuine PARTIAL manual payment against one donation — unlike
+// markDonationPaidManually (which always drives a donation to fully paid,
+// remainingDebt=0), this applies exactly params.amount against the
+// donation's current remainingDebt and may leave it partially open. Used
+// both by the donor-card "partial payment across several open debts" flow
+// (called once per affected donation, one real payments row each — see
+// server.js) and by "add donation already paid" (called once, for the full
+// amount, immediately after the donation itself is created unpaid).
+//
+// Same atomicity/idempotency contract as markDonationPaidManually: one
+// BEGIN/COMMIT covering the payments-table insert and the app_state
+// read-modify-write, and a caller-supplied idempotencyKey stored as the
+// payment's callId so a retried request after a timeout/error is recognized
+// as the same logical payment instead of charging twice.
+// cancelManualDonationPayment (above) already reverses either kind of
+// payment generically via donation.lastPaymentId + payment.amount, so no
+// separate cancel path is needed for partial payments.
+function recordManualPartialPayment(params) {
+  var callId = "manual-partial:" + String(params.idempotencyKey).trim();
+
+  var existing = findPaymentByCallId(callId);
+  if (existing) {
+    var donorsNow = getAppState("donors");
+    var donorNow = donorsNow.find(function (d) { return Number(d.id) === Number(params.appDonorId); });
+    var donationNow = donorNow ? (donorNow.donations || []).find(function (d) { return Number(d.id) === Number(params.donationId); }) : null;
+    return { idempotent: true, payment: existing, donation: donationNow || null };
+  }
+
+  try {
+    db.exec("BEGIN");
+
+    var donors = getAppState("donors");
+    var donor = donors.find(function (d) { return Number(d.id) === Number(params.appDonorId); });
+    if (!donor) throw httpError(404, "תורם לא נמצא");
+    var donation = (donor.donations || []).find(function (d) { return Number(d.id) === Number(params.donationId); });
+    if (!donation) throw httpError(404, "תרומה לא נמצאה");
+
+    var chargeAmount = Number(params.amount);
+    if (!isFinite(chargeAmount) || chargeAmount <= 0) throw httpError(400, "סכום לא תקין");
+
+    // Server-computed from the CURRENT stored remainingDebt, never trusted
+    // from the client — same concurrency guarantee as markDonationPaidManually:
+    // a stale/concurrent request that would overpay this specific donation is
+    // rejected rather than driving remainingDebt negative.
+    var currentRemaining = Number(donation.remainingDebt || 0);
+    if (chargeAmount > currentRemaining) {
+      throw httpError(409, "סכום התשלום גדול מיתרת החוב הנוכחית של התרומה — ייתכן שהיא כבר עודכנה");
+    }
+
+    var phone = params.phone ? String(params.phone).trim().slice(0, 30) : "";
+    var donorName = params.donorName ? String(params.donorName).trim().slice(0, 200) : "";
+    var paymentMethod = params.paymentMethod ? String(params.paymentMethod).trim().slice(0, 50) : "";
+
+    var sqlDonorId = null;
+    if (phone) {
+      if (donorName) { try { upsertDonor(phone, donorName); } catch (_) {} }
+      var resolved = findDonorByPhone(phone);
+      if (resolved) sqlDonorId = resolved.id;
+    }
+
+    var result = recordPayment({
+      callId:             callId,
+      phone:              phone,
+      donorId:            sqlDonorId,
+      amount:             chargeAmount,
+      status:             "success",
+      source:             "manual",
+      confirmationNumber: null,
+    });
+    var payment = getPaymentById(result.lastInsertRowid);
+
+    donation.paidPartial = Number(donation.paidPartial || 0) + chargeAmount;
+    donation.remainingDebt = currentRemaining - chargeAmount;
+    donation.paid = donation.remainingDebt <= 0;
+    if (paymentMethod) {
+      donation.paymentMethod = donation.paymentMethod || paymentMethod;
+      donation.lastPaymentMethod = paymentMethod;
+    }
+    donation.lastPaymentId = payment.id;
+    donation.updatedAt = nowIso();
+    donor.updatedAt = nowIso();
+
+    setAppState("donors", donors);
+
+    try {
+      insertAuditLog({
+        action:     "create",
+        entityType: "payment",
+        entityId:   params.appDonorId,
+        entityName: donorName || null,
+        details:    "תשלום חלקי ידני נרשם בסך " + chargeAmount + " ₪" + (paymentMethod ? " (" + paymentMethod + ")" : ""),
+        workerId:   params.workerId,
+        workerName: params.workerName,
+        ip:         params.ip,
+      });
+    } catch (_) {}
+
+    db.exec("COMMIT");
+    return { idempotent: false, payment: payment, donation: donation };
   } catch (err) {
     try { db.exec("ROLLBACK"); } catch (_) {}
     throw err;
@@ -2426,6 +2531,7 @@ module.exports = {
   cancelPaymentById,
   markDonationPaidManually,
   cancelManualDonationPayment,
+  recordManualPartialPayment,
   // Logs
   insertCallLog,
   // Call Sessions

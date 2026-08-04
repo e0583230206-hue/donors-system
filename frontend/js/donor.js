@@ -1372,6 +1372,10 @@ async function addDonation() {
     (window.HebrewDate && window.HebrewDate.getParsha
       ? window.HebrewDate.getParsha(now)
       : "");
+  // Always created unpaid first, regardless of the "paid" checkbox — a
+  // donation only ever becomes paid through the same atomic server-side
+  // payment endpoint everything else uses (mark-paid below), so it always
+  // gets a real payments row and a lastPaymentId, never just local fields.
   const newDonation = {
     id: Date.now(),
     date: now.toISOString(),
@@ -1389,9 +1393,9 @@ async function addDonation() {
     purposeType: selectedPurpose,
     customPurpose: customPurpose,
     paymentMethod: paymentMethod,
-    paid: paid,
-    paidPartial: paid ? amount : 0,
-    remainingDebt: paid ? 0 : amount,
+    paid: false,
+    paidPartial: 0,
+    remainingDebt: amount,
     note: note,
     approvedStatus: "טיוטה",
     messageStatus: "טיוטה",
@@ -1408,6 +1412,47 @@ async function addDonation() {
     showMessage(donationMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
     return;
   }
+
+  // "שולם" was checked at creation — immediately mark it paid through the
+  // same atomic mark-paid endpoint the donation-edit dropdown uses, so this
+  // gets a real payments row too. The donation itself is already safely
+  // saved above regardless of what happens here.
+  if (paid) {
+    try {
+      var payRes = await apiFetch(
+        "/api/donors/" + donor.id + "/donations/" + newDonation.id + "/mark-paid",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            amount: amount,
+            phone: donor.phone || "",
+            donorName: donor.fullName || "",
+            paymentMethod: paymentMethod,
+            idempotencyKey: generateIdempotencyKey(),
+          }),
+        },
+      );
+      if (payRes.ok) {
+        var payBody = await payRes.json();
+        if (payBody && payBody.donation) {
+          Object.assign(newDonation, payBody.donation);
+        }
+      } else {
+        var payErrBody = null;
+        try { payErrBody = await payRes.json(); } catch (_) {}
+        showMessage(donationMessage, "התרומה נוספה, אך סימונה כשולמה נכשל: " + ((payErrBody && payErrBody.error) || "שגיאת שרת") + " — אפשר לסמן כשולם דרך עריכת התרומה", "error");
+        reconcileApprovalDrafts([newDonation]);
+        renderAll();
+        return;
+      }
+    } catch (_) {
+      showMessage(donationMessage, "התרומה נוספה, אך סימונה כשולמה נכשל עקב תקשורת — אפשר לסמן כשולם דרך עריכת התרומה", "error");
+      reconcileApprovalDrafts([newDonation]);
+      renderAll();
+      return;
+    }
+  }
+
   reconcileApprovalDrafts([newDonation]);
   AuditLog.record({
     action: "create",
@@ -1417,7 +1462,8 @@ async function addDonation() {
     details:
       "נוספה תרומה/חוב בסך " + formatMoney(newDonation.amount) +
       " עבור " +
-      newDonation.finalPurpose,
+      newDonation.finalPurpose +
+      (paid ? " (שולמה מיידית)" : ""),
   });
 
   amountInput.value = "";
@@ -1461,7 +1507,11 @@ async function saveIvrSettings() {
   renderAll();
 }
 
+let registeringPartialPayment = false; // re-entrancy guard, same purpose as savingDonationEdit
+
 async function registerPartialPayment() {
+  if (registeringPartialPayment) return;
+
   const amount = Number(partialAmountInput.value);
 
   if (!amount || amount <= 0) {
@@ -1484,66 +1534,93 @@ async function registerPartialPayment() {
     return;
   }
 
-  const affectedDebts = [];
-  const priorState = [];
-
+  // Distribution plan only — no local mutation yet. Each affected debt is
+  // charged through its own real, atomic, idempotent server-side payment
+  // call below (oldest debt first, same order as before); the server is
+  // always the source of truth for the resulting paidPartial/remainingDebt/
+  // paid, never computed locally.
+  const plan = [];
   openDebts.forEach(function (debt) {
     if (remainingPayment <= 0) return;
-
-    priorState.push({
-      debt: debt,
-      paidPartial: debt.paidPartial,
-      remainingDebt: debt.remainingDebt,
-      paid: debt.paid,
-      lastPaymentMethod: debt.lastPaymentMethod,
-      updatedAt: debt.updatedAt,
-    });
-
     const debtAmount = Number(debt.remainingDebt);
-
-    if (remainingPayment >= debtAmount) {
-      debt.paidPartial = Number(debt.paidPartial || 0) + debtAmount;
-      debt.remainingDebt = 0;
-      debt.paid = true;
-      remainingPayment -= debtAmount;
-    } else {
-      debt.paidPartial = Number(debt.paidPartial || 0) + remainingPayment;
-      debt.remainingDebt = debtAmount - remainingPayment;
-      debt.paid = false;
-      remainingPayment = 0;
-    }
-
-    debt.lastPaymentMethod = partialPaymentMethod.value;
-    debt.updatedAt = new Date().toISOString();
-    affectedDebts.push(debt);
+    const chargeAmount = Math.min(remainingPayment, debtAmount);
+    plan.push({ debt: debt, chargeAmount: chargeAmount });
+    remainingPayment -= chargeAmount;
   });
 
-  donor.updatedAt = new Date().toISOString();
+  const method = partialPaymentMethod.value;
+  const sessionKey = generateIdempotencyKey();
+  const succeeded = [];
+  let failedAt = null;
 
+  registeringPartialPayment = true;
+  partialPaymentButton.disabled = true;
   try {
-    await saveDonors();
-  } catch (err) {
-    priorState.forEach(function (p) {
-      p.debt.paidPartial = p.paidPartial;
-      p.debt.remainingDebt = p.remainingDebt;
-      p.debt.paid = p.paid;
-      p.debt.lastPaymentMethod = p.lastPaymentMethod;
-      p.debt.updatedAt = p.updatedAt;
+    for (var i = 0; i < plan.length; i++) {
+      var item = plan[i];
+      try {
+        var res = await apiFetch(
+          "/api/donors/" + donor.id + "/donations/" + item.debt.id + "/partial-payment",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              amount: item.chargeAmount,
+              phone: donor.phone || "",
+              donorName: donor.fullName || "",
+              paymentMethod: method,
+              idempotencyKey: sessionKey + ":" + item.debt.id,
+            }),
+          },
+        );
+        if (!res.ok) {
+          var errBody = null;
+          try { errBody = await res.json(); } catch (_) {}
+          failedAt = { item: item, message: (errBody && errBody.error) || "שגיאת שרת" };
+          break;
+        }
+        var body = await res.json();
+        if (body && body.donation) {
+          Object.assign(item.debt, body.donation);
+        }
+        succeeded.push(item);
+      } catch (_) {
+        failedAt = { item: item, message: "שגיאת תקשורת עם השרת" };
+        break;
+      }
+    }
+  } finally {
+    registeringPartialPayment = false;
+    partialPaymentButton.disabled = false;
+  }
+
+  if (succeeded.length > 0) {
+    donor.updatedAt = new Date().toISOString();
+    reconcileApprovalDrafts(succeeded.map(function (s) { return s.debt; }));
+    AuditLog.record({
+      action: "payment",
+      entityType: "donation",
+      entityId: donor.id,
+      entityName: donor.fullName,
+      details:
+        "נרשם תשלום חלקי בסך " + formatMoney(succeeded.reduce(function (sum, s) { return sum + s.chargeAmount; }, 0)) +
+        " באמצעי " + method +
+        " (" + succeeded.length + " מתוך " + plan.length + " תרומות שהושפעו)",
     });
-    showMessage(partialMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+  }
+
+  if (failedAt) {
+    var doneSoFar = succeeded.reduce(function (sum, s) { return sum + s.chargeAmount; }, 0);
+    showMessage(
+      partialMessage,
+      doneSoFar > 0
+        ? "נרשם בהצלחה " + formatMoney(doneSoFar) + " מתוך " + formatMoney(amount) + " — ההמשך נכשל: " + failedAt.message + ". נסה שוב עבור היתרה."
+        : "התשלום החלקי נכשל: " + failedAt.message,
+      "error",
+    );
+    renderAll();
     return;
   }
-  reconcileApprovalDrafts(affectedDebts);
-  AuditLog.record({
-    action: "payment",
-    entityType: "donation",
-    entityId: donor.id,
-    entityName: donor.fullName,
-    details:
-      "נרשם תשלום חלקי בסך " + formatMoney(amount) +
-      " באמצעי " +
-      partialPaymentMethod.value,
-  });
+
   partialAmountInput.value = "";
   showMessage(partialMessage, "התשלום החלקי נרשם בהצלחה");
   renderAll();

@@ -43,6 +43,7 @@ const {
   getPaymentStats,
   markDonationPaidManually,
   cancelManualDonationPayment,
+  recordManualPartialPayment,
   insertAuditLog,
   getAuditLogs,
   insertSyncLog,
@@ -1279,6 +1280,51 @@ app.post(
       });
 
       res.json({ ok: true, donation: result.donation, payment: result.payment });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
+// Records a genuine partial payment (does not necessarily fully close the
+// donation) as a single atomic server-side operation with a real payments
+// row — same idempotency/rollback contract as mark-paid above, via
+// recordManualPartialPayment() in db.js. Used by the donor-card "תשלום
+// חלקי" flow, which calls this once per affected open debt (each with its
+// own idempotency key derived from one client-side session key), and by
+// "add donation already paid" for the full amount of a single new donation.
+app.post(
+  "/api/donors/:donorId/donations/:donationId/partial-payment",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var appDonorId = parseInt(req.params.donorId, 10);
+      var donationId = parseInt(req.params.donationId, 10);
+      if (!appDonorId || !donationId) return res.status(400).json({ error: "מזהה תורם/תרומה לא תקין" });
+
+      var amount = Number(req.body && req.body.amount);
+      if (!isFinite(amount) || amount <= 0 || amount > MAX_SANE_AMOUNT) {
+        return res.status(400).json({ error: "סכום לא תקין" });
+      }
+
+      var idempotencyKey = req.body && req.body.idempotencyKey ? String(req.body.idempotencyKey).trim() : "";
+      if (!idempotencyKey) return res.status(400).json({ error: "חסר מפתח idempotency" });
+
+      var result = recordManualPartialPayment({
+        appDonorId:    appDonorId,
+        donationId:    donationId,
+        amount:        amount,
+        phone:         req.body && req.body.phone,
+        donorName:     req.body && req.body.donorName,
+        paymentMethod: req.body && req.body.paymentMethod,
+        idempotencyKey: idempotencyKey,
+        workerId:   req.user && req.user.id,
+        workerName: req.user && req.user.name,
+        ip:         req.ip,
+      });
+
+      res.json({ ok: true, idempotent: !!result.idempotent, donation: result.donation, payment: result.payment });
     } catch (err) {
       if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
       next(err);
