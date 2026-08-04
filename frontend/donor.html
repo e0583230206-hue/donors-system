@@ -5,8 +5,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>כרטיס תורם</title>
     <link rel="stylesheet" href="css/style.css" />
+    <style>
+      /* Embed mode (?embed=1) — used when this page is loaded inside an
+         iframe (e.g. the Softphone's donor-details drawer, frontend/softphone.html)
+         so the full site chrome doesn't duplicate inside a small panel. */
+      body.embed-mode .sidebar { display: none; }
+      body.embed-mode .main { margin-right: 0; padding: 18px; }
+      body.embed-mode .page-actions { display: none; }
+    </style>
   </head>
   <body>
+    <script>
+      // Embed mode bootstrap — must run before layout paints. Only affects
+      // presentation (sidebar/header hidden via CSS above); everything else
+      // on this page (donor.js, all functionality) runs completely unchanged.
+      (function () {
+        var params = new URLSearchParams(location.search);
+        if (params.get("embed") !== "1") return;
+        document.body.classList.add("embed-mode");
+        // Escape pressed inside this iframe can't reach the parent page's
+        // own keydown listener (different document) — bridge it via
+        // postMessage so the Softphone drawer (or any other embedder) can
+        // close itself. No-op if this page isn't actually inside an iframe.
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: "donor-embed-close" }, "*");
+          }
+        });
+      })();
+    </script>
     <aside class="sidebar">
       <div class="logo">
         <img src="images/logo.png" class="sidebar-logo-img" alt="א בלאט גמרא" />
