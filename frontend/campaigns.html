@@ -178,6 +178,11 @@
                 <input type="radio" name="audience" value="debt" checked />
                 <span class="aud-label">כל בעלי החוב</span>
                 <span class="aud-badge" id="badgeDebt">…</span>
+                <div class="aud-sub">
+                  <label for="maxDebtInput" style="font-size:.85em;color:#555;display:block;margin-bottom:4px;">מקסימום חוב (₪) — ריק = ללא הגבלה</label>
+                  <input id="maxDebtInput" type="number" min="0.01" step="0.01" placeholder="לדוגמה: 200"
+                    style="width:100%;padding:8px 12px;border:1px solid #ccc;border-radius:6px;font-size:14px;box-sizing:border-box;" />
+                </div>
               </label>
 
               <!-- by tag — shown only if tags exist -->

@@ -1788,6 +1788,16 @@ function buildPhoneList(recipientFilter, opts) {
     ? filter.slice(4).split(",").map(function (s) { return Number(s.trim()); }).filter(function (n) { return !isNaN(n); })
     : null;
 
+  // "debt:<maxDebt>" — bounded-debt campaigns (e.g. "debt:200"), distinct from
+  // the legacy uncapped "debt" filter below which stays byte-for-byte
+  // unchanged for backward compatibility. Only this new bounded path gets the
+  // stricter active-donor + phone-format rules — every other filter
+  // ("all"/"tag:"/"city:"/"donor:"/"ids:"/plain "debt") is untouched.
+  var isBoundedDebtFilter = filter.startsWith("debt:");
+  var maxDebtCap = isBoundedDebtFilter ? Number(filter.slice(5)) : null;
+  var strictPhoneMode = isBoundedDebtFilter;
+  var ISRAELI_PHONE_RE = /^0\d{8,9}$/;
+
   for (var i = 0; i < donors.length; i++) {
     var d       = donors[i];
     var primary = normalizePhone(d.phone || "");
@@ -1805,7 +1815,18 @@ function buildPhoneList(recipientFilter, opts) {
     if (filter === "all") {
       include = true;
     } else if (filter === "debt") {
+      // Legacy behavior — unchanged: any positive debt on any single
+      // donation, no cap, no active-donor restriction.
       include = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
+    } else if (isBoundedDebtFilter) {
+      // Same "total outstanding debt" formula used everywhere else in the
+      // app (donors.js getDonorDebt / donor.js getDebtTotal): sum of
+      // remainingDebt across every donation — not a single-donation check.
+      var donorTotalDebt = (d.donations || []).reduce(function (sum, don) {
+        return sum + Number(don.remainingDebt || 0);
+      }, 0);
+      include = d.status !== "לא פעיל" && donorTotalDebt > 0 &&
+        !isNaN(maxDebtCap) && donorTotalDebt <= maxDebtCap;
     } else if (filter.startsWith("city:")) {
       include = (d.city || "").trim() === filter.slice(5).trim();
     } else if (filter.startsWith("tag:")) {
@@ -1827,13 +1848,14 @@ function buildPhoneList(recipientFilter, opts) {
       for (var j = 0; j < approved.length; j++) {
         var p = normalizePhone(approved[j]);
         if (!p) continue;
+        if (strictPhoneMode && !ISRAELI_PHONE_RE.test(p)) continue;
         donorPhones.push(p);
         if (ivrPhones.indexOf(p) === -1 && fallbackPhones.indexOf(p) === -1) ivrPhones.push(p);
       }
     } else {
       // fallbackToPrimary guaranteed true here
       fallbackDonorCount++;
-      if (primary) {
+      if (primary && !(strictPhoneMode && !ISRAELI_PHONE_RE.test(primary))) {
         donorPhones.push(primary);
         if (ivrPhones.indexOf(primary) === -1 && fallbackPhones.indexOf(primary) === -1) fallbackPhones.push(primary);
       }

@@ -210,7 +210,14 @@ function getAudienceFilter() {
     return selectedListIds.length > 0 ? "ids:" + selectedListIds.join(",") : null;
   }
   if (val === "manual") return "manual";
-  return val; // "debt" | "all"
+  if (val === "debt") {
+    var maxDebtEl  = document.getElementById("maxDebtInput");
+    var maxDebtVal = maxDebtEl ? String(maxDebtEl.value || "").trim() : "";
+    // Empty box = legacy uncapped behavior ("debt"); a number caps it
+    // ("debt:200") — see buildPhoneList()'s isBoundedDebtFilter in server.js.
+    return maxDebtVal ? "debt:" + maxDebtVal : "debt";
+  }
+  return val; // "all"
 }
 
 async function refreshCount() {
@@ -263,6 +270,8 @@ var tagSel  = document.getElementById("tagSelect");
 var citySel = document.getElementById("citySelect");
 if (tagSel)  tagSel.addEventListener("change",  refreshCount);
 if (citySel) citySel.addEventListener("change", refreshCount);
+var maxDebtEl = document.getElementById("maxDebtInput");
+if (maxDebtEl) maxDebtEl.addEventListener("input", refreshCount);
 
 // ── Donor search autocomplete ─────────────────────────────────────────────────
 
@@ -380,6 +389,12 @@ function updateSendButton(count) {
       label = n + " מספרים";
     }
     countEl.textContent = label;
+    // The label above is human-readable text, not a bare number (e.g. "12
+    // מספרים (9 תורמים)") — the send-button click handler must NOT re-parse
+    // it with Number(textContent), which silently yields NaN -> 0 and was
+    // the exact cause of "אין מספרים תואמים לשליחה" firing even when this
+    // count was positive. Keep the real number in a data attribute instead.
+    countEl.setAttribute("data-count", String(n));
   }
 }
 
@@ -446,8 +461,12 @@ document.getElementById("sendButton").addEventListener("click", async function (
   }
 
   // ── Normal audience mode ──────────────────────────────────────────────────
-  var filter = getAudienceFilter();
-  var count  = Number((document.getElementById("sendCount") || {}).textContent) || 0;
+  var filter  = getAudienceFilter();
+  var countEl = document.getElementById("sendCount");
+  // Read the real number from data-count, NOT textContent — that element's
+  // text is a human-readable label like "12 מספרים (9 תורמים)", and
+  // Number() on that yields NaN -> 0 every time (see updateSendButton()).
+  var count = countEl ? (Number(countEl.getAttribute("data-count")) || 0) : 0;
   if (!filter || count === 0) {
     showStatus("אין מספרים תואמים לשליחה", "error");
     return;
@@ -509,7 +528,11 @@ document.getElementById("sendButton").addEventListener("click", async function (
 
 function getAudienceLabel() {
   var val = (document.querySelector("input[name=audience]:checked") || {}).value || "";
-  if (val === "debt")   return "בעלי חוב";
+  if (val === "debt") {
+    var maxDebtEl  = document.getElementById("maxDebtInput");
+    var maxDebtVal = maxDebtEl ? String(maxDebtEl.value || "").trim() : "";
+    return maxDebtVal ? "בעלי חוב עד ₪" + maxDebtVal : "בעלי חוב";
+  }
   if (val === "tag")    return "תגית: " + ((document.getElementById("tagSelect")  || {}).value || "");
   if (val === "city")   return "עיר: "  + ((document.getElementById("citySelect") || {}).value || "");
   if (val === "donor" && selectedDonorName) return selectedDonorName;
