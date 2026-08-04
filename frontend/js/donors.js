@@ -84,14 +84,26 @@ async function addDonor() {
     return;
   }
 
-  const normPhone = normalizePhoneLocal(phone);
-  const phoneExists = donors.some(function (donor) {
-    return normalizePhoneLocal(donor.phone) === normPhone;
+  // Checked across every phone field of every existing donor (not just
+  // their primary phone) — consistent with Excel-import matching
+  // (donorAllPhones() below) and with how the rest of the app already
+  // treats phone2/3/4/ivrApprovedPhones as valid identifying numbers.
+  // Warns rather than blocks: two people can legitimately share one phone
+  // (e.g. family members), which a hard block couldn't distinguish from an
+  // actual data-entry mistake — the admin sees exactly who else has this
+  // number and decides.
+  const normalizedNewPhone = normalizePhoneLocal(phone);
+  const matchingExistingDonors = donors.filter(function (donor) {
+    return donorAllPhones(donor).indexOf(normalizedNewPhone) !== -1;
   });
 
-  if (phoneExists) {
-    showMessage("תורם עם מספר טלפון זה כבר קיים", "error");
-    return;
+  if (matchingExistingDonors.length > 0) {
+    var existingNames = matchingExistingDonors.map(function (d) { return d.fullName || "(ללא שם)"; }).join(", ");
+    var proceedAdd = confirm(
+      "⚠️ מספר הטלפון " + phone + " כבר קיים אצל: " + existingNames +
+      "\n\nלשמור בכל זאת תורם חדש עם אותו מספר?"
+    );
+    if (!proceedAdd) return;
   }
 
   const newDonor = {

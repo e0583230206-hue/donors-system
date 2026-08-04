@@ -616,6 +616,16 @@ function closeEditDonorForm() {
   editDonorMessage.className = "message";
 }
 
+// Mirrors donorAllPhones() in donors.js (Excel-import matching) — same
+// field set, so "does this phone already belong to someone" means the same
+// thing everywhere in the app, not just on the primary phone field.
+function _donorAllPhones(d) {
+  var fields = [d.phone, d.phone2, d.phone3, d.phone4]
+    .concat(Array.isArray(d.phones) ? d.phones : [])
+    .concat(Array.isArray(d.ivrApprovedPhones) ? d.ivrApprovedPhones : []);
+  return fields.map(normalizePhoneLocal).filter(Boolean);
+}
+
 async function saveDonorEdit() {
   const fullName = editFullNameInput.value.trim();
   const phone = editPhoneInput.value.trim();
@@ -634,13 +644,27 @@ async function saveDonorEdit() {
     return;
   }
 
-  const phoneExists = donors.some(function (item) {
-    return item.id !== donor.id && normalizePhoneLocal(item.phone) === normalizePhoneLocal(phone);
+  // Checked across every phone field of every OTHER donor (not just their
+  // primary phone) — consistent with how the Excel-import matching already
+  // works (donorAllPhones() in donors.js) and with how the app itself
+  // treats phone2/3/4/ivrApprovedPhones as valid identifying numbers
+  // elsewhere (IVR caller-ID lookup, click2call). This warns rather than
+  // blocks: a phone genuinely shared between two real people (e.g. family
+  // members) is a legitimate case the previous hard block couldn't
+  // distinguish from an actual data-entry mistake — the admin sees exactly
+  // who else has this number and makes the call themselves.
+  const normalizedEditPhone = normalizePhoneLocal(phone);
+  const matchingOtherDonors = donors.filter(function (item) {
+    return item.id !== donor.id && _donorAllPhones(item).indexOf(normalizedEditPhone) !== -1;
   });
 
-  if (phoneExists) {
-    showMessage(editDonorMessage, "קיים תורם אחר עם מספר טלפון זה", "error");
-    return;
+  if (matchingOtherDonors.length > 0) {
+    var matchNames = matchingOtherDonors.map(function (d) { return d.fullName || "(ללא שם)"; }).join(", ");
+    var proceedEdit = confirm(
+      "⚠️ מספר הטלפון " + phone + " כבר קיים אצל: " + matchNames +
+      "\n\nלשמור בכל זאת?"
+    );
+    if (!proceedEdit) return;
   }
 
   const previousDonor = {
