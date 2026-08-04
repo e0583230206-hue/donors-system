@@ -111,27 +111,31 @@ const Database = {
     return [];
   },
 
+  // Returns a Promise that resolves once the server has actually confirmed
+  // the write (or rejects with a typed error — .type is "conflict",
+  // "server", or "network" — if it didn't take effect). The local
+  // cache/IndexedDB write still happens synchronously/optimistically before
+  // that promise settles, same as before; only the "did it really save"
+  // signal changed from nothing to something callers can act on.
   save: function (key, data) {
     if (key === "donors") {
       if (_CrmIDB.isUsingIDB()) {
         _CrmIDB.saveDonors(data);
-        this._pushToServer(key, data);
-        return;
+        return this._pushToServer(key, data);
       }
       if (this.mode === "local") {
         try {
           localStorage.setItem(key, JSON.stringify(data));
-          this._pushToServer(key, data);
+          return this._pushToServer(key, data);
         } catch (e) {
           if (e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014) {
             _CrmIDB.migrate(data);
-            this._pushToServer(key, data);
-            return;
+            return this._pushToServer(key, data);
           }
           throw e;
         }
       }
-      return;
+      return Promise.resolve();
     }
 
     if (this.mode === "local") {
@@ -172,11 +176,11 @@ const Database = {
         }
       }
 
-      this._pushToServer(key, data);
-      return;
+      return this._pushToServer(key, data);
     }
 
     console.warn("מצב שרת עדיין לא מחובר: save", key, data);
+    return Promise.resolve();
   },
 
   remove: function (key) {
@@ -231,11 +235,15 @@ const Database = {
     return localStorage.getItem("authToken") || "";
   },
 
-  // Fire-and-forget push to server (non-blocking)
+  // Push to server. Returns a Promise: resolves once the server has
+  // confirmed the write; rejects with a typed Error (err.type is
+  // "conflict", "server", or "network") if it did not take effect, so
+  // callers can tell the difference between "saved" and "looked like it
+  // saved but didn't" instead of only ever seeing a console warning.
   _pushToServer: function (key, data) {
-    if (this._serverKeys.indexOf(key) === -1) return;
+    if (this._serverKeys.indexOf(key) === -1) return Promise.resolve();
     var token = this._getToken();
-    if (!token) return;
+    if (!token) return Promise.resolve();
     var self = this;
 
     var pushHeaders = {
@@ -246,7 +254,7 @@ const Database = {
       pushHeaders["X-Expected-Updated-At"] = self._lastKnownUpdatedAt[key];
     }
 
-    fetch("/api/data/" + key, {
+    return fetch("/api/data/" + key, {
       method:  "POST",
       headers: pushHeaders,
       body: JSON.stringify(data),
@@ -254,36 +262,58 @@ const Database = {
       if (res.status === 409) {
         // Someone else saved this key first — our copy was rejected rather
         // than silently overwriting theirs. Refresh so the next push (and
-        // _lastKnownUpdatedAt) is based on the current server version.
+        // _lastKnownUpdatedAt) is based on the current server version, then
+        // tell the caller this save did NOT take effect.
         console.warn("[DB] Server rejected stale save for key '" + key + "' (409) — refreshing local copy.");
-        self.refreshFromServer(key);
-        return;
+        return self.refreshFromServer(key).then(function () {
+          var err = new Error("השמירה לא בוצעה — מישהו אחר עדכן את הנתונים בינתיים. הנתונים רועננו בדף, יש לבצע את הפעולה שוב.");
+          err.type = "conflict";
+          throw err;
+        });
+      }
+      if (!res.ok) {
+        var err2 = new Error("השמירה נכשלה בשרת (שגיאה " + res.status + ")");
+        err2.type = "server";
+        throw err2;
       }
       var stamp = res.headers.get("X-Data-Updated-At");
       if (stamp) self._lastKnownUpdatedAt[key] = stamp;
-      if (key !== "donors") return;
-      // Sync all phones to IVR donors table so the phone system can identify by any number
-      var syncList = (Array.isArray(data) ? data : []).map(function (d) {
-        return {
-          phone:             d.phone,
-          phone2:            d.phone2            || "",
-          phone3:            d.phone3            || "",
-          phone4:            d.phone4            || "",
-          ivrApprovedPhones: d.ivrApprovedPhones || [],
-          fullName:          d.fullName,
-        };
-      }).filter(function (d) { return d.phone && d.fullName; });
-      if (syncList.length === 0) return;
-      return fetch("/api/donors/sync", {
-        method:  "POST",
-        headers: {
-          "Content-Type":  "application/json",
-          "Authorization": "Bearer " + token,
-        },
-        body: JSON.stringify(syncList),
-      });
+      if (key === "donors") {
+        // Best-effort secondary sync to the IVR phone-lookup table. This is
+        // deliberately fire-and-forget and never allowed to turn a
+        // successful primary save into an apparent failure for the caller.
+        var syncList = (Array.isArray(data) ? data : []).map(function (d) {
+          return {
+            phone:             d.phone,
+            phone2:            d.phone2            || "",
+            phone3:            d.phone3            || "",
+            phone4:            d.phone4            || "",
+            ivrApprovedPhones: d.ivrApprovedPhones || [],
+            fullName:          d.fullName,
+          };
+        }).filter(function (d) { return d.phone && d.fullName; });
+        if (syncList.length > 0) {
+          fetch("/api/donors/sync", {
+            method:  "POST",
+            headers: {
+              "Content-Type":  "application/json",
+              "Authorization": "Bearer " + token,
+            },
+            body: JSON.stringify(syncList),
+          }).catch(function (err) {
+            console.warn("[DB] IVR phone-lookup sync failed for 'donors':", err.message);
+          });
+        }
+      }
     }).catch(function (err) {
+      if (err && (err.type === "conflict" || err.type === "server")) {
+        throw err; // already logged/typed above — propagate to caller
+      }
+      // Raw network failure (fetch itself rejected — offline, DNS, etc.)
       console.warn("[DB] Server sync failed for key '" + key + "':", err.message);
+      var netErr = new Error("השמירה נכשלה — בעיית תקשורת עם השרת");
+      netErr.type = "network";
+      throw netErr;
     });
   },
 

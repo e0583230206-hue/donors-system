@@ -47,8 +47,9 @@ function updateNamesList() {
 }
 
 function saveDonors() {
-  Database.save("donors", donors);
+  var pushPromise = Database.save("donors", donors);
   updateNamesList();
+  return pushPromise;
 }
 
 // showMessage, normalizePhoneLocal are defined in utils.js (shared — see #28)
@@ -66,7 +67,7 @@ function getCurrentHebrewYear() {
   return new Date().toLocaleDateString("he-IL-u-ca-hebrew", { year: "numeric" });
 }
 
-function addDonor() {
+async function addDonor() {
   const fullName = nameInput.value.trim();
   const phone = phoneInput.value.trim();
   const city = cityInput.value.trim();
@@ -112,7 +113,13 @@ function addDonor() {
   };
 
   donors.push(newDonor);
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donors.pop();
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
 
   nameInput.value = "";
   phoneInput.value = "";
@@ -333,13 +340,20 @@ if (bulkSendCampaignBtn) {
   });
 }
 
-function deleteDonor(id) {
+async function deleteDonor(id) {
   const deletedDonor = donors.find(function (donor) { return donor.id === id; });
   if (!deletedDonor || pendingDonorDeletions[id]) return;
 
   // Remove immediately from array and save to server/localStorage right away
+  const previousDonors = donors;
   donors = donors.filter(function (donor) { return donor.id !== id; });
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donors = previousDonors;
+    showMessage(err.message || "מחיקת התורם נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "delete",
     entityType: "donor",
@@ -351,12 +365,18 @@ function deleteDonor(id) {
 
   if (typeof showToast === "function") {
     // Undo restores the donor back (client-side only, re-saves to server)
-    showToast('תורם "' + deletedDonor.fullName + '" נמחק', function () {
+    showToast('תורם "' + deletedDonor.fullName + '" נמחק', async function () {
       donors.push(deletedDonor);
       donors.sort(function (a, b) {
         return (a.fullName || "").localeCompare(b.fullName || "", "he");
       });
-      saveDonors();
+      try {
+        await saveDonors();
+      } catch (err) {
+        donors = donors.filter(function (donor) { return donor.id !== id; });
+        showMessage(err.message || "שחזור התורם נכשל, נסה שוב", "error");
+        return;
+      }
       renderDonors();
     }, 5000);
   } else {
@@ -715,9 +735,10 @@ function buildExcelPreview(rows, existingDonors) {
   return { toCreate: toCreate, toUpdate: toUpdateOrder, toSkip: toSkip };
 }
 
-function applyExcelImport(preview) {
+async function applyExcelImport(preview) {
+  var preImportDonorsJson = JSON.stringify(donors);
   try {
-    localStorage.setItem("importUndo",     JSON.stringify(donors));
+    localStorage.setItem("importUndo",     preImportDonorsJson);
     localStorage.setItem("importUndoDate", new Date().toLocaleString("he-IL"));
     var undoBtn = document.getElementById("undoImportButton");
     if (undoBtn) undoBtn.style.display = "";
@@ -782,7 +803,14 @@ function applyExcelImport(preview) {
     donorsUpdated++;
   });
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    try { donors = JSON.parse(preImportDonorsJson); } catch (_) {}
+    showMessage((err.message || "השמירה נכשלה") + " — הייבוא לא הושלם, נסה שוב", "error");
+    renderDonors();
+    return;
+  }
   addLog("יבוא מאקסל: " + donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות, " + preview.toSkip.length + " דולגו");
   AuditLog.record({ action: "import", entityType: "donor", entityId: "", entityName: "ייבוא מאקסל", details: donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות" });
   showMessage("✅ יבוא הושלם: " + donorsCreated + " תורמים חדשים | " + donorsUpdated + " קיימים עודכנו | " + donationsAdded + " תרומות נוספו" + (preview.toSkip.length > 0 ? " | " + preview.toSkip.length + " שורות דולגו" : ""));
@@ -964,22 +992,27 @@ function handleFileUpload(event) {
   if (!undoBtn) return;
   if (localStorage.getItem("importUndo")) undoBtn.style.display = "";
 
-  undoBtn.addEventListener("click", function () {
+  undoBtn.addEventListener("click", async function () {
     var snapshot = localStorage.getItem("importUndo");
     var dateStr  = localStorage.getItem("importUndoDate") || "";
     if (!snapshot) { showMessage("אין ייבוא לביטול", "error"); return; }
     if (!confirm("לבטל את הייבוא האחרון" + (dateStr ? " מב-" + dateStr : "") + "?")) return;
+    var beforeUndoJson = JSON.stringify(donors);
     try {
       var prev = JSON.parse(snapshot);
       donors.splice(0, donors.length);
       prev.forEach(function (d) { donors.push(d); });
-      saveDonors();
+      await saveDonors();
       localStorage.removeItem("importUndo");
       localStorage.removeItem("importUndoDate");
       undoBtn.style.display = "none";
       showMessage("✅ הייבוא בוטל — הנתונים שוחזרו");
       renderDonors();
-    } catch (_) { showMessage("שגיאה בשחזור", "error"); }
+    } catch (err) {
+      try { donors = JSON.parse(beforeUndoJson); } catch (_) {}
+      showMessage((err && err.message) || "שגיאה בשחזור", "error");
+      renderDonors();
+    }
   });
 }());
 

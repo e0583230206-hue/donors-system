@@ -21,19 +21,23 @@ var reminderPage = 0;
 var REMINDER_PAGE_SIZE = 25;
 
 function saveDonors() {
-  Database.save("donors", donors);
+  return Database.save("donors", donors);
 }
 
 // showMessage, getTodayString, fillDonorSelect are defined in utils.js (shared — see #28)
 
-function ensureReminderArrays() {
+async function ensureReminderArrays() {
   donors.forEach(function (donor) {
     if (!donor.reminders) {
       donor.reminders = [];
     }
   });
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    console.warn("[reminders] ensureReminderArrays save failed:", err.message);
+  }
 }
 
 function getAllReminders() {
@@ -76,7 +80,7 @@ function getPriorityClass(priority) {
   return "green-text";
 }
 
-function addReminder() {
+async function addReminder() {
   const donorId = Number(donorSelect.value);
   const date = dateInput.value;
   const time = timeInput.value;
@@ -116,7 +120,13 @@ function addReminder() {
 
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.reminders.pop();
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "create",
     entityType: "reminder",
@@ -135,7 +145,7 @@ function addReminder() {
   renderReminders();
 }
 
-function markReminderDone(donorId, reminderId) {
+async function markReminderDone(donorId, reminderId) {
   const donor = donors.find(function (item) {
     return item.id === donorId;
   });
@@ -148,11 +158,18 @@ function markReminderDone(donorId, reminderId) {
 
   if (!reminder) return;
 
+  const previous = { done: reminder.done, doneAt: reminder.doneAt };
   reminder.done = true;
   reminder.doneAt = new Date().toLocaleString("he-IL");
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    Object.assign(reminder, previous);
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "complete",
     entityType: "reminder",
@@ -163,7 +180,7 @@ function markReminderDone(donorId, reminderId) {
   renderReminders();
 }
 
-function deleteReminder(donorId, reminderId) {
+async function deleteReminder(donorId, reminderId) {
   const donor = donors.find(function (item) { return item.id === donorId; });
   if (!donor || !donor.reminders) return;
 
@@ -172,7 +189,13 @@ function deleteReminder(donorId, reminderId) {
 
   donor.reminders = donor.reminders.filter(function (item) { return item.id !== reminderId; });
   donor.updatedAt = new Date().toISOString();
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.reminders.push(deletedReminder);
+    showMessage(err.message || "מחיקת התזכורת נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "delete",
     entityType: "reminder",
@@ -183,10 +206,16 @@ function deleteReminder(donorId, reminderId) {
   renderReminders();
 
   if (typeof showToast === "function") {
-    showToast("תזכורת נמחקה", function () {
+    showToast("תזכורת נמחקה", async function () {
       donor.reminders.push(deletedReminder);
       donor.updatedAt = new Date().toISOString();
-      saveDonors();
+      try {
+        await saveDonors();
+      } catch (err) {
+        donor.reminders = donor.reminders.filter(function (item) { return item.id !== reminderId; });
+        showMessage(err.message || "שחזור התזכורת נכשל, נסה שוב", "error");
+        return;
+      }
       renderReminders();
     }, 5000);
   } else {

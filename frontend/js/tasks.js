@@ -24,7 +24,7 @@ var taskPage = 0;
 var TASK_PAGE_SIZE = 25;
 
 function saveTasks() {
-  Database.save("tasks", tasks);
+  return Database.save("tasks", tasks);
 }
 
 // showMessage, formatDateTime, fillWorkerSelect, downloadXLSX are defined in
@@ -62,7 +62,7 @@ function getPriorityClass(priority) {
   return "green-text";
 }
 
-function addTask() {
+async function addTask() {
   const title = titleInput.value.trim();
   const workerName = workerSelect.value;
   const donorId = donorSelect.value;
@@ -92,7 +92,13 @@ function addTask() {
 
   tasks.push(newTask);
 
-  saveTasks();
+  try {
+    await saveTasks();
+  } catch (err) {
+    tasks.pop();
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "create",
     entityType: "task",
@@ -113,17 +119,24 @@ function addTask() {
   renderTasks();
 }
 
-function setTaskInProgress(id) {
+async function setTaskInProgress(id) {
   const task = tasks.find(function (item) {
     return item.id === id;
   });
 
   if (!task) return;
 
+  const previous = { status: task.status, updatedAt: task.updatedAt };
   task.status = "בטיפול";
   task.updatedAt = new Date().toISOString();
 
-  saveTasks();
+  try {
+    await saveTasks();
+  } catch (err) {
+    Object.assign(task, previous);
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "status",
     entityType: "task",
@@ -134,18 +147,25 @@ function setTaskInProgress(id) {
   renderTasks();
 }
 
-function markTaskDone(id) {
+async function markTaskDone(id) {
   const task = tasks.find(function (item) {
     return item.id === id;
   });
 
   if (!task) return;
 
+  const previous = { status: task.status, done: task.done, doneAt: task.doneAt };
   task.status = "הושלם";
   task.done = true;
   task.doneAt = new Date().toISOString();
 
-  saveTasks();
+  try {
+    await saveTasks();
+  } catch (err) {
+    Object.assign(task, previous);
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "complete",
     entityType: "task",
@@ -156,12 +176,18 @@ function markTaskDone(id) {
   renderTasks();
 }
 
-function deleteTask(id) {
+async function deleteTask(id) {
   const deletedTask = tasks.find(function (task) { return task.id === id; });
   if (!deletedTask || pendingTaskDeletions[id]) return;
 
   tasks = tasks.filter(function (task) { return task.id !== id; });
-  saveTasks();
+  try {
+    await saveTasks();
+  } catch (err) {
+    tasks.push(deletedTask);
+    showMessage(err.message || "מחיקת המשימה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "delete",
     entityType: "task",
@@ -172,10 +198,16 @@ function deleteTask(id) {
   renderTasks();
 
   if (typeof showToast === "function") {
-    showToast('משימה "' + deletedTask.title + '" נמחקה', function () {
+    showToast('משימה "' + deletedTask.title + '" נמחקה', async function () {
       tasks.push(deletedTask);
       tasks.sort(function (a, b) { return (a.dueDate || "9999").localeCompare(b.dueDate || "9999"); });
-      saveTasks();
+      try {
+        await saveTasks();
+      } catch (err) {
+        tasks = tasks.filter(function (t) { return t.id !== id; });
+        showMessage(err.message || "שחזור המשימה נכשל, נסה שוב", "error");
+        return;
+      }
       renderTasks();
     }, 5000);
   } else {

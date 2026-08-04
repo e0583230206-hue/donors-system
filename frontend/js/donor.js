@@ -83,7 +83,7 @@ let editingDonationId = null;
 
 
 function saveDonors() {
-  Database.save("donors", donors);
+  return Database.save("donors", donors);
 }
 
 // Keeps existing approval drafts (approvals.html) in sync when a donation's
@@ -616,7 +616,7 @@ function closeEditDonorForm() {
   editDonorMessage.className = "message";
 }
 
-function saveDonorEdit() {
+async function saveDonorEdit() {
   const fullName = editFullNameInput.value.trim();
   const phone = editPhoneInput.value.trim();
   const city = editCityInput.value.trim();
@@ -660,7 +660,12 @@ function saveDonorEdit() {
   donor.notes = notes;
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    showMessage(editDonorMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "update",
     entityType: "donor",
@@ -1073,7 +1078,12 @@ async function saveDonationEdit() {
     donation.updatedAt = new Date().toISOString();
     donor.updatedAt = new Date().toISOString();
 
-    saveDonors();
+    try {
+      await saveDonors();
+    } catch (err) {
+      showMessage(donationMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+      return;
+    }
     reconcileApprovalDrafts([donation]);
 
     var details = statusChangedToPaid
@@ -1117,19 +1127,31 @@ function renderTags() {
   }).join("");
 }
 
-function addTag(tag) {
+async function addTag(tag) {
   tag = (tag || "").trim();
   if (!tag) return;
   if (donor.tags.indexOf(tag) !== -1) return;
   donor.tags.push(tag);
-  saveDonors();
   renderTags();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.tags.pop();
+    renderTags();
+    showToast(err.message || "השמירה נכשלה, נסה שוב");
+  }
 }
 
-window.removeTag = function removeTag(index) {
-  donor.tags.splice(index, 1);
-  saveDonors();
+window.removeTag = async function removeTag(index) {
+  var removed = donor.tags.splice(index, 1)[0];
   renderTags();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.tags.splice(index, 0, removed);
+    renderTags();
+    showToast(err.message || "השמירה נכשלה, נסה שוב");
+  }
 };
 
 var tagInput = document.getElementById("tagInput");
@@ -1299,12 +1321,17 @@ function renderAll() {
   renderTimeline();
 }
 
-function saveNotes() {
+async function saveNotes() {
   donor.internalStaffNote = internalStaffNote.value.trim();
   donor.publicPhoneNote = publicPhoneNote.value.trim();
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    showMessage(notesMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "update",
     entityType: "donor",
@@ -1316,7 +1343,7 @@ function saveNotes() {
   showMessage(notesMessage, "ההערות נשמרו בהצלחה");
 }
 
-function addDonation() {
+async function addDonation() {
   const amount = Number(amountInput.value);
   const gilayon = gilayonInput ? gilayonInput.value.trim() : "";
   const manualParsha = parshaInput ? parshaInput.value.trim() : "";
@@ -1374,7 +1401,13 @@ function addDonation() {
   donor.donations.push(newDonation);
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.donations.pop();
+    showMessage(donationMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   reconcileApprovalDrafts([newDonation]);
   AuditLog.record({
     action: "create",
@@ -1400,7 +1433,8 @@ function addDonation() {
   renderAll();
 }
 
-function saveIvrSettings() {
+async function saveIvrSettings() {
+  var previousSettings = donor.phoneMessageSettings;
   donor.phoneMessageSettings = {
     includeInCalls: includeInCallsCheckbox.checked,
     allowPayment: allowPaymentCheckbox.checked,
@@ -1410,7 +1444,13 @@ function saveIvrSettings() {
 
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.phoneMessageSettings = previousSettings;
+    showToast(err.message || "השמירה נכשלה, נסה שוב");
+    return;
+  }
   AuditLog.record({
     action: "update",
     entityType: "donor",
@@ -1421,7 +1461,7 @@ function saveIvrSettings() {
   renderAll();
 }
 
-function registerPartialPayment() {
+async function registerPartialPayment() {
   const amount = Number(partialAmountInput.value);
 
   if (!amount || amount <= 0) {
@@ -1445,9 +1485,19 @@ function registerPartialPayment() {
   }
 
   const affectedDebts = [];
+  const priorState = [];
 
   openDebts.forEach(function (debt) {
     if (remainingPayment <= 0) return;
+
+    priorState.push({
+      debt: debt,
+      paidPartial: debt.paidPartial,
+      remainingDebt: debt.remainingDebt,
+      paid: debt.paid,
+      lastPaymentMethod: debt.lastPaymentMethod,
+      updatedAt: debt.updatedAt,
+    });
 
     const debtAmount = Number(debt.remainingDebt);
 
@@ -1470,7 +1520,19 @@ function registerPartialPayment() {
 
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    priorState.forEach(function (p) {
+      p.debt.paidPartial = p.paidPartial;
+      p.debt.remainingDebt = p.remainingDebt;
+      p.debt.paid = p.paid;
+      p.debt.lastPaymentMethod = p.lastPaymentMethod;
+      p.debt.updatedAt = p.updatedAt;
+    });
+    showMessage(partialMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   reconcileApprovalDrafts(affectedDebts);
   AuditLog.record({
     action: "payment",
