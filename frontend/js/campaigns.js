@@ -210,12 +210,18 @@ function getAudienceFilter() {
     return selectedListIds.length > 0 ? "ids:" + selectedListIds.join(",") : null;
   }
   if (val === "manual") return "manual";
+  if (val === "debt_unbounded") return "debt"; // legacy uncapped filter — only reachable via this explicit, separate choice
   if (val === "debt") {
     var maxDebtEl  = document.getElementById("maxDebtInput");
     var maxDebtVal = maxDebtEl ? String(maxDebtEl.value || "").trim() : "";
-    // Empty box = legacy uncapped behavior ("debt"); a number caps it
-    // ("debt:200") — see buildPhoneList()'s isBoundedDebtFilter in server.js.
-    return maxDebtVal ? "debt:" + maxDebtVal : "debt";
+    var maxDebtNum = Number(maxDebtVal);
+    // An empty/invalid cap must never silently fall back to the unbounded
+    // filter — default to 200 instead (see buildPhoneList()'s
+    // isBoundedDebtFilter in server.js for the bounded-filter logic itself,
+    // which is unaffected by this — it already enforces debt>0 && debt<=cap
+    // correctly; this only decides what cap gets sent).
+    if (!maxDebtVal || !isFinite(maxDebtNum) || maxDebtNum <= 0) return "debt:200";
+    return "debt:" + maxDebtVal;
   }
   return val; // "all"
 }
@@ -249,10 +255,11 @@ async function refreshCount() {
   updateSendButton(count);
 
   // Update per-row badge for sub-selectors
-  if (audVal === "tag")      updateBadge("badgeTag",      count);
-  if (audVal === "city")     updateBadge("badgeCity",     count);
-  if (audVal === "donor")    updateBadge("badgeDonor",    count);
-  if (audVal === "selected") updateBadge("badgeSelected", count);
+  if (audVal === "tag")            updateBadge("badgeTag",            count);
+  if (audVal === "city")           updateBadge("badgeCity",           count);
+  if (audVal === "donor")          updateBadge("badgeDonor",          count);
+  if (audVal === "selected")       updateBadge("badgeSelected",       count);
+  if (audVal === "debt_unbounded") updateBadge("badgeDebtUnbounded",  count);
 }
 
 function updateBadge(id, count) {
@@ -531,8 +538,10 @@ function getAudienceLabel() {
   if (val === "debt") {
     var maxDebtEl  = document.getElementById("maxDebtInput");
     var maxDebtVal = maxDebtEl ? String(maxDebtEl.value || "").trim() : "";
-    return maxDebtVal ? "בעלי חוב עד ₪" + maxDebtVal : "בעלי חוב";
+    var maxDebtNum = Number(maxDebtVal);
+    return "בעלי חוב עד ₪" + ((!maxDebtVal || !isFinite(maxDebtNum) || maxDebtNum <= 0) ? "200" : maxDebtVal);
   }
+  if (val === "debt_unbounded") return "כל בעלי החוב (ללא הגבלה)";
   if (val === "tag")    return "תגית: " + ((document.getElementById("tagSelect")  || {}).value || "");
   if (val === "city")   return "עיר: "  + ((document.getElementById("citySelect") || {}).value || "");
   if (val === "donor" && selectedDonorName) return selectedDonorName;
