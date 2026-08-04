@@ -3467,9 +3467,12 @@ app.post(
       }
       const srcPath = path.join(BACKUP_DIR, filename);
       if (!fs.existsSync(srcPath)) return res.status(404).json({ error: "גיבוי לא נמצא" });
-      const restored = restoreFromBackup(srcPath);
-      insertAuditLog({ action: "BACKUP_RESTORED", entityType: "system", entityId: "", entityName: filename, details: restored + " keys restored", workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip });
-      res.json({ ok: true, restored: restored });
+      const restoredCounts = restoreFromBackup(srcPath);
+      const tableSummary = Object.keys(restoredCounts)
+        .map(function (t) { return t + "=" + restoredCounts[t]; })
+        .join(", ");
+      insertAuditLog({ action: "BACKUP_RESTORED", entityType: "system", entityId: "", entityName: filename, details: "כל הטבלאות שוחזרו: " + tableSummary, workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip });
+      res.json({ ok: true, restored: restoredCounts });
     } catch (err) { next(err); }
   }
 );

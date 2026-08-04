@@ -1501,23 +1501,82 @@ function backupDatabase(destPath) {
   db.exec("VACUUM INTO '" + resolved.replace(/'/g, "''") + "'");
 }
 
-// Opens srcPath as a read-only SQLite DB and copies every app_state row into
-// the live DB.  Only allowed keys are imported.
+// Opens srcPath as a read-only SQLite DB and replaces every real table's
+// contents in the live DB with the backup's — not just app_state (which is
+// what this restored until now: only 9 of the ~17 real tables, silently
+// leaving workers/payments/ivr_call_logs/server_audit_log/worker_sessions/
+// etc. completely untouched on "restore", giving false confidence in
+// disaster recovery).
+//
+// Table set is the intersection of both databases' own sqlite_master
+// (deliberately excludes sqlite's internal sqlite_% tables and any one-off
+// migration snapshot table matching "*_backup_*", e.g. the timestamped
+// table ensureIvrAudioRecordingsUpToDate() creates before a schema change —
+// those are point-in-time artifacts, not part of the regular restore set).
+// Column set per table is the intersection of both schemas' own columns, so
+// a backup taken before/after a column was added doesn't hard-fail the
+// whole restore.
+//
+// Foreign keys are temporarily disabled for the duration (SQLite requires
+// this outside of BEGIN/COMMIT, not inside it) because tables are cleared
+// and reloaded one at a time, not in dependency order — safe specifically
+// because the whole operation is one atomic transaction: either every
+// table ends up fully restored and internally consistent together, or
+// nothing changes at all on any error.
+//
+// IMPORTANT: this function does not by itself decide when it's safe to
+// call — see the /api/admin/backups/restore/:filename route in server.js
+// and README_PRODUCTION.md for the required pm2 stop / pre-restore backup
+// steps around it. This function itself has been verified only against a
+// standalone copy of data.sqlite, never against the live production file.
 function restoreFromBackup(srcPath) {
   const { DatabaseSync: DS } = require("node:sqlite");
   const bk = new DS(srcPath, { readOnly: true });
+  var restoredCounts = {};
+  var fkWasOn = true;
   try {
-    const rows = bk.prepare("SELECT key, value FROM app_state").all();
-    let restored = 0;
-    rows.forEach(function (row) {
-      if (!ALLOWED_APP_STATE_KEYS.has(row.key)) return;
-      try {
-        const parsed = JSON.parse(row.value);
-        setAppState(row.key, parsed);
-        restored++;
-      } catch (_) {}
-    });
-    return restored;
+    var TABLE_LIST_SQL =
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%\\_backup\\_%' ESCAPE '\\' ORDER BY name";
+    var liveTables   = db.prepare(TABLE_LIST_SQL).all().map(function (r) { return r.name; });
+    var backupTables = bk.prepare(TABLE_LIST_SQL).all().map(function (r) { return r.name; });
+    var tablesToRestore = liveTables.filter(function (t) { return backupTables.indexOf(t) !== -1; });
+
+    try {
+      var fkRow = db.prepare("PRAGMA foreign_keys").get();
+      fkWasOn = !!(fkRow && Number(fkRow.foreign_keys) === 1);
+    } catch (_) {}
+    if (fkWasOn) db.exec("PRAGMA foreign_keys = OFF");
+
+    db.exec("BEGIN");
+    try {
+      tablesToRestore.forEach(function (table) {
+        var liveCols   = db.prepare('PRAGMA table_info("' + table + '")').all().map(function (c) { return c.name; });
+        var backupCols = bk.prepare('PRAGMA table_info("' + table + '")').all().map(function (c) { return c.name; });
+        var cols = liveCols.filter(function (c) { return backupCols.indexOf(c) !== -1; });
+        if (cols.length === 0) { restoredCounts[table] = 0; return; }
+
+        var colList = cols.map(function (c) { return '"' + c + '"'; }).join(", ");
+        db.prepare('DELETE FROM "' + table + '"').run();
+
+        var rows = bk.prepare("SELECT " + colList + ' FROM "' + table + '"').all();
+        if (rows.length > 0) {
+          var placeholders = cols.map(function () { return "?"; }).join(", ");
+          var insertStmt = db.prepare('INSERT INTO "' + table + '" (' + colList + ") VALUES (" + placeholders + ")");
+          rows.forEach(function (row) {
+            insertStmt.run.apply(insertStmt, cols.map(function (c) { return row[c]; }));
+          });
+        }
+        restoredCounts[table] = rows.length;
+      });
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch (_) {}
+      throw err;
+    } finally {
+      if (fkWasOn) { try { db.exec("PRAGMA foreign_keys = ON"); } catch (_) {} }
+    }
+
+    return restoredCounts;
   } finally {
     try { bk.close(); } catch (_) {}
   }
