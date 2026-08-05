@@ -70,11 +70,38 @@ function sanitizeQuery(q) {
   };
 }
 
-// Redact PII from console logs in production.
-// Set IVR_DEBUG=true in .env to restore full logging without changing NODE_ENV.
-var IVR_DEBUG = process.env.IVR_DEBUG === "true";
-var _isProd   = process.env.NODE_ENV === "production" && !IVR_DEBUG;
-function mask(v) { return _isProd ? "[REDACTED]" : v; }
+// Redact PII (phone/amount/confirmation number/donor name) from console
+// logs — UNCONDITIONALLY, in every environment.
+//
+// This used to be gated behind `NODE_ENV === "production" && !IVR_DEBUG`
+// (an IVR_DEBUG=true escape hatch "to restore full logging without changing
+// NODE_ENV"), which meant PII printed in full in dev/test by default, AND
+// — worse — in production too, the one time IVR_DEBUG got flipped on for a
+// live debugging session. That is exactly the same class of bug
+// server.js's sanitizeIvrQueryForLog() comment already documents having
+// fixed for the main /ivr query-string log line ("previously skipped
+// whenever NODE_ENV wasn't exactly 'production' or IVR_DEBUG=true was set,
+// which is exactly the situation a live debugging session runs under, so
+// the one time this mattered most it didn't apply") — this file's own
+// separate mask() helper (used on the voice-message/payment code paths)
+// still had the same conditional. Fixed the same way: unconditional.
+//
+function mask(v) { return v === undefined || v === null ? v : "[REDACTED]"; }
+
+// callId itself is deliberately NOT run through mask() at its ~10 log call
+// sites — a real Technoline-supplied callId is an opaque identifier (not
+// PII) and needs to stay visible in full for correlating log lines to a
+// specific call/session. The ONE exception: when Technoline doesn't send
+// PBXcallId, handleIvrQuery() falls back to a callId of the literal form
+// "phone-<the raw phone>" (used as the real DB/session correlation key —
+// left completely unchanged, since other code depends on that exact value)
+// — but that raw phone must never reach a log line just because it happens
+// to be embedded in this one fallback id. callIdLogSafe() is a display-only
+// transform used ONLY in console.log/warn/error calls; the real `callId`
+// variable used for DB storage and session lookups is never touched.
+function callIdLogSafe(id) {
+  return (typeof id === "string" && id.indexOf("phone-") === 0) ? "phone-[REDACTED]" : id;
+}
 
 // Console-only variant of sanitizeQuery() — sanitizeQuery() itself still
 // returns real values (used as-is for ivr_call_logs DB storage, where an
@@ -498,7 +525,7 @@ function saveVoiceMessageOnce(callId, phone, donor, q) {
     });
   } catch (err) {
     console.error("[IVR] Failed to save voice message record — call flow unaffected:", err.message,
-                  "| callId:", mask(callId));
+                  "| callId:", callIdLogSafe(callId));
   }
 }
 
@@ -512,13 +539,13 @@ function handleIvrQuery(query) {
     // callId embeds the raw phone in this fallback branch — mask it in the
     // log the same way every other phone/amount value in this file is
     // masked (see mask() above), this line was just missed previously.
-    console.warn("[IVR] PBXcallId missing — using phone-based fallback callId", { callId: mask(callId) });
+    console.warn("[IVR] PBXcallId missing — using phone-based fallback callId", { callId: callIdLogSafe(callId) });
   }
   var phone  = normalizePhone(q.PBXphone);
   var step   = detectIvrStep(q);
 
   console.log("[IVR] step:", step,
-              "| callId:", mask(callId),
+              "| callId:", callIdLogSafe(callId),
               "| phone:", mask(phone),
               "| params:", Object.keys(q).join(","),
               "| payment raw:", q.payment !== undefined ? JSON.stringify(q.payment) : "absent",
@@ -634,7 +661,7 @@ function handleIvrQuery(query) {
       var alreadySaved = findPaymentByCallId(callId) || findIvrDonationByCallId(callId);
       if (alreadySaved) {
         console.log("[IVR] payment=OK is a duplicate resend of an already-saved payment (caught before amount resolution) — skipping.",
-                    "| callId:", mask(callId), "| donorId:", donor ? donor.id : null, "| amount:", mask(alreadySaved.amount));
+                    "| callId:", callIdLogSafe(callId), "| donorId:", donor ? donor.id : null, "| amount:", mask(alreadySaved.amount));
         safeInsertCallLog(callId, phone, "payment_duplicate_ignored", {
           donorId:            donor ? donor.id   : null,
           donorName:          donor ? donor.fullName : null,
@@ -653,7 +680,7 @@ function handleIvrQuery(query) {
                 "| paymentArr:", JSON.stringify(paymentArr),
                 "| resolved paymentStatus:", paymentStatus,
                 "| resolved amount:", mask(amount),
-                "| callId:", mask(callId), "| phone:", mask(phone));
+                "| callId:", callIdLogSafe(callId), "| phone:", mask(phone));
     console.log("[IVR] payment context | payChoice:", lastParam(q, "payChoice"),
                 "| debtChoice:", lastParam(q, "debtChoice"),
                 "| amount param:", mask(lastParam(q, "amount")),
@@ -720,7 +747,7 @@ function handleIvrQuery(query) {
       // ── Save payment record ──────────────────────────────────────────────────
       var saveResult = { duplicate: false };
       try {
-        console.log("[IVR] calling saveIvrPaymentOnce | callId:", mask(callId),
+        console.log("[IVR] calling saveIvrPaymentOnce | callId:", callIdLogSafe(callId),
                     "phone:", mask(phone), "amount:", mask(amount), "confirmation:", mask(confirmationNumber));
         saveResult = saveIvrPaymentOnce({
           callId:               callId,
@@ -733,12 +760,12 @@ function handleIvrQuery(query) {
           identificationMethod: identInfo.payerMethod,
           isSelfPayment:        identInfo.isSelfPayment,
         });
-        console.log("[IVR] Payment saved to DB. callId:", mask(callId),
+        console.log("[IVR] Payment saved to DB. callId:", callIdLogSafe(callId),
                     "| amount:", mask(amount), "| confirmation:", mask(confirmationNumber),
                     "| duplicate:", saveResult.duplicate);
       } catch (saveErr) {
         console.error("[IVR] CRITICAL: failed to save payment record.",
-                      "| callId:", mask(callId), "| amount:", mask(amount),
+                      "| callId:", callIdLogSafe(callId), "| amount:", mask(amount),
                       "| phone:", mask(phone), "| confirmation:", mask(confirmationNumber),
                       "| error:", saveErr.message || saveErr);
         safeInsertCallLog(callId, phone, "error", {
@@ -757,7 +784,7 @@ function handleIvrQuery(query) {
         // success/audit event should be recorded — otherwise a single real
         // charge would reduce the donor's debt twice.
         console.log("[IVR] payment=OK is a duplicate resend of an already-saved payment — skipping debt update and audit log.",
-                    "| callId:", mask(callId), "| donorId:", donor ? donor.id : null, "| amount:", mask(amount));
+                    "| callId:", callIdLogSafe(callId), "| donorId:", donor ? donor.id : null, "| amount:", mask(amount));
         safeInsertCallLog(callId, phone, "payment_duplicate_ignored", {
           donorId:            donor ? donor.id   : null,
           donorName:          donor ? donor.fullName : null,
@@ -825,7 +852,7 @@ function handleIvrQuery(query) {
       console.log("[IVR] paymentStatus is not OK:", paymentStatus,
                   "— entering failure branch",
                   "| raw q.payment:", JSON.stringify(q.payment),
-                  "| callId:", mask(callId));
+                  "| callId:", callIdLogSafe(callId));
       safeInsertCallLog(callId, phone, "payment_failed", {
         result:    paymentStatus,
         rawPayment: JSON.stringify(q.payment),
