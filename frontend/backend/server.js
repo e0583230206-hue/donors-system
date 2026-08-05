@@ -85,6 +85,7 @@ const {
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
 const CITY_MAP = require("./city_map");
 const { queryAI } = require("./ai");
+const { recordAiQuery } = require("./ai/audit");
 
 const {
   ROLES,
@@ -3397,6 +3398,18 @@ app.post(
       }
 
       var result = await queryAI({ question, donorId, history, pageContext });
+
+      recordAiQuery({
+        worker:      req.user,
+        ip:          req.ip,
+        question:    question,
+        donorId:     donorId,
+        pageContext: pageContext,
+        intent:      result.intent,
+        model:       result.model || "local",
+        confidence:  result.debug && result.debug.confidence,
+        fallback:    result.fallback || false,
+      });
 
       return res.json({
         answer:      result.answer,

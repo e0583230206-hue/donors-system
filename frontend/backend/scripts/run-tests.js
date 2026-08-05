@@ -17,7 +17,14 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 const BACKEND_DIR = path.join(__dirname, "..");
-const TEST_DIRS = [BACKEND_DIR, path.join(BACKEND_DIR, "scripts")];
+const TEST_DIRS = [
+  BACKEND_DIR,
+  path.join(BACKEND_DIR, "scripts"),
+  // ai/tests holds the AI subsystem's own *.test.js files (added alongside
+  // the Itzik Net action framework) — included here so `npm test` actually
+  // covers them instead of only the hand-run ai/tests/regression.js.
+  path.join(BACKEND_DIR, "ai", "tests"),
+];
 
 function findTestFiles(dir) {
   return fs.readdirSync(dir)
