@@ -1806,6 +1806,25 @@ function getAuditLogsByWorker(workerId, limit) {
   `).all(Number(workerId), Math.min(Number(limit) || 10, 50));
 }
 
+// Most recent server_audit_log rows for one (entityType, entityId) pair —
+// backs the AI action framework's durable idempotency (ai/actions/
+// idempotency.js): reusing this table as the persistence layer for
+// claim/resolve markers means idempotency survives a process restart
+// without a new table. No index exists on (entityType, entityId) — this is
+// a plain filtered scan, acceptable given server_audit_log's expected
+// volume and that idempotency lookups are not a hot path; a dedicated index
+// would need its own migration and isn't added here.
+function getAuditLogsByEntity(entityType, entityId, limit) {
+  if (!entityType || entityId == null) return [];
+  return db.prepare(`
+    SELECT id, createdAt, action, entityType, entityId, entityName, details, workerId, workerName, ip
+    FROM server_audit_log
+    WHERE entityType = ? AND entityId = ?
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(String(entityType), String(entityId), Math.min(Number(limit) || 50, 500));
+}
+
 // Cheap total count for the same worker — lets the modal show "X מתוך Y" without
 // pulling every row. Single indexed-column COUNT, negligible cost either way.
 function countAuditLogsByWorker(workerId) {
@@ -2645,6 +2664,7 @@ module.exports = {
   getLastActionsByWorker,
   getAuditLogsByWorker,
   countAuditLogsByWorker,
+  getAuditLogsByEntity,
   getActiveSessions,
   getSessionHistory,
   // Phone normalization (shared with sync service)

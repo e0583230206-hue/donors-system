@@ -19,10 +19,10 @@ const crypto = require("crypto");
 const { registerCapability, isAllowed } = require("../capabilities");
 const { recordAiAction } = require("../audit");
 const { findWorkerById } = require("../../db");
+const { claimOrReplay, resolveClaim } = require("./idempotency");
 
 const PREPARE_TTL_MS      = 10 * 60 * 1000; // preview token valid 10 min
 const CONFIRM_TTL_MS      = 2  * 60 * 1000; // execution token valid 2 min (tighter — meant to be used immediately)
-const IDEMPOTENCY_TTL_MS  = 10 * 60 * 1000;
 
 // ─── Signing key ───────────────────────────────────────────────────────────
 // Derived from JWT_SECRET via HMAC into its own subkey, scoped to this
@@ -88,18 +88,9 @@ function registerAction(def) {
 
 function getAction(id) { return REGISTRY.get(id) || null; }
 
-// ─── Idempotency cache ─────────────────────────────────────────────────────
-// Mirrors the existing in-memory Map pattern already used for campaign
-// sends (_campaignSendIdempotency in server.js) — same shape, same TTL
-// cleanup approach, just applied to AI actions. Not a new pattern for this
-// codebase, and deliberately not a DB table (no schema change).
-const _executedKeys = new Map(); // idempotencyKey -> { at, result }
-function _cleanupIdempotency() {
-  const now = Date.now();
-  for (const [k, v] of _executedKeys) {
-    if (now - v.at > IDEMPOTENCY_TTL_MS) _executedKeys.delete(k);
-  }
-}
+// Idempotency itself (claim/resolve/replay) lives in ./idempotency.js —
+// durable via server_audit_log, survives a process restart. See that
+// module's header for the full design/tradeoffs.
 
 // ─── Stage 1: prepare ──────────────────────────────────────────────────────
 async function prepareAction({ actionId, params, worker, ip, idempotencyKey }) {
@@ -230,13 +221,27 @@ async function executeAction({ token, worker, ip }) {
     return { error: "פעולה לא מוכרת", code: "unknown_action" };
   }
 
-  _cleanupIdempotency();
-  if (p.idempotencyKey) {
-    const cached = _executedKeys.get(p.idempotencyKey);
-    if (cached) {
-      recordAiAction({ stage: "execute", worker, ip, actionId: p.actionId, outcome: "idempotent_replay" });
-      return Object.assign({}, cached.result, { idempotent: true });
+  // Durable idempotency claim — see ./idempotency.js. Must happen with no
+  // `await` between the check and the claim insert (both are synchronous
+  // DB calls) so no other request in this process can race in between.
+  const claim = claimOrReplay({ actionId: p.actionId, idempotencyKey: p.idempotencyKey, worker, ip });
+
+  if (claim.outcome === "replay") {
+    recordAiAction({ stage: "execute", worker, ip, actionId: p.actionId, outcome: "idempotent_replay" });
+    let replayed;
+    try {
+      replayed = def.replay ? await def.replay(claim.ref, { worker: liveWorker, ip }) : { ok: true };
+    } catch (err) {
+      // The original execution succeeded; a failure to RE-fetch its current
+      // state (e.g. the record was later deleted by a human) must not be
+      // reported as if the action itself failed just now.
+      replayed = { ok: true, summary: "idempotent_replay_ref_unavailable: " + err.message };
     }
+    return Object.assign({}, replayed, { idempotent: true });
+  }
+  if (claim.outcome === "in_progress") {
+    recordAiAction({ stage: "execute", worker, ip, actionId: p.actionId, outcome: "rejected", reason: "idempotency_in_progress" });
+    return { error: "בקשה זהה כבר בביצוע — נסה שוב בעוד רגע", code: "idempotency_in_progress" };
   }
 
   let result;
@@ -247,6 +252,7 @@ async function executeAction({ token, worker, ip }) {
       stage: "execute", worker, ip, actionId: p.actionId,
       targetType: p.targetType, targetId: p.targetId, outcome: "error", reason: err.message,
     });
+    resolveClaim({ actionId: p.actionId, idempotencyKey: p.idempotencyKey, worker, ip, status: "failed" });
     return { error: "ביצוע הפעולה נכשל: " + err.message, code: "execute_failed" };
   }
 
@@ -260,15 +266,17 @@ async function executeAction({ token, worker, ip }) {
     outcome,
   });
 
-  const responseBody = Object.assign({ ok: outcome !== "failed" }, result);
-  if (p.idempotencyKey && outcome !== "failed") {
-    _executedKeys.set(p.idempotencyKey, { at: Date.now(), result: responseBody });
-  }
-  return responseBody;
+  resolveClaim({
+    actionId: p.actionId, idempotencyKey: p.idempotencyKey, worker, ip,
+    status: outcome === "failed" ? "failed" : "success",
+    ref: result && result.ref != null ? result.ref : null,
+  });
+
+  return Object.assign({ ok: outcome !== "failed" }, result);
 }
 
 module.exports = {
   registerAction, getAction, prepareAction, confirmAction, executeAction,
   // exported for tests only:
-  _internal: { sign, verify, _executedKeys },
+  _internal: { sign, verify },
 };

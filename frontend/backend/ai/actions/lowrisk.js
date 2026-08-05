@@ -102,7 +102,21 @@ registerAction({
     };
     const ok = setAppState("tasks", tasks.concat([newTask]));
     if (!ok) return { ok: false, summary: "שמירת המשימה נכשלה" };
-    return { ok: true, summary: "task_created id=" + newTask.id, task: newTask };
+    // `ref` is persisted (as plain text) in the durable idempotency claim
+    // resolution row — a repeat request with the same idempotencyKey uses
+    // replay() below to reconstruct this same response by re-fetching the
+    // task, instead of creating a second one.
+    return { ok: true, summary: "task_created id=" + newTask.id, task: newTask, ref: String(newTask.id) };
+  },
+
+  // Durable-idempotency replay: re-fetch the task by id (current state, not
+  // a frozen snapshot of the original response — see ai/actions/
+  // idempotency.js's header for why).
+  async replay(ref) {
+    const tasks = getAppState("tasks") || [];
+    const task = tasks.find((t) => String(t.id) === String(ref));
+    if (!task) return { ok: true, summary: "task_created (הרשומה המקורית כבר לא קיימת)" };
+    return { ok: true, summary: "task_created id=" + task.id, task };
   },
 });
 
@@ -157,7 +171,19 @@ registerAction({
 
     const ok = setAppState("donors", nextDonors);
     if (!ok) return { ok: false, summary: "שמירת ההערה נכשלה" };
-    return { ok: true, summary: "note_added donorId=" + p.donorId, donorId: p.donorId };
+    return { ok: true, summary: "note_added donorId=" + p.donorId, donorId: p.donorId, ref: String(p.donorId) };
+  },
+
+  // Durable-idempotency replay — deliberately does NOT re-append the note
+  // (that's the entire point of idempotency here); just confirms the donor
+  // still exists and echoes the same donorId the original call reported.
+  // Never re-reads/returns the note text itself, consistent with the
+  // original response never including it either.
+  async replay(ref) {
+    const donors = getAppState("donors") || [];
+    const donor = donors.find((d) => String(d.id) === String(ref));
+    if (!donor) return { ok: true, summary: "note_added (התורם כבר לא קיים)", donorId: Number(ref) };
+    return { ok: true, summary: "note_added donorId=" + donor.id, donorId: donor.id };
   },
 });
 
@@ -216,6 +242,30 @@ registerAction({
         phoneCount: result.phones.length,
         ivrPhoneCount: result.ivrPhoneCount,
         fallbackPhoneCount: result.fallbackPhoneCount,
+        donors: result.donors,
+      },
+      // `ref` encodes just enough (filter + fallback flag — both short,
+      // non-PII, already logged elsewhere via paramsSummary too) for
+      // replay() below to re-run the exact same read-only computation.
+      // Nothing was written either way, so "replay" here just means
+      // "compute it again, fresh" — always safe, never a duplicate side
+      // effect, and reflects any donor-list changes since the original call.
+      ref: String(p.filter) + "|" + (p.fallbackToPrimary ? "1" : "0"),
+    };
+  },
+
+  async replay(ref) {
+    if (!_services.buildPhoneList) return { ok: false, summary: "השירות אינו זמין כרגע" };
+    const sep = String(ref || "").lastIndexOf("|");
+    const filter = sep === -1 ? String(ref || "all") : String(ref).slice(0, sep);
+    const fallbackToPrimary = sep !== -1 && String(ref).slice(sep + 1) === "1";
+    const result = _services.buildPhoneList(filter, { fallbackToPrimary });
+    return {
+      ok: true,
+      summary: "recipients_prepared filter=" + filter + " donorCount=" + result.donorCount,
+      recipientList: {
+        filter, donorCount: result.donorCount, phoneCount: result.phones.length,
+        ivrPhoneCount: result.ivrPhoneCount, fallbackPhoneCount: result.fallbackPhoneCount,
         donors: result.donors,
       },
     };
