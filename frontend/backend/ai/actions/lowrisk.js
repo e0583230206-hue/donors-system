@@ -9,6 +9,17 @@
 // envelope in ai/actions/index.js — "low risk" does not mean "skip
 // confirmation", it means "safe enough to implement and enable at all
 // during this phase" (vs. Phase G, which is prepared but execution-disabled).
+//
+// Deny-by-default write flag: AI_ACTIONS_WRITE_ENABLED. Absent, or anything
+// other than the exact string "true", means disabled — same convention as
+// AI_ACTIONS_HIGH_RISK_ENABLED in highrisk.js, read once at process start.
+// Gates ONLY the two actions that mutate app_state (create_task,
+// add_donor_note). prepare_campaign_recipients is deliberately NOT gated by
+// this flag — its prepare()/execute() below call only
+// _services.buildPhoneList(), which itself only reads app_state.donors and
+// returns computed values; it never calls setAppState or any other write
+// function anywhere in its code path. Verified read-only, left enabled.
+const WRITE_ACTIONS_ENABLED = process.env.AI_ACTIONS_WRITE_ENABLED === "true";
 
 const { registerAction } = require("./index");
 const { ROLES } = require("../capabilities");
@@ -36,7 +47,8 @@ registerAction({
   roles:       [ROLES.ADMIN, ROLES.SECRETARY],
   riskTier:    "low",
   requiresConfirmation: true,
-  testCoverage: ["ai/tests/actions.test.js"],
+  status:      WRITE_ACTIONS_ENABLED ? "enabled" : "disabled",
+  testCoverage: ["ai/tests/actions.test.js", "ai/tests/write-flag.test.js"],
   serviceFn:   "db.js getAppState/setAppState('tasks') — same path as frontend/js/tasks.js addTask()",
 
   async prepare(params) {
@@ -104,7 +116,8 @@ registerAction({
   roles:       [ROLES.ADMIN, ROLES.SECRETARY],
   riskTier:    "low",
   requiresConfirmation: true,
-  testCoverage: ["ai/tests/actions.test.js"],
+  status:      WRITE_ACTIONS_ENABLED ? "enabled" : "disabled",
+  testCoverage: ["ai/tests/actions.test.js", "ai/tests/write-flag.test.js"],
   serviceFn:   "db.js getAppState/setAppState('donors') + server.js validateDonorsPayload() (injected)",
 
   async prepare(params) {

@@ -14,6 +14,13 @@ const path = require("path");
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ai-actions-test-"));
 process.env.DB_PATH = path.join(tmpRoot, "test.sqlite");
 delete process.env.NODE_ENV;
+// This file tests the write-action FRAMEWORK mechanics (happy path,
+// idempotency, fingerprints, permissions) — it needs create_task/
+// add_donor_note actually enabled to do that. The deny-by-default policy
+// itself (missing/false/true) is covered separately, exhaustively, by
+// ai/tests/write-flag.test.js — this is not a weakened test, it is a
+// correctly-scoped one.
+process.env.AI_ACTIONS_WRITE_ENABLED = "true";
 
 const app = require("../../server");
 const db = require("../../db");

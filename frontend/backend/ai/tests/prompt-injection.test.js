@@ -21,6 +21,10 @@ const path = require("path");
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ai-injection-test-"));
 process.env.DB_PATH = path.join(tmpRoot, "test.sqlite");
 delete process.env.NODE_ENV;
+// This test exercises create_task's own execute() to prove hostile text is
+// stored literally, not interpreted — it needs the action actually enabled.
+// The deny-by-default policy itself is covered by ai/tests/write-flag.test.js.
+process.env.AI_ACTIONS_WRITE_ENABLED = "true";
 
 const { queryAI } = require("../../ai");
 const db = require("../../db");
