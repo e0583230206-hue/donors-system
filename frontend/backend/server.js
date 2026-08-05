@@ -3408,7 +3408,7 @@ app.post(
         return res.status(400).json({ error: "שאלה ארוכה מדי (מקסימום 500 תווים)" });
       }
 
-      var result = await queryAI({ question, donorId, history, pageContext });
+      var result = await queryAI({ question, donorId, history, pageContext, role: req.userRole });
 
       recordAiQuery({
         worker:      req.user,

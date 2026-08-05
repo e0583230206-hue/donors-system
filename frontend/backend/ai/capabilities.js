@@ -93,7 +93,11 @@ function buildMatrix() {
 // ─── Bootstrap: read intents already served by the local engine ──────────────
 // One capability per detector intent — these existed before Phase B and are
 // registered here as-is (implemented:true, both roles, no confirmation).
-INTENTS.forEach(function (intent) {
+// "extended" scope (Phase D) intents are excluded here — their per-domain
+// roles differ (some ADMIN-only, mirroring the underlying REST route's own
+// gate), so ai/handlers/extended.js registers those itself, same pattern
+// as ai/search.js.
+INTENTS.filter(function (intent) { return intent.scope !== "extended"; }).forEach(function (intent) {
   registerCapability({
     id:           "read." + intent.name,
     category:     "read",
