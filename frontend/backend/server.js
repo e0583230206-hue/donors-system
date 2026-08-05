@@ -86,6 +86,7 @@ const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service
 const CITY_MAP = require("./city_map");
 const { queryAI } = require("./ai");
 const { recordAiQuery } = require("./ai/audit");
+const aiCapabilities    = require("./ai/capabilities");
 
 const {
   ROLES,
@@ -3419,6 +3420,24 @@ app.post(
         suggestions: result.suggestions || [],
         debug:       result.debug || null,
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/ai/capabilities — machine-readable capability list, filtered to
+// what the requesting worker's role is actually allowed to see. A SECRETARY
+// must never learn that an ADMIN-only capability id/description even
+// exists — so filtering happens server-side, not by hiding buttons in the UI.
+app.get(
+  "/api/ai/capabilities",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var caps = aiCapabilities.listCapabilities({ role: req.userRole });
+      res.json({ role: req.userRole, capabilities: caps });
     } catch (err) {
       next(err);
     }
