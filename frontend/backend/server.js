@@ -87,6 +87,7 @@ const CITY_MAP = require("./city_map");
 const { queryAI } = require("./ai");
 const { recordAiQuery } = require("./ai/audit");
 const aiCapabilities    = require("./ai/capabilities");
+const { searchDonors }  = require("./ai/search");
 
 const {
   ROLES,
@@ -3438,6 +3439,26 @@ app.get(
     try {
       var caps = aiCapabilities.listCapabilities({ role: req.userRole });
       res.json({ role: req.userRole, capabilities: caps });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/ai/search?q=...&field=name|phone|idNumber|city|any — Phase C:
+// global donor search + explicit disambiguation. Read-only; matches the
+// same field set frontend/js/donors.js already searches.
+app.get(
+  "/api/ai/search",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var q = String(req.query.q || "").trim();
+      if (!q) return res.status(400).json({ error: "פרמטר q (מונח חיפוש) חסר" });
+      if (q.length > 100) return res.status(400).json({ error: "מונח חיפוש ארוך מדי" });
+      var result = searchDonors(q, { field: req.query.field, limit: req.query.limit });
+      res.json(result);
     } catch (err) {
       next(err);
     }
