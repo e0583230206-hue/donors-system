@@ -33,6 +33,15 @@ const { registerCapability, ROLES } = require("../capabilities");
 
 function fmtMoney(n) { return "₪" + Number(n || 0).toLocaleString("he-IL"); }
 
+// Pagination/completeness honesty: several of these reads are backed by a
+// fixed-size "recent N" query (no separate total-count query exists for
+// them). When the result count equals the cap, that's a strong signal
+// there may be more rows than shown — say so explicitly instead of letting
+// a capped list look like "this is everything".
+function capNote(count, cap) {
+  return count >= cap ? "מוצגים " + cap + " האחרונים בלבד — ייתכן שיש רשומות נוספות שלא מוצגות כאן." : "";
+}
+
 // ─── ivr_status ────────────────────────────────────────────────────────────
 function ivrStatus() {
   const stats  = getIvrMonitorStats();
@@ -59,7 +68,8 @@ function ivrStatus() {
 
 // ─── click2call_recent ─────────────────────────────────────────────────────
 function click2callRecent() {
-  const logs = getRecentClick2CallLogs(10) || [];
+  const CAP = 10;
+  const logs = getRecentClick2CallLogs(CAP) || [];
   return {
     summary: logs.length ? "בוצעו " + logs.length + " שיחות Click2Call אחרונות" : "לא בוצעו שיחות Click2Call לאחרונה",
     metrics: [{ label: "שיחות אחרונות", value: String(logs.length) }],
@@ -67,7 +77,7 @@ function click2callRecent() {
       title: "שיחות אחרונות",
       items: logs.map((l) => (l.createdAt || "") + " — " + (l.donorName || l.phone || "?") + (l.status ? " (" + l.status + ")" : "")),
     }] : [],
-    conclusion: "", recommendation: "",
+    conclusion: capNote(logs.length, CAP), recommendation: "",
     suggestions: ["מצב ה-IVR היום"],
   };
 }
@@ -95,27 +105,29 @@ function paymentsStats() {
 
 // ─── audit_recent — ADMIN only ──────────────────────────────────────────────
 function auditRecent() {
-  const logs = getAuditLogs(15) || [];
+  const CAP = 15;
+  const logs = getAuditLogs(CAP) || [];
   return {
-    summary: "15 הפעולות האחרונות ביומן הביקורת",
+    summary: CAP + " הפעולות האחרונות ביומן הביקורת (לא ההיסטוריה המלאה)",
     metrics: [],
     sections: [{
       title: "פעילות אחרונה",
       items: logs.map((l) => (l.createdAt || "") + " — " + l.action + " (" + (l.workerName || "?") + ")"),
     }],
-    conclusion: "", recommendation: "",
+    conclusion: capNote(logs.length, CAP) || "לתצוגה מלאה יש לפתוח את מסך יומן הביקורת.", recommendation: "",
     suggestions: ["מצב המערכת"],
   };
 }
 
 // ─── alfon_sync_status ──────────────────────────────────────────────────────
 function alfonSyncStatus() {
+  const CAP = 30; // matches db.getAlfonPending()'s own LIMIT 30
   const pending = getAlfonPending() || [];
   const waiting = pending.filter((p) => p.status === "pending");
   return {
     summary: waiting.length
-      ? "יש " + waiting.length + " קבצי אלפון הממתינים לסקירה"
-      : "אין קבצי אלפון הממתינים לסקירה כרגע",
+      ? "יש " + waiting.length + " קבצי אלפון הממתינים לסקירה (מתוך ה-30 האחרונים)"
+      : "אין קבצי אלפון הממתינים לסקירה מתוך ה-30 הרשומים האחרונים",
     metrics: [
       { label: "ממתינים לסקירה", value: String(waiting.length) },
       { label: "סה\"כ ברשימה (30 אחרונים)", value: String(pending.length) },
@@ -124,7 +136,9 @@ function alfonSyncStatus() {
       title: "ממתינים לסקירה",
       items: waiting.slice(0, 10).map((p) => (p.createdAt || "") + " — " + p.filename),
     }] : [],
-    conclusion: "", recommendation: waiting.length ? "לסקור את קבצי האלפון הממתינים במסך הסנכרון." : "",
+    conclusion: capNote(pending.length, CAP) ||
+      (waiting.length ? "" : "אם יש קבצים ישנים יותר שממתינים, הם לא נכללים ברשימת ה-30 האחרונים הזו."),
+    recommendation: waiting.length ? "לסקור את קבצי האלפון הממתינים במסך הסנכרון." : "",
     suggestions: ["מצב המערכת"],
   };
 }
