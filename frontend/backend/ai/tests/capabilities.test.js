@@ -47,9 +47,9 @@ async function main() {
   // ─── Registry mechanics (pure, no server needed) ────────────────────────────
 
   await check("registerCapability: read intents from detector.js are pre-registered", async () => {
-    const all = caps.listCapabilities();
-    assert.ok(all.length > 20, "מצפה לעשרות יכולות קריאה מוכנות מראש, נמצאו " + all.length);
-    assert.ok(all.every((c) => c.category === "read"), "כל היכולות שנרשמו כרגע אמורות להיות מסוג read");
+    const reads = caps.listCapabilities({ category: "read" });
+    assert.ok(reads.length > 20, "מצפה לעשרות יכולות קריאה מוכנות מראש, נמצאו " + reads.length);
+    assert.ok(reads.every((c) => c.category === "read"));
   });
 
   await check("registerCapability: duplicate id is rejected", async () => {

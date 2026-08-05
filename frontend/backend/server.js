@@ -88,6 +88,9 @@ const { queryAI } = require("./ai");
 const { recordAiQuery } = require("./ai/audit");
 const aiCapabilities    = require("./ai/capabilities");
 const { searchDonors }  = require("./ai/search");
+const aiActions         = require("./ai/actions");
+require("./ai/actions/lowrisk");  // self-registers Phase F low-risk actions
+require("./ai/actions/highrisk"); // self-registers Phase G actions, disabled by default
 
 const {
   ROLES,
@@ -1925,6 +1928,12 @@ function buildPhoneList(recipientFilter, opts) {
   };
 }
 
+// Give the AI low-risk action module access to buildPhoneList/
+// validateDonorsPayload without duplicating either — both are module-private
+// to server.js, so this is a one-time injection at startup rather than a
+// circular require.
+require("./ai/actions/lowrisk").injectServices({ buildPhoneList, validateDonorsPayload });
+
 // GET /api/technoline/send/recipient-count?filter=<filter>[&fallback=1]
 app.get(
   "/api/technoline/send/recipient-count",
@@ -3458,6 +3467,72 @@ app.get(
       if (!q) return res.status(400).json({ error: "פרמטר q (מונח חיפוש) חסר" });
       if (q.length > 100) return res.status(400).json({ error: "מונח חיפוש ארוך מדי" });
       var result = searchDonors(q, { field: req.query.field, limit: req.query.limit });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── AI action framework (Phase F) — prepare → confirm → execute ───────────────
+// Every stage requires the same auth as the rest of the AI routes; the
+// framework itself (ai/actions/index.js) does the finer-grained per-action
+// role/status check, since different actions may allow different roles.
+app.post(
+  "/api/ai/actions/prepare",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var result = await aiActions.prepareAction({
+        actionId: String(body.actionId || ""),
+        params: body.params || {},
+        worker: req.user,
+        ip: req.ip,
+        idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : null,
+      });
+      if (result.error) return res.status(400).json(result);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+app.post(
+  "/api/ai/actions/confirm",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var result = aiActions.confirmAction({
+        token: String(body.token || ""),
+        worker: req.user,
+        ip: req.ip,
+      });
+      if (result.error) return res.status(400).json(result);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+app.post(
+  "/api/ai/actions/execute",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var result = await aiActions.executeAction({
+        token: String(body.token || ""),
+        worker: req.user,
+        ip: req.ip,
+      });
+      if (result.error) return res.status(400).json(result);
       res.json(result);
     } catch (err) {
       next(err);
