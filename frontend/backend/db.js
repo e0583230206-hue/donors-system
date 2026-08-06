@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const bcrypt = require("bcryptjs");
 const logger = require("./logger");
+const callClassifier = require("../js/softphone-call-classifier.js");
 
 // How recent a heartbeat has to be for a still-logged-in session to be shown
 // as "online" on the admin sessions screen. Purely a display concern — unlike
@@ -203,6 +204,70 @@ function initDatabase() {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_worker_sessions_status ON worker_sessions(status)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_worker_sessions_loginAt ON worker_sessions(loginAt)");
+
+  // ── Browser softphone (JsSIP/WebRTC) call history — distinct from
+  // ivr_call_sessions (IVR self-service calls) and click2call_logs (server-
+  // bridged Technoline click2call). One row per SIP session, upserted by
+  // sipCallId (JsSIP RTCSession.id = call_id+from_tag, a stable per-dialog
+  // identifier) so repeated lifecycle events for the same session never
+  // create duplicate rows. See softphone-call-classifier.js for the status
+  // values written here.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS softphone_calls (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      sipCallId        TEXT    NOT NULL UNIQUE,
+      direction        TEXT    NOT NULL,
+      remotePhone      TEXT    NOT NULL,
+      -- NOT a FK to donors(id): this is the app_state.donors[].id (app-level
+      -- donor id, what donor.html?id= expects), a different id space than
+      -- the thin SQLite donors table's own id — see donor.service.js's
+      -- "appDonorId" comment. A real REFERENCES here would wrongly reject
+      -- every donor match (and does, under node:sqlite's default
+      -- foreign_keys=ON, unlike other sqlite libraries used elsewhere here).
+      donorId          INTEGER,
+      donorName        TEXT,
+      contactId        INTEGER REFERENCES softphone_contacts(id),
+      contactName      TEXT,
+      selectedCallerId TEXT,
+      workerId         INTEGER,
+      workerName       TEXT,
+      startedAt        TEXT    NOT NULL,
+      ringingAt        TEXT,
+      answeredAt       TEXT,
+      endedAt          TEXT,
+      ringDurationSec  INTEGER,
+      talkDurationSec  INTEGER,
+      status           TEXT    NOT NULL,
+      failureReason    TEXT,
+      rawSipCause      TEXT,
+      createdAt        TEXT    NOT NULL,
+      updatedAt        TEXT    NOT NULL
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_startedAt ON softphone_calls(startedAt)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_status    ON softphone_calls(status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_direction ON softphone_calls(direction)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_calls_remote    ON softphone_calls(remotePhone)");
+
+  // ── Softphone custom contacts (people who are NOT donors). Donor contacts
+  // are never copied in here — they are always read live from app_state.donors
+  // (the donor source of truth, via donor.service.js's allAppDonors()) and
+  // merged in at the API layer. This table only holds non-donor entries.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS softphone_contacts (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      name               TEXT    NOT NULL,
+      primaryPhone       TEXT    NOT NULL,
+      additionalPhones    TEXT,
+      notes              TEXT,
+      normalizedPhoneKey TEXT    NOT NULL UNIQUE,
+      createdAt          TEXT    NOT NULL,
+      updatedAt          TEXT    NOT NULL,
+      createdByWorkerId  INTEGER,
+      createdByWorkerName TEXT
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_softphone_contacts_name ON softphone_contacts(name)");
 
   // ── Migrations ──────────────────────────────────────────────────
   try { db.exec("ALTER TABLE workers ADD COLUMN passwordHash TEXT"); } catch (_) {}
@@ -832,7 +897,7 @@ function cancelManualDonationPayment(params) {
 
     try {
       insertAuditLog({
-        action:     "update",
+        action:     "payment_cancel",
         entityType: "payment",
         entityId:   params.appDonorId,
         entityName: null,
@@ -845,6 +910,111 @@ function cancelManualDonationPayment(params) {
 
     db.exec("COMMIT");
     return { donation: donation, payment: getPaymentById(paymentId) };
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch (_) {}
+    throw err;
+  }
+}
+
+// Records a genuine PARTIAL manual payment against one donation — unlike
+// markDonationPaidManually (which always drives a donation to fully paid,
+// remainingDebt=0), this applies exactly params.amount against the
+// donation's current remainingDebt and may leave it partially open. Used
+// both by the donor-card "partial payment across several open debts" flow
+// (called once per affected donation, one real payments row each — see
+// server.js) and by "add donation already paid" (called once, for the full
+// amount, immediately after the donation itself is created unpaid).
+//
+// Same atomicity/idempotency contract as markDonationPaidManually: one
+// BEGIN/COMMIT covering the payments-table insert and the app_state
+// read-modify-write, and a caller-supplied idempotencyKey stored as the
+// payment's callId so a retried request after a timeout/error is recognized
+// as the same logical payment instead of charging twice.
+// cancelManualDonationPayment (above) already reverses either kind of
+// payment generically via donation.lastPaymentId + payment.amount, so no
+// separate cancel path is needed for partial payments.
+function recordManualPartialPayment(params) {
+  var callId = "manual-partial:" + String(params.idempotencyKey).trim();
+
+  var existing = findPaymentByCallId(callId);
+  if (existing) {
+    var donorsNow = getAppState("donors");
+    var donorNow = donorsNow.find(function (d) { return Number(d.id) === Number(params.appDonorId); });
+    var donationNow = donorNow ? (donorNow.donations || []).find(function (d) { return Number(d.id) === Number(params.donationId); }) : null;
+    return { idempotent: true, payment: existing, donation: donationNow || null };
+  }
+
+  try {
+    db.exec("BEGIN");
+
+    var donors = getAppState("donors");
+    var donor = donors.find(function (d) { return Number(d.id) === Number(params.appDonorId); });
+    if (!donor) throw httpError(404, "תורם לא נמצא");
+    var donation = (donor.donations || []).find(function (d) { return Number(d.id) === Number(params.donationId); });
+    if (!donation) throw httpError(404, "תרומה לא נמצאה");
+
+    var chargeAmount = Number(params.amount);
+    if (!isFinite(chargeAmount) || chargeAmount <= 0) throw httpError(400, "סכום לא תקין");
+
+    // Server-computed from the CURRENT stored remainingDebt, never trusted
+    // from the client — same concurrency guarantee as markDonationPaidManually:
+    // a stale/concurrent request that would overpay this specific donation is
+    // rejected rather than driving remainingDebt negative.
+    var currentRemaining = Number(donation.remainingDebt || 0);
+    if (chargeAmount > currentRemaining) {
+      throw httpError(409, "סכום התשלום גדול מיתרת החוב הנוכחית של התרומה — ייתכן שהיא כבר עודכנה");
+    }
+
+    var phone = params.phone ? String(params.phone).trim().slice(0, 30) : "";
+    var donorName = params.donorName ? String(params.donorName).trim().slice(0, 200) : "";
+    var paymentMethod = params.paymentMethod ? String(params.paymentMethod).trim().slice(0, 50) : "";
+
+    var sqlDonorId = null;
+    if (phone) {
+      if (donorName) { try { upsertDonor(phone, donorName); } catch (_) {} }
+      var resolved = findDonorByPhone(phone);
+      if (resolved) sqlDonorId = resolved.id;
+    }
+
+    var result = recordPayment({
+      callId:             callId,
+      phone:              phone,
+      donorId:            sqlDonorId,
+      amount:             chargeAmount,
+      status:             "success",
+      source:             "manual",
+      confirmationNumber: null,
+    });
+    var payment = getPaymentById(result.lastInsertRowid);
+
+    donation.paidPartial = Number(donation.paidPartial || 0) + chargeAmount;
+    donation.remainingDebt = currentRemaining - chargeAmount;
+    donation.paid = donation.remainingDebt <= 0;
+    if (paymentMethod) {
+      donation.paymentMethod = donation.paymentMethod || paymentMethod;
+      donation.lastPaymentMethod = paymentMethod;
+    }
+    donation.lastPaymentId = payment.id;
+    donation.updatedAt = nowIso();
+    donor.updatedAt = nowIso();
+
+    setAppState("donors", donors);
+
+    try {
+      insertAuditLog({
+        action:     "create",
+        entityType: "payment",
+        entityId:   params.appDonorId,
+        entityName: donorName || null,
+        details:    "תשלום חלקי ידני נרשם בסך " + chargeAmount + " ₪" + (paymentMethod ? " (" + paymentMethod + ")" : ""),
+        workerId:   params.workerId,
+        workerName: params.workerName,
+        ip:         params.ip,
+      });
+    } catch (_) {}
+
+    db.exec("COMMIT");
+    return { idempotent: false, payment: payment, donation: donation };
   } catch (err) {
     try { db.exec("ROLLBACK"); } catch (_) {}
     throw err;
@@ -1331,23 +1501,82 @@ function backupDatabase(destPath) {
   db.exec("VACUUM INTO '" + resolved.replace(/'/g, "''") + "'");
 }
 
-// Opens srcPath as a read-only SQLite DB and copies every app_state row into
-// the live DB.  Only allowed keys are imported.
+// Opens srcPath as a read-only SQLite DB and replaces every real table's
+// contents in the live DB with the backup's — not just app_state (which is
+// what this restored until now: only 9 of the ~17 real tables, silently
+// leaving workers/payments/ivr_call_logs/server_audit_log/worker_sessions/
+// etc. completely untouched on "restore", giving false confidence in
+// disaster recovery).
+//
+// Table set is the intersection of both databases' own sqlite_master
+// (deliberately excludes sqlite's internal sqlite_% tables and any one-off
+// migration snapshot table matching "*_backup_*", e.g. the timestamped
+// table ensureIvrAudioRecordingsUpToDate() creates before a schema change —
+// those are point-in-time artifacts, not part of the regular restore set).
+// Column set per table is the intersection of both schemas' own columns, so
+// a backup taken before/after a column was added doesn't hard-fail the
+// whole restore.
+//
+// Foreign keys are temporarily disabled for the duration (SQLite requires
+// this outside of BEGIN/COMMIT, not inside it) because tables are cleared
+// and reloaded one at a time, not in dependency order — safe specifically
+// because the whole operation is one atomic transaction: either every
+// table ends up fully restored and internally consistent together, or
+// nothing changes at all on any error.
+//
+// IMPORTANT: this function does not by itself decide when it's safe to
+// call — see the /api/admin/backups/restore/:filename route in server.js
+// and README_PRODUCTION.md for the required pm2 stop / pre-restore backup
+// steps around it. This function itself has been verified only against a
+// standalone copy of data.sqlite, never against the live production file.
 function restoreFromBackup(srcPath) {
   const { DatabaseSync: DS } = require("node:sqlite");
   const bk = new DS(srcPath, { readOnly: true });
+  var restoredCounts = {};
+  var fkWasOn = true;
   try {
-    const rows = bk.prepare("SELECT key, value FROM app_state").all();
-    let restored = 0;
-    rows.forEach(function (row) {
-      if (!ALLOWED_APP_STATE_KEYS.has(row.key)) return;
-      try {
-        const parsed = JSON.parse(row.value);
-        setAppState(row.key, parsed);
-        restored++;
-      } catch (_) {}
-    });
-    return restored;
+    var TABLE_LIST_SQL =
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%\\_backup\\_%' ESCAPE '\\' ORDER BY name";
+    var liveTables   = db.prepare(TABLE_LIST_SQL).all().map(function (r) { return r.name; });
+    var backupTables = bk.prepare(TABLE_LIST_SQL).all().map(function (r) { return r.name; });
+    var tablesToRestore = liveTables.filter(function (t) { return backupTables.indexOf(t) !== -1; });
+
+    try {
+      var fkRow = db.prepare("PRAGMA foreign_keys").get();
+      fkWasOn = !!(fkRow && Number(fkRow.foreign_keys) === 1);
+    } catch (_) {}
+    if (fkWasOn) db.exec("PRAGMA foreign_keys = OFF");
+
+    db.exec("BEGIN");
+    try {
+      tablesToRestore.forEach(function (table) {
+        var liveCols   = db.prepare('PRAGMA table_info("' + table + '")').all().map(function (c) { return c.name; });
+        var backupCols = bk.prepare('PRAGMA table_info("' + table + '")').all().map(function (c) { return c.name; });
+        var cols = liveCols.filter(function (c) { return backupCols.indexOf(c) !== -1; });
+        if (cols.length === 0) { restoredCounts[table] = 0; return; }
+
+        var colList = cols.map(function (c) { return '"' + c + '"'; }).join(", ");
+        db.prepare('DELETE FROM "' + table + '"').run();
+
+        var rows = bk.prepare("SELECT " + colList + ' FROM "' + table + '"').all();
+        if (rows.length > 0) {
+          var placeholders = cols.map(function () { return "?"; }).join(", ");
+          var insertStmt = db.prepare('INSERT INTO "' + table + '" (' + colList + ") VALUES (" + placeholders + ")");
+          rows.forEach(function (row) {
+            insertStmt.run.apply(insertStmt, cols.map(function (c) { return row[c]; }));
+          });
+        }
+        restoredCounts[table] = rows.length;
+      });
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch (_) {}
+      throw err;
+    } finally {
+      if (fkWasOn) { try { db.exec("PRAGMA foreign_keys = ON"); } catch (_) {} }
+    }
+
+    return restoredCounts;
   } finally {
     try { bk.close(); } catch (_) {}
   }
@@ -1575,6 +1804,25 @@ function getAuditLogsByWorker(workerId, limit) {
     ORDER BY id DESC
     LIMIT ?
   `).all(Number(workerId), Math.min(Number(limit) || 10, 50));
+}
+
+// Most recent server_audit_log rows for one (entityType, entityId) pair —
+// backs the AI action framework's durable idempotency (ai/actions/
+// idempotency.js): reusing this table as the persistence layer for
+// claim/resolve markers means idempotency survives a process restart
+// without a new table. No index exists on (entityType, entityId) — this is
+// a plain filtered scan, acceptable given server_audit_log's expected
+// volume and that idempotency lookups are not a hot path; a dedicated index
+// would need its own migration and isn't added here.
+function getAuditLogsByEntity(entityType, entityId, limit) {
+  if (!entityType || entityId == null) return [];
+  return db.prepare(`
+    SELECT id, createdAt, action, entityType, entityId, entityName, details, workerId, workerName, ip
+    FROM server_audit_log
+    WHERE entityType = ? AND entityId = ?
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(String(entityType), String(entityId), Math.min(Number(limit) || 50, 500));
 }
 
 // Cheap total count for the same worker — lets the modal show "X מתוך Y" without
@@ -2051,6 +2299,282 @@ function setIvrAudioRecordingSlots(audioId, fields) {
   return getIvrAudioRecordingById(audioId);
 }
 
+// ── Softphone (JsSIP/WebRTC) call history ────────────────────────────────────
+
+var SOFTPHONE_STATUS_SET = {};
+callClassifier.STATUSES.forEach(function (s) { SOFTPHONE_STATUS_SET[s] = true; });
+
+// Upserts one row per SIP session, keyed by sipCallId (JsSIP RTCSession.id).
+// Each call posts multiple partial events over the session's lifetime
+// (created -> ringing -> answered -> ended, or created -> failed); this never
+// creates more than one row per sipCallId — later events refill only the
+// fields they know about, via COALESCE, except `status` (always the latest
+// classification) and the terminal `endedAt`/duration fields (always the
+// newest computed value once known).
+function upsertSoftphoneCall(fields) {
+  var status = String(fields.status || "").trim();
+  if (!SOFTPHONE_STATUS_SET[status]) {
+    throw httpError(400, "סטטוס שיחה לא תקין: " + status);
+  }
+  var direction = fields.direction === "incoming" ? "incoming" : "outgoing";
+  var sipCallId = String(fields.sipCallId || "").trim();
+  if (!sipCallId) throw httpError(400, "sipCallId חסר");
+  var remotePhone = String(fields.remotePhone || "").trim();
+  if (!remotePhone) throw httpError(400, "remotePhone חסר");
+
+  // Duration math must use the MERGED timestamps (this event's fields
+  // COALESCEd with whatever the row already has from earlier events for the
+  // same sipCallId) — using only this event's own fields would recompute
+  // ring duration from startedAt instead of the already-known ringingAt on
+  // every later event that doesn't repeat it (e.g. the terminal
+  // ended/failed event usually only carries endedAt).
+  var existing = db.prepare("SELECT * FROM softphone_calls WHERE sipCallId = ?").get(sipCallId);
+  var durations = callClassifier.computeDurations({
+    startedAt:  fields.startedAt  || (existing && existing.startedAt)  || null,
+    ringingAt:  fields.ringingAt  || (existing && existing.ringingAt)  || null,
+    answeredAt: fields.answeredAt || (existing && existing.answeredAt) || null,
+    endedAt:    fields.endedAt    || (existing && existing.endedAt)    || null,
+  });
+  var now = nowIso();
+
+  db.prepare(`
+    INSERT INTO softphone_calls (
+      sipCallId, direction, remotePhone, donorId, donorName, contactId, contactName,
+      selectedCallerId, workerId, workerName, startedAt, ringingAt, answeredAt, endedAt,
+      ringDurationSec, talkDurationSec, status, failureReason, rawSipCause, createdAt, updatedAt
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(sipCallId) DO UPDATE SET
+      donorId          = COALESCE(excluded.donorId, donorId),
+      donorName        = COALESCE(excluded.donorName, donorName),
+      contactId        = COALESCE(excluded.contactId, contactId),
+      contactName      = COALESCE(excluded.contactName, contactName),
+      selectedCallerId = COALESCE(excluded.selectedCallerId, selectedCallerId),
+      ringingAt        = COALESCE(ringingAt, excluded.ringingAt),
+      answeredAt       = COALESCE(answeredAt, excluded.answeredAt),
+      endedAt          = COALESCE(excluded.endedAt, endedAt),
+      ringDurationSec  = COALESCE(excluded.ringDurationSec, ringDurationSec),
+      talkDurationSec  = COALESCE(excluded.talkDurationSec, talkDurationSec),
+      status           = excluded.status,
+      failureReason    = COALESCE(excluded.failureReason, failureReason),
+      rawSipCause      = COALESCE(excluded.rawSipCause, rawSipCause),
+      updatedAt        = excluded.updatedAt
+  `).run(
+    sipCallId,
+    direction,
+    remotePhone,
+    fields.donorId != null ? Number(fields.donorId) : null,
+    fields.donorName || null,
+    fields.contactId != null ? Number(fields.contactId) : null,
+    fields.contactName || null,
+    fields.selectedCallerId || null,
+    fields.workerId != null ? Number(fields.workerId) : null,
+    fields.workerName || null,
+    fields.startedAt || now,
+    fields.ringingAt || null,
+    fields.answeredAt || null,
+    fields.endedAt || null,
+    durations.ringDurationSec,
+    durations.talkDurationSec,
+    status,
+    fields.failureReason || callClassifier.safeFailureReason(status),
+    fields.rawSipCause || null,
+    now,
+    now
+  );
+
+  return db.prepare("SELECT * FROM softphone_calls WHERE sipCallId = ?").get(sipCallId);
+}
+
+// filters: { statusGroup: "all"|"missed"|"incoming"|"outgoing"|"failed", search, page, pageSize }
+function getSoftphoneCalls(filters) {
+  filters = filters || {};
+  var page     = Math.max(1, Number(filters.page) || 1);
+  var pageSize = Math.min(200, Math.max(1, Number(filters.pageSize) || 25));
+  var where  = [];
+  var params = [];
+
+  var group = String(filters.statusGroup || "all").trim();
+  if (group === "missed") {
+    where.push("status IN ('incoming_missed')");
+  } else if (group === "incoming") {
+    where.push("direction = 'incoming'");
+  } else if (group === "outgoing") {
+    where.push("direction = 'outgoing'");
+  } else if (group === "failed") {
+    where.push("status IN ('incoming_rejected','outgoing_rejected','outgoing_failed','outgoing_unanswered','cancelled')");
+  }
+
+  if (filters.search) {
+    var s = "%" + String(filters.search).trim() + "%";
+    where.push("(remotePhone LIKE ? OR donorName LIKE ? OR contactName LIKE ?)");
+    params.push(s, s, s);
+  }
+
+  var whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
+  var stmtCount = db.prepare("SELECT COUNT(*) AS count FROM softphone_calls " + whereSql);
+  var total = stmtCount.get.apply(stmtCount, params);
+  var stmtRows = db.prepare(
+    "SELECT * FROM softphone_calls " + whereSql + " ORDER BY startedAt DESC, id DESC LIMIT ? OFFSET ?"
+  );
+  var rows = stmtRows.all.apply(stmtRows, params.concat([pageSize, (page - 1) * pageSize]));
+
+  return { rows: rows, total: total.count, page: page, pageSize: pageSize };
+}
+
+function getSoftphoneCallById(id) {
+  return db.prepare("SELECT * FROM softphone_calls WHERE id = ?").get(Number(id));
+}
+
+function deleteSoftphoneCall(id) {
+  var info = db.prepare("DELETE FROM softphone_calls WHERE id = ?").run(Number(id));
+  return info.changes > 0;
+}
+
+// ── Softphone custom contacts (non-donor entries only) ───────────────────────
+
+function normalizeContactPhoneKey(phone) {
+  return normalizePhoneForDb(phone);
+}
+
+function findSoftphoneContactByNormalizedPhone(normalizedPhone) {
+  if (!normalizedPhone) return undefined;
+  return db.prepare("SELECT * FROM softphone_contacts WHERE normalizedPhoneKey = ?").get(normalizedPhone);
+}
+
+// Matches primaryPhone OR any entry in additionalPhones — used to auto-link
+// an incoming/outgoing softphone call to a custom contact.
+function findSoftphoneContactByAnyPhone(normalizedPhone) {
+  if (!normalizedPhone) return undefined;
+  var byPrimary = findSoftphoneContactByNormalizedPhone(normalizedPhone);
+  if (byPrimary) return parseContactRow(byPrimary);
+  var all = db.prepare("SELECT * FROM softphone_contacts").all();
+  for (var i = 0; i < all.length; i++) {
+    var extra = JSON.parse(all[i].additionalPhones || "[]");
+    if (extra.indexOf(normalizedPhone) !== -1) return parseContactRow(all[i]);
+  }
+  return undefined;
+}
+
+function parseContactRow(row) {
+  if (!row) return row;
+  return Object.assign({}, row, {
+    additionalPhones: row.additionalPhones ? JSON.parse(row.additionalPhones) : [],
+  });
+}
+
+function getSoftphoneContacts(search) {
+  var rows;
+  if (search) {
+    var raw = String(search).trim();
+    var s = "%" + raw + "%";
+    // Phone fields are stored already-normalized (digits + leading zero, no
+    // separators) — so "02-53...", "+972-2-53...", etc. must go through the
+    // same normalization as stored phones before matching, same requirement
+    // as the donor-phone search above (not just a raw digit-strip).
+    var digits = normalizePhoneForDb(raw);
+    if (digits) {
+      var d = "%" + digits + "%";
+      rows = db.prepare(
+        "SELECT * FROM softphone_contacts WHERE name LIKE ? OR notes LIKE ? OR primaryPhone LIKE ? OR additionalPhones LIKE ? ORDER BY name"
+      ).all(s, s, d, d);
+    } else {
+      rows = db.prepare(
+        "SELECT * FROM softphone_contacts WHERE name LIKE ? OR notes LIKE ? ORDER BY name"
+      ).all(s, s);
+    }
+  } else {
+    rows = db.prepare("SELECT * FROM softphone_contacts ORDER BY name").all();
+  }
+  return rows.map(parseContactRow);
+}
+
+// Throws httpError(409) if primaryPhone or any additionalPhone collides with
+// an existing contact's primaryPhone or additionalPhones (normalized).
+function createSoftphoneContact(fields, worker) {
+  var name = String(fields.name || "").trim();
+  if (!name) throw httpError(400, "שם חסר");
+  var primaryPhone = normalizeContactPhoneKey(fields.primaryPhone);
+  if (!primaryPhone) throw httpError(400, "טלפון ראשי לא תקין");
+  var additionalPhones = (Array.isArray(fields.additionalPhones) ? fields.additionalPhones : [])
+    .map(normalizeContactPhoneKey)
+    .filter(Boolean);
+
+  assertNoContactPhoneCollision(primaryPhone, additionalPhones, null);
+
+  var now = nowIso();
+  var info = db.prepare(`
+    INSERT INTO softphone_contacts
+      (name, primaryPhone, additionalPhones, notes, normalizedPhoneKey, createdAt, updatedAt, createdByWorkerId, createdByWorkerName)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    name,
+    primaryPhone,
+    JSON.stringify(additionalPhones),
+    fields.notes ? String(fields.notes).trim() : null,
+    primaryPhone,
+    now,
+    now,
+    worker && worker.id   || null,
+    worker && worker.name || null
+  );
+  return parseContactRow(db.prepare("SELECT * FROM softphone_contacts WHERE id = ?").get(info.lastInsertRowid));
+}
+
+function updateSoftphoneContact(id, fields) {
+  var existing = db.prepare("SELECT * FROM softphone_contacts WHERE id = ?").get(Number(id));
+  if (!existing) throw httpError(404, "איש קשר לא נמצא");
+
+  var name = fields.name !== undefined ? String(fields.name).trim() : existing.name;
+  if (!name) throw httpError(400, "שם חסר");
+  var primaryPhone = fields.primaryPhone !== undefined
+    ? normalizeContactPhoneKey(fields.primaryPhone)
+    : existing.primaryPhone;
+  if (!primaryPhone) throw httpError(400, "טלפון ראשי לא תקין");
+  var additionalPhones = fields.additionalPhones !== undefined
+    ? (Array.isArray(fields.additionalPhones) ? fields.additionalPhones : []).map(normalizeContactPhoneKey).filter(Boolean)
+    : JSON.parse(existing.additionalPhones || "[]");
+
+  assertNoContactPhoneCollision(primaryPhone, additionalPhones, Number(id));
+
+  var now = nowIso();
+  db.prepare(`
+    UPDATE softphone_contacts
+    SET name = ?, primaryPhone = ?, additionalPhones = ?, notes = ?, normalizedPhoneKey = ?, updatedAt = ?
+    WHERE id = ?
+  `).run(
+    name,
+    primaryPhone,
+    JSON.stringify(additionalPhones),
+    fields.notes !== undefined ? (fields.notes ? String(fields.notes).trim() : null) : existing.notes,
+    primaryPhone,
+    now,
+    Number(id)
+  );
+  return parseContactRow(db.prepare("SELECT * FROM softphone_contacts WHERE id = ?").get(Number(id)));
+}
+
+// Checks the given primary+additional phones against every OTHER contact's
+// primaryPhone/additionalPhones (excluding excludeId, used by update).
+function assertNoContactPhoneCollision(primaryPhone, additionalPhones, excludeId) {
+  var allPhones = [primaryPhone].concat(additionalPhones);
+  var others = excludeId != null
+    ? db.prepare("SELECT * FROM softphone_contacts WHERE id != ?").all(excludeId)
+    : db.prepare("SELECT * FROM softphone_contacts").all();
+  for (var i = 0; i < others.length; i++) {
+    var otherPhones = [others[i].primaryPhone].concat(JSON.parse(others[i].additionalPhones || "[]"));
+    for (var j = 0; j < allPhones.length; j++) {
+      if (otherPhones.indexOf(allPhones[j]) !== -1) {
+        throw httpError(409, "מספר הטלפון " + allPhones[j] + " כבר קיים באיש קשר אחר: " + others[i].name);
+      }
+    }
+  }
+}
+
+function deleteSoftphoneContact(id) {
+  var info = db.prepare("DELETE FROM softphone_contacts WHERE id = ?").run(Number(id));
+  return info.changes > 0;
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 initDatabase();
@@ -2085,6 +2609,7 @@ module.exports = {
   cancelPaymentById,
   markDonationPaidManually,
   cancelManualDonationPayment,
+  recordManualPartialPayment,
   // Logs
   insertCallLog,
   // Call Sessions
@@ -2139,6 +2664,7 @@ module.exports = {
   getLastActionsByWorker,
   getAuditLogsByWorker,
   countAuditLogsByWorker,
+  getAuditLogsByEntity,
   getActiveSessions,
   getSessionHistory,
   // Phone normalization (shared with sync service)
@@ -2159,4 +2685,17 @@ module.exports = {
   setPregreetingEnabled,
   setPregreetingSchedule,
   resetPregreetingFileState,
+  // Softphone (JsSIP/WebRTC) call history
+  upsertSoftphoneCall,
+  getSoftphoneCalls,
+  getSoftphoneCallById,
+  deleteSoftphoneCall,
+  // Softphone custom contacts
+  getSoftphoneContacts,
+  createSoftphoneContact,
+  updateSoftphoneContact,
+  deleteSoftphoneContact,
+  findSoftphoneContactByNormalizedPhone,
+  findSoftphoneContactByAnyPhone,
+  normalizeContactPhoneKey,
 };

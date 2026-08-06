@@ -83,7 +83,7 @@ let editingDonationId = null;
 
 
 function saveDonors() {
-  Database.save("donors", donors);
+  return Database.save("donors", donors);
 }
 
 // Keeps existing approval drafts (approvals.html) in sync when a donation's
@@ -616,7 +616,17 @@ function closeEditDonorForm() {
   editDonorMessage.className = "message";
 }
 
-function saveDonorEdit() {
+// Mirrors donorAllPhones() in donors.js (Excel-import matching) — same
+// field set, so "does this phone already belong to someone" means the same
+// thing everywhere in the app, not just on the primary phone field.
+function _donorAllPhones(d) {
+  var fields = [d.phone, d.phone2, d.phone3, d.phone4]
+    .concat(Array.isArray(d.phones) ? d.phones : [])
+    .concat(Array.isArray(d.ivrApprovedPhones) ? d.ivrApprovedPhones : []);
+  return fields.map(normalizePhoneLocal).filter(Boolean);
+}
+
+async function saveDonorEdit() {
   const fullName = editFullNameInput.value.trim();
   const phone = editPhoneInput.value.trim();
   const city = editCityInput.value.trim();
@@ -634,13 +644,27 @@ function saveDonorEdit() {
     return;
   }
 
-  const phoneExists = donors.some(function (item) {
-    return item.id !== donor.id && normalizePhoneLocal(item.phone) === normalizePhoneLocal(phone);
+  // Checked across every phone field of every OTHER donor (not just their
+  // primary phone) — consistent with how the Excel-import matching already
+  // works (donorAllPhones() in donors.js) and with how the app itself
+  // treats phone2/3/4/ivrApprovedPhones as valid identifying numbers
+  // elsewhere (IVR caller-ID lookup, click2call). This warns rather than
+  // blocks: a phone genuinely shared between two real people (e.g. family
+  // members) is a legitimate case the previous hard block couldn't
+  // distinguish from an actual data-entry mistake — the admin sees exactly
+  // who else has this number and makes the call themselves.
+  const normalizedEditPhone = normalizePhoneLocal(phone);
+  const matchingOtherDonors = donors.filter(function (item) {
+    return item.id !== donor.id && _donorAllPhones(item).indexOf(normalizedEditPhone) !== -1;
   });
 
-  if (phoneExists) {
-    showMessage(editDonorMessage, "קיים תורם אחר עם מספר טלפון זה", "error");
-    return;
+  if (matchingOtherDonors.length > 0) {
+    var matchNames = matchingOtherDonors.map(function (d) { return d.fullName || "(ללא שם)"; }).join(", ");
+    var proceedEdit = confirm(
+      "⚠️ מספר הטלפון " + phone + " כבר קיים אצל: " + matchNames +
+      "\n\nלשמור בכל זאת?"
+    );
+    if (!proceedEdit) return;
   }
 
   const previousDonor = {
@@ -660,7 +684,12 @@ function saveDonorEdit() {
   donor.notes = notes;
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    showMessage(editDonorMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "update",
     entityType: "donor",
@@ -1073,7 +1102,12 @@ async function saveDonationEdit() {
     donation.updatedAt = new Date().toISOString();
     donor.updatedAt = new Date().toISOString();
 
-    saveDonors();
+    try {
+      await saveDonors();
+    } catch (err) {
+      showMessage(donationMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+      return;
+    }
     reconcileApprovalDrafts([donation]);
 
     var details = statusChangedToPaid
@@ -1117,19 +1151,31 @@ function renderTags() {
   }).join("");
 }
 
-function addTag(tag) {
+async function addTag(tag) {
   tag = (tag || "").trim();
   if (!tag) return;
   if (donor.tags.indexOf(tag) !== -1) return;
   donor.tags.push(tag);
-  saveDonors();
   renderTags();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.tags.pop();
+    renderTags();
+    showToast(err.message || "השמירה נכשלה, נסה שוב");
+  }
 }
 
-window.removeTag = function removeTag(index) {
-  donor.tags.splice(index, 1);
-  saveDonors();
+window.removeTag = async function removeTag(index) {
+  var removed = donor.tags.splice(index, 1)[0];
   renderTags();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.tags.splice(index, 0, removed);
+    renderTags();
+    showToast(err.message || "השמירה נכשלה, נסה שוב");
+  }
 };
 
 var tagInput = document.getElementById("tagInput");
@@ -1299,12 +1345,17 @@ function renderAll() {
   renderTimeline();
 }
 
-function saveNotes() {
+async function saveNotes() {
   donor.internalStaffNote = internalStaffNote.value.trim();
   donor.publicPhoneNote = publicPhoneNote.value.trim();
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    showMessage(notesMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "update",
     entityType: "donor",
@@ -1316,7 +1367,7 @@ function saveNotes() {
   showMessage(notesMessage, "ההערות נשמרו בהצלחה");
 }
 
-function addDonation() {
+async function addDonation() {
   const amount = Number(amountInput.value);
   const gilayon = gilayonInput ? gilayonInput.value.trim() : "";
   const manualParsha = parshaInput ? parshaInput.value.trim() : "";
@@ -1345,6 +1396,10 @@ function addDonation() {
     (window.HebrewDate && window.HebrewDate.getParsha
       ? window.HebrewDate.getParsha(now)
       : "");
+  // Always created unpaid first, regardless of the "paid" checkbox — a
+  // donation only ever becomes paid through the same atomic server-side
+  // payment endpoint everything else uses (mark-paid below), so it always
+  // gets a real payments row and a lastPaymentId, never just local fields.
   const newDonation = {
     id: Date.now(),
     date: now.toISOString(),
@@ -1362,9 +1417,9 @@ function addDonation() {
     purposeType: selectedPurpose,
     customPurpose: customPurpose,
     paymentMethod: paymentMethod,
-    paid: paid,
-    paidPartial: paid ? amount : 0,
-    remainingDebt: paid ? 0 : amount,
+    paid: false,
+    paidPartial: 0,
+    remainingDebt: amount,
     note: note,
     approvedStatus: "טיוטה",
     messageStatus: "טיוטה",
@@ -1374,7 +1429,54 @@ function addDonation() {
   donor.donations.push(newDonation);
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.donations.pop();
+    showMessage(donationMessage, err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
+
+  // "שולם" was checked at creation — immediately mark it paid through the
+  // same atomic mark-paid endpoint the donation-edit dropdown uses, so this
+  // gets a real payments row too. The donation itself is already safely
+  // saved above regardless of what happens here.
+  if (paid) {
+    try {
+      var payRes = await apiFetch(
+        "/api/donors/" + donor.id + "/donations/" + newDonation.id + "/mark-paid",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            amount: amount,
+            phone: donor.phone || "",
+            donorName: donor.fullName || "",
+            paymentMethod: paymentMethod,
+            idempotencyKey: generateIdempotencyKey(),
+          }),
+        },
+      );
+      if (payRes.ok) {
+        var payBody = await payRes.json();
+        if (payBody && payBody.donation) {
+          Object.assign(newDonation, payBody.donation);
+        }
+      } else {
+        var payErrBody = null;
+        try { payErrBody = await payRes.json(); } catch (_) {}
+        showMessage(donationMessage, "התרומה נוספה, אך סימונה כשולמה נכשל: " + ((payErrBody && payErrBody.error) || "שגיאת שרת") + " — אפשר לסמן כשולם דרך עריכת התרומה", "error");
+        reconcileApprovalDrafts([newDonation]);
+        renderAll();
+        return;
+      }
+    } catch (_) {
+      showMessage(donationMessage, "התרומה נוספה, אך סימונה כשולמה נכשל עקב תקשורת — אפשר לסמן כשולם דרך עריכת התרומה", "error");
+      reconcileApprovalDrafts([newDonation]);
+      renderAll();
+      return;
+    }
+  }
+
   reconcileApprovalDrafts([newDonation]);
   AuditLog.record({
     action: "create",
@@ -1384,7 +1486,8 @@ function addDonation() {
     details:
       "נוספה תרומה/חוב בסך " + formatMoney(newDonation.amount) +
       " עבור " +
-      newDonation.finalPurpose,
+      newDonation.finalPurpose +
+      (paid ? " (שולמה מיידית)" : ""),
   });
 
   amountInput.value = "";
@@ -1400,7 +1503,8 @@ function addDonation() {
   renderAll();
 }
 
-function saveIvrSettings() {
+async function saveIvrSettings() {
+  var previousSettings = donor.phoneMessageSettings;
   donor.phoneMessageSettings = {
     includeInCalls: includeInCallsCheckbox.checked,
     allowPayment: allowPaymentCheckbox.checked,
@@ -1410,7 +1514,13 @@ function saveIvrSettings() {
 
   donor.updatedAt = new Date().toISOString();
 
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donor.phoneMessageSettings = previousSettings;
+    showToast(err.message || "השמירה נכשלה, נסה שוב");
+    return;
+  }
   AuditLog.record({
     action: "update",
     entityType: "donor",
@@ -1421,7 +1531,11 @@ function saveIvrSettings() {
   renderAll();
 }
 
-function registerPartialPayment() {
+let registeringPartialPayment = false; // re-entrancy guard, same purpose as savingDonationEdit
+
+async function registerPartialPayment() {
+  if (registeringPartialPayment) return;
+
   const amount = Number(partialAmountInput.value);
 
   if (!amount || amount <= 0) {
@@ -1444,44 +1558,93 @@ function registerPartialPayment() {
     return;
   }
 
-  const affectedDebts = [];
-
+  // Distribution plan only — no local mutation yet. Each affected debt is
+  // charged through its own real, atomic, idempotent server-side payment
+  // call below (oldest debt first, same order as before); the server is
+  // always the source of truth for the resulting paidPartial/remainingDebt/
+  // paid, never computed locally.
+  const plan = [];
   openDebts.forEach(function (debt) {
     if (remainingPayment <= 0) return;
-
     const debtAmount = Number(debt.remainingDebt);
+    const chargeAmount = Math.min(remainingPayment, debtAmount);
+    plan.push({ debt: debt, chargeAmount: chargeAmount });
+    remainingPayment -= chargeAmount;
+  });
 
-    if (remainingPayment >= debtAmount) {
-      debt.paidPartial = Number(debt.paidPartial || 0) + debtAmount;
-      debt.remainingDebt = 0;
-      debt.paid = true;
-      remainingPayment -= debtAmount;
-    } else {
-      debt.paidPartial = Number(debt.paidPartial || 0) + remainingPayment;
-      debt.remainingDebt = debtAmount - remainingPayment;
-      debt.paid = false;
-      remainingPayment = 0;
+  const method = partialPaymentMethod.value;
+  const sessionKey = generateIdempotencyKey();
+  const succeeded = [];
+  let failedAt = null;
+
+  registeringPartialPayment = true;
+  partialPaymentButton.disabled = true;
+  try {
+    for (var i = 0; i < plan.length; i++) {
+      var item = plan[i];
+      try {
+        var res = await apiFetch(
+          "/api/donors/" + donor.id + "/donations/" + item.debt.id + "/partial-payment",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              amount: item.chargeAmount,
+              phone: donor.phone || "",
+              donorName: donor.fullName || "",
+              paymentMethod: method,
+              idempotencyKey: sessionKey + ":" + item.debt.id,
+            }),
+          },
+        );
+        if (!res.ok) {
+          var errBody = null;
+          try { errBody = await res.json(); } catch (_) {}
+          failedAt = { item: item, message: (errBody && errBody.error) || "שגיאת שרת" };
+          break;
+        }
+        var body = await res.json();
+        if (body && body.donation) {
+          Object.assign(item.debt, body.donation);
+        }
+        succeeded.push(item);
+      } catch (_) {
+        failedAt = { item: item, message: "שגיאת תקשורת עם השרת" };
+        break;
+      }
     }
+  } finally {
+    registeringPartialPayment = false;
+    partialPaymentButton.disabled = false;
+  }
 
-    debt.lastPaymentMethod = partialPaymentMethod.value;
-    debt.updatedAt = new Date().toISOString();
-    affectedDebts.push(debt);
-  });
+  if (succeeded.length > 0) {
+    donor.updatedAt = new Date().toISOString();
+    reconcileApprovalDrafts(succeeded.map(function (s) { return s.debt; }));
+    AuditLog.record({
+      action: "payment",
+      entityType: "donation",
+      entityId: donor.id,
+      entityName: donor.fullName,
+      details:
+        "נרשם תשלום חלקי בסך " + formatMoney(succeeded.reduce(function (sum, s) { return sum + s.chargeAmount; }, 0)) +
+        " באמצעי " + method +
+        " (" + succeeded.length + " מתוך " + plan.length + " תרומות שהושפעו)",
+    });
+  }
 
-  donor.updatedAt = new Date().toISOString();
+  if (failedAt) {
+    var doneSoFar = succeeded.reduce(function (sum, s) { return sum + s.chargeAmount; }, 0);
+    showMessage(
+      partialMessage,
+      doneSoFar > 0
+        ? "נרשם בהצלחה " + formatMoney(doneSoFar) + " מתוך " + formatMoney(amount) + " — ההמשך נכשל: " + failedAt.message + ". נסה שוב עבור היתרה."
+        : "התשלום החלקי נכשל: " + failedAt.message,
+      "error",
+    );
+    renderAll();
+    return;
+  }
 
-  saveDonors();
-  reconcileApprovalDrafts(affectedDebts);
-  AuditLog.record({
-    action: "payment",
-    entityType: "donation",
-    entityId: donor.id,
-    entityName: donor.fullName,
-    details:
-      "נרשם תשלום חלקי בסך " + formatMoney(amount) +
-      " באמצעי " +
-      partialPaymentMethod.value,
-  });
   partialAmountInput.value = "";
   showMessage(partialMessage, "התשלום החלקי נרשם בהצלחה");
   renderAll();

@@ -45,12 +45,23 @@ const PROJECT_DIR = path.join(__dirname, "..");
 const DB_PATH = path.join(PROJECT_DIR, "data.sqlite");
 const UPLOAD_DIR = path.resolve(PROJECT_DIR, "uploads", "ivr-audio");
 
-function isFormatReady(filename) {
+// Every function below accepts an optional trailing dbPath/uploadDir
+// override, defaulting to the real production DB_PATH/UPLOAD_DIR above when
+// omitted — so `node scripts/audit-ivr-audio-slots.js` (manual SSH use) and
+// the --check CI steps behave EXACTLY as before, byte-for-byte, with zero
+// arguments. The override exists solely so
+// scripts/audit-ivr-audio-slots.test.js can point every function at a
+// temporary fixture DB + temp upload dir instead of the real, live ones —
+// tests must never read or depend on real production state (see that
+// file's header for why this changed).
+
+function isFormatReady(filename, uploadDir) {
+  const dir = uploadDir || UPLOAD_DIR;
   if (!filename) return false;
-  const containment = isPathContained(UPLOAD_DIR, filename);
+  const containment = isPathContained(dir, filename);
   if (!containment.ok || !fs.existsSync(containment.resolvedPath)) return false;
   const derivedFilename = computeDerivedFilename(filename);
-  const derivedContainment = isPathContained(UPLOAD_DIR, derivedFilename);
+  const derivedContainment = isPathContained(dir, derivedFilename);
   if (derivedContainment.ok && fs.existsSync(derivedContainment.resolvedPath)) {
     if (isValidDerivedProbe(probeAudioSafe(derivedContainment.resolvedPath))) return true;
   }
@@ -58,22 +69,23 @@ function isFormatReady(filename) {
   return false;
 }
 
-function describeSlot(filename) {
+function describeSlot(filename, uploadDir) {
+  const dir = uploadDir || UPLOAD_DIR;
   if (!filename) return null;
-  const containment = isPathContained(UPLOAD_DIR, filename);
+  const containment = isPathContained(dir, filename);
   return {
     filename: filename,
     pathSafe: containment.ok,
     existsOnDisk: containment.ok ? fs.existsSync(containment.resolvedPath) : false,
-    wouldBeFormatReady: isFormatReady(filename),
+    wouldBeFormatReady: isFormatReady(filename, dir),
   };
 }
 
 // Pure(ish) computation — the ONE query, read-only, shared by both the
 // human-readable report and the --check assertions, so the two modes can
 // never silently disagree with each other.
-function computeReport() {
-  const db = new DatabaseSync(DB_PATH, { readOnly: true });
+function computeReport(dbPath, uploadDir) {
+  const db = new DatabaseSync(dbPath || DB_PATH, { readOnly: true });
   try {
     const rows = db.prepare(
       "SELECT audioId, category, status, audioFile1, audioFile2, audioFile3 FROM ivr_audio_recordings WHERE category != 'paymsg' ORDER BY category, audioId"
@@ -85,8 +97,8 @@ function computeReport() {
 
     rows.forEach(function (row) {
       if (row.audioFile1) slot1Count++;
-      if (row.audioFile2) { slot2Count++; slot2Details.push(Object.assign({ audioId: row.audioId, category: row.category, status: row.status }, describeSlot(row.audioFile2))); }
-      if (row.audioFile3) { slot3Count++; slot3Details.push(Object.assign({ audioId: row.audioId, category: row.category, status: row.status }, describeSlot(row.audioFile3))); }
+      if (row.audioFile2) { slot2Count++; slot2Details.push(Object.assign({ audioId: row.audioId, category: row.category, status: row.status }, describeSlot(row.audioFile2, uploadDir))); }
+      if (row.audioFile3) { slot3Count++; slot3Details.push(Object.assign({ audioId: row.audioId, category: row.category, status: row.status }, describeSlot(row.audioFile3, uploadDir))); }
     });
 
     return { rows: rows, slot1Count: slot1Count, slot2Count: slot2Count, slot3Count: slot3Count, slot2Details: slot2Details, slot3Details: slot3Details };
@@ -103,9 +115,10 @@ function computeReport() {
 // Latin/digits/hyphen only (see sanitizeAudioIdForFilename in
 // ivr-audio.service.js — a no-op for these IDs), so building a literal
 // prefix match here is safe.
-function findOrphanSlotFiles(legacyAudioIds) {
-  if (!fs.existsSync(UPLOAD_DIR)) return [];
-  const entries = fs.readdirSync(UPLOAD_DIR);
+function findOrphanSlotFiles(legacyAudioIds, uploadDir) {
+  const dir = uploadDir || UPLOAD_DIR;
+  if (!fs.existsSync(dir)) return [];
+  const entries = fs.readdirSync(dir);
   const orphans = [];
   legacyAudioIds.forEach(function (audioId) {
     const escaped = String(audioId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -117,8 +130,8 @@ function findOrphanSlotFiles(legacyAudioIds) {
   return orphans;
 }
 
-function printFullReport() {
-  const report = computeReport();
+function printFullReport(dbPath, uploadDir) {
+  const report = computeReport(dbPath, uploadDir);
 
   console.log("=== ivr_audio_recordings — legacy (non-paymsg) slot inventory ===");
   console.log("total legacy rows: " + report.rows.length);
@@ -141,8 +154,8 @@ function printFullReport() {
 // PASS/FAIL + a count, NEVER a filename/path/donor-facing text. Sets
 // process.exitCode so the calling shell (and therefore the GitHub Actions
 // step) fails visibly, without any log content needing to be read.
-function runCheck(checkName, expectRaw) {
-  const report = computeReport();
+function runCheck(checkName, expectRaw, dbPath, uploadDir) {
+  const report = computeReport(dbPath, uploadDir);
   let actual, label, pass;
 
   switch (checkName) {
@@ -162,7 +175,7 @@ function runCheck(checkName, expectRaw) {
       pass = actual === Number(expectRaw);
       break;
     case "slotFilesAbsent": {
-      const orphans = findOrphanSlotFiles(report.rows.map(function (r) { return r.audioId; }));
+      const orphans = findOrphanSlotFiles(report.rows.map(function (r) { return r.audioId; }), uploadDir);
       actual = orphans.length;
       label = "orphan slot-2/3 files on disk for legacy audioIds (DB-independent scan)";
       pass = actual === 0;
@@ -189,10 +202,16 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  // --db / --uploadDir: undocumented in the usage comment at the top on
+  // purpose — real SSH/CI usage never passes them, so real usage is
+  // byte-for-byte unchanged. They exist solely so
+  // audit-ivr-audio-slots.test.js can point a real CLI subprocess at a
+  // temporary fixture DB + temp upload dir instead of the real, live
+  // data.sqlite/uploads/ivr-audio — see that file's header.
   if (args.check) {
-    runCheck(args.check, args.expect);
+    runCheck(args.check, args.expect, args.db, args.uploadDir);
   } else {
-    printFullReport();
+    printFullReport(args.db, args.uploadDir);
   }
 }
 

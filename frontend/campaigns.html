@@ -176,8 +176,22 @@
 
               <label class="aud-row selected" data-value="debt">
                 <input type="radio" name="audience" value="debt" checked />
-                <span class="aud-label">כל בעלי החוב</span>
+                <span class="aud-label">בעלי חוב עד תקרה</span>
                 <span class="aud-badge" id="badgeDebt">…</span>
+                <div class="aud-sub">
+                  <label for="maxDebtInput" style="font-size:.85em;color:#555;display:block;margin-bottom:4px;">מקסימום חוב (₪)</label>
+                  <input id="maxDebtInput" type="number" min="0.01" step="0.01" value="200" placeholder="לדוגמה: 200"
+                    style="width:100%;padding:8px 12px;border:1px solid #ccc;border-radius:6px;font-size:14px;box-sizing:border-box;" />
+                </div>
+              </label>
+
+              <!-- deliberate, separate choice — reaching the old uncapped
+                   behavior now requires explicitly selecting this row, not
+                   just clearing the cap field above. -->
+              <label class="aud-row" data-value="debt_unbounded">
+                <input type="radio" name="audience" value="debt_unbounded" />
+                <span class="aud-label">כל בעלי החוב (ללא הגבלת סכום)</span>
+                <span class="aud-badge zero" id="badgeDebtUnbounded">…</span>
               </label>
 
               <!-- by tag — shown only if tags exist -->
@@ -316,5 +330,6 @@
     <script src="js/system-clock.js"></script>
     <script src="js/toast.js"></script>
     <script src="js/campaigns.js"></script>
+    <script src="js/ai-assistant.js"></script>
   </body>
 </html>

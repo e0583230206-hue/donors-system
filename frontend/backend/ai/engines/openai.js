@@ -7,34 +7,7 @@
 const https  = require("https");
 const { buildDonorContext, buildGlobalContext } = require("../context");
 const { format, parseOpenAIResponse }          = require("../formatter");
-
-// ─── Privacy sanitiser ────────────────────────────────────────────────────────
-// Removes all PII and sensitive fields before constructing the prompt.
-// Call this on any context object before it reaches buildSystemPrompt.
-function sanitizeContextForOpenAI(ctx) {
-  if (!ctx) return ctx;
-  if (ctx.type === "donor" && ctx.donor) {
-    // Work on a shallow-cloned donor so we don't mutate the original
-    const d = Object.assign({}, ctx.donor);
-    // Strip all phone fields
-    delete d.phone;
-    delete d.phone2;
-    delete d.phone3;
-    delete d.phone4;
-    delete d.phones;
-    delete d.ivrApprovedPhones;
-    // Strip all notes / internal comments
-    delete d.notes;
-    delete d.internalStaffNote;
-    delete d.publicPhoneNote;
-    // Strip identity / address
-    delete d.idNumber;
-    delete d.address;
-    return Object.assign({}, ctx, { donor: d });
-  }
-  // Global context contains no per-donor PII — summary stats only — safe as-is.
-  return ctx;
-}
+const { sanitizeContextForOpenAI }             = require("./sanitizer");
 
 // ─── System prompt ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {

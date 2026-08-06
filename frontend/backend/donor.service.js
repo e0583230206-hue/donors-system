@@ -224,4 +224,5 @@ module.exports = {
   getDonorForIvr,
   findDonorByAniSafe,
   findDonorByPhoneOrIdNumber,
+  allAppDonors,
 };

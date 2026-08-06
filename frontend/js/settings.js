@@ -787,7 +787,13 @@ reloadWorkers().then(function () { renderWorkers(); });
     }).then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.ok) {
-          showSrvMsg("✅ שוחזרו " + data.restored + " קבצים מ-" + filename, "success");
+          // data.restored is now { tableName: rowCount, ... } — every real
+          // table, not just the app-settings subset — summarize as table
+          // count + total rows rather than the old (misleadingly narrow)
+          // single number.
+          var tableNames = data.restored && typeof data.restored === "object" ? Object.keys(data.restored) : [];
+          var totalRows  = tableNames.reduce(function (sum, t) { return sum + (Number(data.restored[t]) || 0); }, 0);
+          showSrvMsg("✅ שוחזרו " + tableNames.length + " טבלאות (" + totalRows + " רשומות בסה\"כ) מ-" + filename, "success");
           setTimeout(function () { location.reload(); }, 1500);
         } else {
           showSrvMsg("❌ " + (data.error || "שגיאה בשחזור"), "error");

@@ -46,6 +46,10 @@
 
       <section class="panel">
         <h2>📋 פעולות אחרונות</h2>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:10px">
+          יומן עבודה נוח לקריאה, ניתן לעריכה/מחיקה על ידי כל עובד — לרשומה הרשמית והבלתי-ניתנת-לשינוי ראו
+          <strong>🔒 יומן ביקורת</strong> למטה (מנהלים בלבד).
+        </p>
 
         <div id="logsPaginationBar" class="pagination-bar"></div>
 
@@ -60,6 +64,30 @@
             </thead>
 
             <tbody id="logsTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" id="auditLogPanel" style="display:none">
+        <h2>🔒 יומן ביקורת (רשומה רשמית)</h2>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:10px">
+          רשומה שרתית, בלתי-ניתנת לעריכה או מחיקה על ידי אף עובד — כולל מנהלים. מוצגת לקריאה בלבד.
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>זמן</th>
+                <th>פעולה</th>
+                <th>סוג רשומה</th>
+                <th>שם</th>
+                <th>בוצע על ידי</th>
+                <th>פרטים</th>
+              </tr>
+            </thead>
+
+            <tbody id="auditLogTable"></tbody>
           </table>
         </div>
       </section>

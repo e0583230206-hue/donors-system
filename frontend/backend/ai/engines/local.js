@@ -8,6 +8,7 @@ const { format }                                = require("../formatter");
 const donorHandlers                             = require("../handlers/donor");
 const systemHandlers                            = require("../handlers/system");
 const insightHandlers                           = require("../handlers/insights");
+const extendedHandlers                          = require("../handlers/extended");
 
 const DONOR_INTENTS = new Set([
   "donor_summary","donor_last_donation","donor_debt_list","donor_debt_total",
@@ -28,6 +29,7 @@ const INSIGHT_INTENTS = new Set([
   "insight_who_to_call","insight_quick_wins","insight_at_risk","insight_follow_up",
   "insight_potential","insight_success_rate","insight_debt_priority","insight_before_holiday",
 ]);
+const EXTENDED_INTENTS = new Set(extendedHandlers.HANDLERS);
 
 function fallback(donorId) {
   const obj = {
@@ -47,7 +49,7 @@ function fallback(donorId) {
   return { answer: format(obj), suggestions: obj.suggestions };
 }
 
-async function query({ question, donorId, history, pageContext }) {
+async function query({ question, donorId, history, pageContext, role }) {
   const detected = detectIntent(question, history || [], pageContext || "global");
   const { intent, scope, confidence, entities } = detected;
 
@@ -114,6 +116,28 @@ async function query({ question, donorId, history, pageContext }) {
   if (INSIGHT_INTENTS.has(intent)) {
     const ctx    = buildGlobalContext();
     const result = insightHandlers.dispatch(intent, ctx);
+    if (!result) return Object.assign(fallback(donorId), { intent, model: "local", fallback: false, debug: { intent, confidence, entities, pageContext } });
+    return {
+      answer:      format(result),
+      intent,
+      model:       "local",
+      fallback:    false,
+      suggestions: result.suggestions || [],
+      debug:       { intent, confidence, entities, pageContext },
+    };
+  }
+
+  // ── Extended-domain intents (Phase D) ──────────────────────────────────────
+  if (EXTENDED_INTENTS.has(intent)) {
+    if (!extendedHandlers.isRoleAllowed(intent, role)) {
+      return {
+        answer: "אין הרשאה לצפות במידע זה מתפקידך הנוכחי.",
+        intent, model: "local", fallback: false,
+        suggestions: ["מצב המערכת"],
+        debug: { intent, confidence, entities, pageContext, deniedForRole: role || null },
+      };
+    }
+    const result = extendedHandlers.dispatch(intent);
     if (!result) return Object.assign(fallback(donorId), { intent, model: "local", fallback: false, debug: { intent, confidence, entities, pageContext } });
     return {
       answer:      format(result),

@@ -55,6 +55,16 @@ const INTENTS = [
   { name: "insight_success_rate",  scope: "any",    kw: ["שיעור גביה", "אחוז הצלחה", "כמה הצלחנו", "יחס גביה", "ביצועי גביה", "מה האחוז"] },
   { name: "insight_debt_priority", scope: "any",    kw: ["איזה חוב לטפל", "קדימות טיפול", "ראשון לטפל", "לפי דחיפות", "טיפול בחובות", "לסדר"] },
   { name: "insight_before_holiday",scope: "any",    kw: ["לפני חג", "ראש השנה", "פסח", "חג", "הכנה לחג", "ערב חג", "קמפיין חג", "לפני החג"] },
+
+  // Extended domains (Phase D) — IVR monitor, Click2Call, payments,
+  // audit history, Alfon sync, IVR audio recordings, settings overview.
+  { name: "ivr_status",          scope: "extended", kw: ["ניטור מוקד", "דוח שיחות יומי", "כמה שיחות נכנסו היום", "מסך ניטור", "התראות מוקד טלפוני"] },
+  { name: "click2call_recent",   scope: "extended", kw: ["חיוגים אחרונים מהמערכת", "רשימת חיוגים יזומים", "היסטוריית חיוגים מהמערכת"] },
+  { name: "payments_stats",      scope: "extended", kw: ["פירוט טבלת תשלומים", "נתוני טבלת תשלומים", "סיכום תשלומים טכני"] },
+  { name: "audit_recent",        scope: "extended", kw: ["יומן ביקורת אחרון", "מי ביצע פעולות במערכת", "רשימת פעולות מנהלים אחרונות"] },
+  { name: "alfon_sync_status",   scope: "extended", kw: ["קבצים ממתינים לאישור אלפון", "ייבוא אלפון ממתין לבדיקה", "סטטוס סנכרון אלפון"] },
+  { name: "recordings_overview", scope: "extended", kw: ["רשימת הקלטות מוגדרות", "כמה הקלטות מוגדרות במערכת"] },
+  { name: "settings_overview",   scope: "extended", kw: ["כמה עובדים פעילים יש", "מספר עובדים רשומים במערכת"] },
 ];
 
 // ─── Follow-up patterns ────────────────────────────────────────────────────────

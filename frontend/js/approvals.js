@@ -15,7 +15,7 @@ var approvalPage = 0;
 var APPROVAL_PAGE_SIZE = 25;
 
 function saveApprovals() {
-  Database.save("approvals", approvals);
+  return Database.save("approvals", approvals);
 }
 
 // formatMoney is defined globally in database.js
@@ -77,7 +77,7 @@ function buildPhoneText(donor, donation) {
   return text;
 }
 
-function createDraftApprovals() {
+async function createDraftApprovals() {
   const newDrafts = [];
   let updatedDrafts = 0;
   let cancelledDrafts = 0;
@@ -136,8 +136,15 @@ function createDraftApprovals() {
     });
   });
 
+  const previousApprovals = approvals;
   approvals = approvals.concat(newDrafts);
-  saveApprovals();
+  try {
+    await saveApprovals();
+  } catch (err) {
+    approvals = previousApprovals;
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "create",
     entityType: "approval",
@@ -163,7 +170,7 @@ function createDraftApprovals() {
   );
 }
 
-function approveItem(id) {
+async function approveItem(id) {
   const approver = approverSelect.value;
 
   if (approver === "") {
@@ -177,12 +184,19 @@ function approveItem(id) {
 
   if (!approval) return;
 
+  const previous = { status: approval.status, approvedBy: approval.approvedBy, approvedAt: approval.approvedAt, cancelledAt: approval.cancelledAt };
   approval.status = "אושר";
   approval.approvedBy = approver;
   approval.approvedAt = new Date().toISOString();
   approval.cancelledAt = "";
 
-  saveApprovals();
+  try {
+    await saveApprovals();
+  } catch (err) {
+    Object.assign(approval, previous);
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "approve",
     entityType: "approval",
@@ -193,17 +207,24 @@ function approveItem(id) {
   renderApprovals();
 }
 
-function cancelApproval(id) {
+async function cancelApproval(id) {
   const approval = approvals.find(function (item) {
     return item.id === id;
   });
 
   if (!approval) return;
 
+  const previous = { status: approval.status, cancelledAt: approval.cancelledAt };
   approval.status = "בוטל";
   approval.cancelledAt = new Date().toISOString();
 
-  saveApprovals();
+  try {
+    await saveApprovals();
+  } catch (err) {
+    Object.assign(approval, previous);
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "cancel",
     entityType: "approval",
@@ -214,19 +235,26 @@ function cancelApproval(id) {
   renderApprovals();
 }
 
-function returnToDraft(id) {
+async function returnToDraft(id) {
   const approval = approvals.find(function (item) {
     return item.id === id;
   });
 
   if (!approval) return;
 
+  const previous = { status: approval.status, approvedBy: approval.approvedBy, approvedAt: approval.approvedAt, cancelledAt: approval.cancelledAt };
   approval.status = "טיוטה";
   approval.approvedBy = "";
   approval.approvedAt = "";
   approval.cancelledAt = "";
 
-  saveApprovals();
+  try {
+    await saveApprovals();
+  } catch (err) {
+    Object.assign(approval, previous);
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "status",
     entityType: "approval",
@@ -237,12 +265,18 @@ function returnToDraft(id) {
   renderApprovals();
 }
 
-function deleteApproval(id) {
+async function deleteApproval(id) {
   const deletedApproval = approvals.find(function (item) { return item.id === id; });
   if (!deletedApproval || pendingApprovalDeletions[id]) return;
 
   approvals = approvals.filter(function (item) { return item.id !== id; });
-  saveApprovals();
+  try {
+    await saveApprovals();
+  } catch (err) {
+    approvals.push(deletedApproval);
+    showMessage(err.message || "מחיקת החיוב נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "delete",
     entityType: "approval",
@@ -253,9 +287,15 @@ function deleteApproval(id) {
   renderApprovals();
 
   if (typeof showToast === "function") {
-    showToast('חיוב "' + deletedApproval.donorName + '" נמחק', function () {
+    showToast('חיוב "' + deletedApproval.donorName + '" נמחק', async function () {
       approvals.push(deletedApproval);
-      saveApprovals();
+      try {
+        await saveApprovals();
+      } catch (err) {
+        approvals = approvals.filter(function (item) { return item.id !== id; });
+        showMessage(err.message || "שחזור החיוב נכשל, נסה שוב", "error");
+        return;
+      }
       renderApprovals();
     }, 5000);
   } else {

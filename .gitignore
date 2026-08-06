@@ -8,6 +8,13 @@ npm-debug.log
 *.env
 !.env.example
 
+# Ad-hoc .env backup snapshots (created before env changes, e.g. .env.bak-before-*)
+# — same secrets risk as .env itself, but the *.env pattern above doesn't
+# match "*.env.bak-*" (suffix, not extension). Live copies belong in
+# /root/secrets-archive/donors-system/, never in the repo tree.
+.env.bak*
+*.env.bak*
+
 # Database (מכיל נתוני משתמשים)
 *.sqlite
 *.db

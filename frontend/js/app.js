@@ -120,6 +120,15 @@ async function updateServerDashboard() {
 
     const stats = await response.json();
 
+    // Server-computed donor count is always authoritative — the local
+    // cache (used for the very first paint, before this fetch resolves)
+    // can be stale (e.g. this tab was left open across another session's
+    // bulk delete, or its own initial load raced a network blip). Fixes
+    // the dashboard count staying frozen/wrong indefinitely.
+    if (stats && typeof stats.totalDonors === "number") {
+      donorsTotal.innerText = stats.totalDonors;
+    }
+
     if (stats && typeof stats.totalPaymentAmount === "number" && donors.length === 0) {
       paidTotal.innerText = formatMoney(stats.totalPaymentAmount);
     }
@@ -250,6 +259,15 @@ Database.whenReady(function () {
   updateDashboard();
   renderChart();
   loadIvrChart();
+});
+
+// The periodic visibilitychange-triggered background refresh (database.js)
+// pulls fresh donors into local cache but never re-rendered anything on
+// this page until now — this is what let a stale count sit on screen
+// indefinitely even after the underlying data changed.
+window.addEventListener("crm-donors-refreshed", function () {
+  donors = Database.get("donors");
+  updateDashboard();
 });
 
 // ── IVR Payments chart ────────────────────────────────────────────────────────

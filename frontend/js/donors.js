@@ -47,8 +47,9 @@ function updateNamesList() {
 }
 
 function saveDonors() {
-  Database.save("donors", donors);
+  var pushPromise = Database.save("donors", donors);
   updateNamesList();
+  return pushPromise;
 }
 
 // showMessage, normalizePhoneLocal are defined in utils.js (shared — see #28)
@@ -66,7 +67,7 @@ function getCurrentHebrewYear() {
   return new Date().toLocaleDateString("he-IL-u-ca-hebrew", { year: "numeric" });
 }
 
-function addDonor() {
+async function addDonor() {
   const fullName = nameInput.value.trim();
   const phone = phoneInput.value.trim();
   const city = cityInput.value.trim();
@@ -83,14 +84,26 @@ function addDonor() {
     return;
   }
 
-  const normPhone = normalizePhoneLocal(phone);
-  const phoneExists = donors.some(function (donor) {
-    return normalizePhoneLocal(donor.phone) === normPhone;
+  // Checked across every phone field of every existing donor (not just
+  // their primary phone) — consistent with Excel-import matching
+  // (donorAllPhones() below) and with how the rest of the app already
+  // treats phone2/3/4/ivrApprovedPhones as valid identifying numbers.
+  // Warns rather than blocks: two people can legitimately share one phone
+  // (e.g. family members), which a hard block couldn't distinguish from an
+  // actual data-entry mistake — the admin sees exactly who else has this
+  // number and decides.
+  const normalizedNewPhone = normalizePhoneLocal(phone);
+  const matchingExistingDonors = donors.filter(function (donor) {
+    return donorAllPhones(donor).indexOf(normalizedNewPhone) !== -1;
   });
 
-  if (phoneExists) {
-    showMessage("תורם עם מספר טלפון זה כבר קיים", "error");
-    return;
+  if (matchingExistingDonors.length > 0) {
+    var existingNames = matchingExistingDonors.map(function (d) { return d.fullName || "(ללא שם)"; }).join(", ");
+    var proceedAdd = confirm(
+      "⚠️ מספר הטלפון " + phone + " כבר קיים אצל: " + existingNames +
+      "\n\nלשמור בכל זאת תורם חדש עם אותו מספר?"
+    );
+    if (!proceedAdd) return;
   }
 
   const newDonor = {
@@ -112,7 +125,13 @@ function addDonor() {
   };
 
   donors.push(newDonor);
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donors.pop();
+    showMessage(err.message || "השמירה נכשלה, נסה שוב", "error");
+    return;
+  }
 
   nameInput.value = "";
   phoneInput.value = "";
@@ -333,13 +352,20 @@ if (bulkSendCampaignBtn) {
   });
 }
 
-function deleteDonor(id) {
+async function deleteDonor(id) {
   const deletedDonor = donors.find(function (donor) { return donor.id === id; });
   if (!deletedDonor || pendingDonorDeletions[id]) return;
 
   // Remove immediately from array and save to server/localStorage right away
+  const previousDonors = donors;
   donors = donors.filter(function (donor) { return donor.id !== id; });
-  saveDonors();
+  try {
+    await saveDonors();
+  } catch (err) {
+    donors = previousDonors;
+    showMessage(err.message || "מחיקת התורם נכשלה, נסה שוב", "error");
+    return;
+  }
   AuditLog.record({
     action: "delete",
     entityType: "donor",
@@ -351,12 +377,18 @@ function deleteDonor(id) {
 
   if (typeof showToast === "function") {
     // Undo restores the donor back (client-side only, re-saves to server)
-    showToast('תורם "' + deletedDonor.fullName + '" נמחק', function () {
+    showToast('תורם "' + deletedDonor.fullName + '" נמחק', async function () {
       donors.push(deletedDonor);
       donors.sort(function (a, b) {
         return (a.fullName || "").localeCompare(b.fullName || "", "he");
       });
-      saveDonors();
+      try {
+        await saveDonors();
+      } catch (err) {
+        donors = donors.filter(function (donor) { return donor.id !== id; });
+        showMessage(err.message || "שחזור התורם נכשל, נסה שוב", "error");
+        return;
+      }
       renderDonors();
     }, 5000);
   } else {
@@ -715,9 +747,10 @@ function buildExcelPreview(rows, existingDonors) {
   return { toCreate: toCreate, toUpdate: toUpdateOrder, toSkip: toSkip };
 }
 
-function applyExcelImport(preview) {
+async function applyExcelImport(preview) {
+  var preImportDonorsJson = JSON.stringify(donors);
   try {
-    localStorage.setItem("importUndo",     JSON.stringify(donors));
+    localStorage.setItem("importUndo",     preImportDonorsJson);
     localStorage.setItem("importUndoDate", new Date().toLocaleString("he-IL"));
     var undoBtn = document.getElementById("undoImportButton");
     if (undoBtn) undoBtn.style.display = "";
@@ -725,7 +758,7 @@ function applyExcelImport(preview) {
 
   var now  = new Date();
   var idBase = Date.now(), idSeq = 0;
-  var donorsCreated = 0, donorsUpdated = 0, donationsAdded = 0;
+  var donorsCreated = 0, donorsUpdated = 0, donationsAdded = 0, donationsSkippedDuplicate = 0;
 
   preview.toCreate.forEach(function (group) {
     var pn = normPhone(group.phone);
@@ -774,20 +807,55 @@ function applyExcelImport(preview) {
     }
     if (group.notes && !target.notes) target.notes = group.notes;
     if (!target.donations) target.donations = [];
+
+    // Re-importing the same file (accidentally, or "let me re-run to catch
+    // new rows") used to append every donation row again unconditionally —
+    // a same-day, same-amount, same-purpose row already present on this
+    // donor is treated as a duplicate and skipped instead, rather than
+    // silently doubling the donor's debt/history. Signature is computed the
+    // same way for existing donations (already-stored fields) and freshly
+    // parsed ones (via _buildDonation) so the comparison is apples-to-apples.
+    var existingSignatures = {};
+    target.donations.forEach(function (d) { existingSignatures[_donationSignature(d)] = true; });
+
     group.donations.forEach(function (donationEntry) {
-      target.donations.push(_buildDonation(donationEntry, idBase + (++idSeq), now));
+      var candidate = _buildDonation(donationEntry, idBase + (++idSeq), now);
+      var sig = _donationSignature(candidate);
+      if (existingSignatures[sig]) {
+        donationsSkippedDuplicate++;
+        return;
+      }
+      existingSignatures[sig] = true; // also catches a repeated row within this same file
+      target.donations.push(candidate);
       donationsAdded++;
     });
     target.updatedAt = now.toISOString();
     donorsUpdated++;
   });
 
-  saveDonors();
-  addLog("יבוא מאקסל: " + donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות, " + preview.toSkip.length + " דולגו");
-  AuditLog.record({ action: "import", entityType: "donor", entityId: "", entityName: "ייבוא מאקסל", details: donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות" });
-  showMessage("✅ יבוא הושלם: " + donorsCreated + " תורמים חדשים | " + donorsUpdated + " קיימים עודכנו | " + donationsAdded + " תרומות נוספו" + (preview.toSkip.length > 0 ? " | " + preview.toSkip.length + " שורות דולגו" : ""));
+  try {
+    await saveDonors();
+  } catch (err) {
+    try { donors = JSON.parse(preImportDonorsJson); } catch (_) {}
+    showMessage((err.message || "השמירה נכשלה") + " — הייבוא לא הושלם, נסה שוב", "error");
+    renderDonors();
+    return;
+  }
+  addLog("יבוא מאקסל: " + donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות, " + preview.toSkip.length + " דולגו" + (donationsSkippedDuplicate > 0 ? ", " + donationsSkippedDuplicate + " תרומות כפולות נמנעו" : ""));
+  AuditLog.record({ action: "import", entityType: "donor", entityId: "", entityName: "ייבוא מאקסל", details: donorsCreated + " חדשים, " + donorsUpdated + " עודכנו, " + donationsAdded + " תרומות" + (donationsSkippedDuplicate > 0 ? ", " + donationsSkippedDuplicate + " כפילויות נמנעו" : "") });
+  showMessage("✅ יבוא הושלם: " + donorsCreated + " תורמים חדשים | " + donorsUpdated + " קיימים עודכנו | " + donationsAdded + " תרומות נוספו" +
+    (preview.toSkip.length > 0 ? " | " + preview.toSkip.length + " שורות דולגו" : "") +
+    (donationsSkippedDuplicate > 0 ? " | " + donationsSkippedDuplicate + " תרומות כפולות זוהו ונמנעו" : ""));
   renderDonors();
   if (preview.toSkip.length > 0) { try { renderImportSkippedReport(preview.toSkip); } catch (_) {} }
+}
+
+// Identity used to detect a re-imported duplicate donation on an existing
+// donor: same calendar day + same amount + same purpose + same gilayon.
+// Deliberately excludes id/createdAt/paid-status so a re-import is caught
+// even if the row's paid state was edited manually in between.
+function _donationSignature(d) {
+  return [d.regularDate || "", Number(d.amount || 0), d.finalPurpose || "", d.gilayon || ""].join("|");
 }
 
 function _buildDonation(entry, id, now) {
@@ -964,22 +1032,27 @@ function handleFileUpload(event) {
   if (!undoBtn) return;
   if (localStorage.getItem("importUndo")) undoBtn.style.display = "";
 
-  undoBtn.addEventListener("click", function () {
+  undoBtn.addEventListener("click", async function () {
     var snapshot = localStorage.getItem("importUndo");
     var dateStr  = localStorage.getItem("importUndoDate") || "";
     if (!snapshot) { showMessage("אין ייבוא לביטול", "error"); return; }
     if (!confirm("לבטל את הייבוא האחרון" + (dateStr ? " מב-" + dateStr : "") + "?")) return;
+    var beforeUndoJson = JSON.stringify(donors);
     try {
       var prev = JSON.parse(snapshot);
       donors.splice(0, donors.length);
       prev.forEach(function (d) { donors.push(d); });
-      saveDonors();
+      await saveDonors();
       localStorage.removeItem("importUndo");
       localStorage.removeItem("importUndoDate");
       undoBtn.style.display = "none";
       showMessage("✅ הייבוא בוטל — הנתונים שוחזרו");
       renderDonors();
-    } catch (_) { showMessage("שגיאה בשחזור", "error"); }
+    } catch (err) {
+      try { donors = JSON.parse(beforeUndoJson); } catch (_) {}
+      showMessage((err && err.message) || "שגיאה בשחזור", "error");
+      renderDonors();
+    }
   });
 }());
 

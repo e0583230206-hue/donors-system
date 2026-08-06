@@ -43,6 +43,7 @@ const {
   getPaymentStats,
   markDonationPaidManually,
   cancelManualDonationPayment,
+  recordManualPartialPayment,
   insertAuditLog,
   getAuditLogs,
   insertSyncLog,
@@ -70,11 +71,26 @@ const {
   getIvrVoiceMessageById,
   updateIvrVoiceMessageStatus,
   IVR_VOICE_MESSAGE_STATUSES,
+  upsertSoftphoneCall,
+  getSoftphoneCalls,
+  getSoftphoneCallById,
+  deleteSoftphoneCall,
+  getSoftphoneContacts,
+  createSoftphoneContact,
+  updateSoftphoneContact,
+  deleteSoftphoneContact,
+  findSoftphoneContactByAnyPhone,
 } = require("./db");
 
 const { parseCsv, buildPreview, applySync, normPhone } = require("./sync.service");
 const CITY_MAP = require("./city_map");
 const { queryAI } = require("./ai");
+const { recordAiQuery } = require("./ai/audit");
+const aiCapabilities    = require("./ai/capabilities");
+const { searchDonors }  = require("./ai/search");
+const aiActions         = require("./ai/actions");
+require("./ai/actions/lowrisk");  // self-registers Phase F low-risk actions
+require("./ai/actions/highrisk"); // self-registers Phase G actions, disabled by default
 
 const {
   ROLES,
@@ -87,7 +103,8 @@ const {
 } = require("./auth.service");
 
 const { handleIvrQuery, ivrErrorResponse } = require("./ivr.service");
-const { getDonorForIvr, normalizePhone }   = require("./donor.service");
+const { getDonorForIvr, normalizePhone, normalizeIdNumber, allAppDonors, getAllDonorPhones } = require("./donor.service");
+const callClassifier = require("../js/softphone-call-classifier.js");
 
 // Isolated Technoline fileLink/fileName trial (OPEN-001 experiment) — see
 // ivr-audio-trial.route.js header. Deliberately does NOT touch ivr.js,
@@ -1276,6 +1293,51 @@ app.post(
   }
 );
 
+// Records a genuine partial payment (does not necessarily fully close the
+// donation) as a single atomic server-side operation with a real payments
+// row — same idempotency/rollback contract as mark-paid above, via
+// recordManualPartialPayment() in db.js. Used by the donor-card "תשלום
+// חלקי" flow, which calls this once per affected open debt (each with its
+// own idempotency key derived from one client-side session key), and by
+// "add donation already paid" for the full amount of a single new donation.
+app.post(
+  "/api/donors/:donorId/donations/:donationId/partial-payment",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var appDonorId = parseInt(req.params.donorId, 10);
+      var donationId = parseInt(req.params.donationId, 10);
+      if (!appDonorId || !donationId) return res.status(400).json({ error: "מזהה תורם/תרומה לא תקין" });
+
+      var amount = Number(req.body && req.body.amount);
+      if (!isFinite(amount) || amount <= 0 || amount > MAX_SANE_AMOUNT) {
+        return res.status(400).json({ error: "סכום לא תקין" });
+      }
+
+      var idempotencyKey = req.body && req.body.idempotencyKey ? String(req.body.idempotencyKey).trim() : "";
+      if (!idempotencyKey) return res.status(400).json({ error: "חסר מפתח idempotency" });
+
+      var result = recordManualPartialPayment({
+        appDonorId:    appDonorId,
+        donationId:    donationId,
+        amount:        amount,
+        phone:         req.body && req.body.phone,
+        donorName:     req.body && req.body.donorName,
+        paymentMethod: req.body && req.body.paymentMethod,
+        idempotencyKey: idempotencyKey,
+        workerId:   req.user && req.user.id,
+        workerName: req.user && req.user.name,
+        ip:         req.ip,
+      });
+
+      res.json({ ok: true, idempotent: !!result.idempotent, donation: result.donation, payment: result.payment });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
 // ── IVR donations list ────────────────────────────────────────────────────────
 app.get(
   "/api/ivr/donations",
@@ -1494,24 +1556,29 @@ app.post(
         return res.status(400).json({ error: "מספר טלפון לא תקין: " + rawPhone });
       }
 
-      const techParams = new URLSearchParams({
+      var click2callCallerId = resolveClick2CallCallerId();
+      if (click2callCallerId.error) {
+        logger.error("Click2Call", click2callCallerId.error);
+        return res.status(500).json({ error: click2callCallerId.error });
+      }
+
+      const techParamsObj = {
         action:     "click2call",
         apiKey:     apiKey,
         extension:  extension,
         target:     phone,
         targetName: donorName || phone,
         ringSec:    30,
-      });
+      };
+      if (click2callCallerId.callerId) techParamsObj.callerId = click2callCallerId.callerId;
+      const techParams = new URLSearchParams(techParamsObj);
 
       // Log exactly what we send (apiKey + donor phone/name redacted)
-      logger.info("Click2Call", "→ Technoline request:", JSON.stringify({
-        action:     "click2call",
+      logger.info("Click2Call", "→ Technoline request:", JSON.stringify(Object.assign({}, techParamsObj, {
         apiKey:     maskSecret(apiKey),
-        extension:  extension,
         target:     logger.redact(phone),
         targetName: logger.redact(donorName || phone),
-        ringSec:    30,
-      }));
+      })));
 
       console.log("[Click2Call] → URL: https://app.ipsales.co.il/ivrFilesApi.php");
       var techRes  = await fetch("https://app.ipsales.co.il/ivrFilesApi.php", {
@@ -1718,6 +1785,40 @@ function campaignErrMsg(body) {
   return body.note || body.error || ("שגיאה " + (body.errorCode || ""));
 }
 
+// Shared Israeli-phone format check for both outbound-caller-id env vars below.
+var TECHNOLINE_CALLER_ID_RE = /^0\d{8,9}$/;
+
+// Outbound Caller-ID for tzintuk/missed-call campaigns ONLY (campaignApi.php
+// action=campaignRun, param `callId` per Technoline's campaignApi.md docs —
+// "Outbound Caller-ID. Must be a phone previously registered via addDid.
+// Omit to use the account's default DID."). Must never be applied to
+// Click2Call, IVR identification, SIP, or any other Technoline action.
+function resolveTzintukCallerId() {
+  var raw = String(process.env.TECHNOLINE_TZINTUK_CALLER_ID || "").trim();
+  if (!raw) return { callId: null, error: null };
+  if (!TECHNOLINE_CALLER_ID_RE.test(raw)) {
+    return { callId: null, error: "TECHNOLINE_TZINTUK_CALLER_ID לא תקין (מצופה מספר ישראלי המתחיל ב-0): " + raw };
+  }
+  return { callId: raw, error: null };
+}
+
+// Outbound Caller-ID for the "התקשר לתורם" Click-to-Call button ONLY
+// (ivrFilesApi.php action=click2call, param `callerId` per Technoline's
+// click2callApiDocs.md — "Outbound caller ID shown to the target when the
+// PBX dials out. Must be one of the account's approved outbound numbers...
+// Omitted → the extension's configured display number is used."). This is a
+// distinct parameter from campaignRun's `callId` above — must never be mixed
+// up with it, and must never be applied to SIP/softphone, IVR identification,
+// or tzintuk campaigns.
+function resolveClick2CallCallerId() {
+  var raw = String(process.env.TECHNOLINE_CLICK2CALL_CALLER_ID || "").trim();
+  if (!raw) return { callerId: null, error: null };
+  if (!TECHNOLINE_CALLER_ID_RE.test(raw)) {
+    return { callerId: null, error: "TECHNOLINE_CLICK2CALL_CALLER_ID לא תקין (מצופה מספר ישראלי המתחיל ב-0): " + raw };
+  }
+  return { callerId: raw, error: null };
+}
+
 // Helper: build phone list from donors, filtered by recipientFilter.
 // Filters: "all" | "debt" | "city:<name>" | "tag:<tag>" | "donor:<id>" | "ids:<id,id,...>"
 // Phone resolution order:
@@ -1739,6 +1840,16 @@ function buildPhoneList(recipientFilter, opts) {
     ? filter.slice(4).split(",").map(function (s) { return Number(s.trim()); }).filter(function (n) { return !isNaN(n); })
     : null;
 
+  // "debt:<maxDebt>" — bounded-debt campaigns (e.g. "debt:200"), distinct from
+  // the legacy uncapped "debt" filter below which stays byte-for-byte
+  // unchanged for backward compatibility. Only this new bounded path gets the
+  // stricter active-donor + phone-format rules — every other filter
+  // ("all"/"tag:"/"city:"/"donor:"/"ids:"/plain "debt") is untouched.
+  var isBoundedDebtFilter = filter.startsWith("debt:");
+  var maxDebtCap = isBoundedDebtFilter ? Number(filter.slice(5)) : null;
+  var strictPhoneMode = isBoundedDebtFilter;
+  var ISRAELI_PHONE_RE = /^0\d{8,9}$/;
+
   for (var i = 0; i < donors.length; i++) {
     var d       = donors[i];
     var primary = normalizePhone(d.phone || "");
@@ -1756,7 +1867,18 @@ function buildPhoneList(recipientFilter, opts) {
     if (filter === "all") {
       include = true;
     } else if (filter === "debt") {
+      // Legacy behavior — unchanged: any positive debt on any single
+      // donation, no cap, no active-donor restriction.
       include = (d.donations || []).some(function (don) { return (don.remainingDebt || 0) > 0; });
+    } else if (isBoundedDebtFilter) {
+      // Same "total outstanding debt" formula used everywhere else in the
+      // app (donors.js getDonorDebt / donor.js getDebtTotal): sum of
+      // remainingDebt across every donation — not a single-donation check.
+      var donorTotalDebt = (d.donations || []).reduce(function (sum, don) {
+        return sum + Number(don.remainingDebt || 0);
+      }, 0);
+      include = d.status !== "לא פעיל" && donorTotalDebt > 0 &&
+        !isNaN(maxDebtCap) && donorTotalDebt <= maxDebtCap;
     } else if (filter.startsWith("city:")) {
       include = (d.city || "").trim() === filter.slice(5).trim();
     } else if (filter.startsWith("tag:")) {
@@ -1778,13 +1900,14 @@ function buildPhoneList(recipientFilter, opts) {
       for (var j = 0; j < approved.length; j++) {
         var p = normalizePhone(approved[j]);
         if (!p) continue;
+        if (strictPhoneMode && !ISRAELI_PHONE_RE.test(p)) continue;
         donorPhones.push(p);
         if (ivrPhones.indexOf(p) === -1 && fallbackPhones.indexOf(p) === -1) ivrPhones.push(p);
       }
     } else {
       // fallbackToPrimary guaranteed true here
       fallbackDonorCount++;
-      if (primary) {
+      if (primary && !(strictPhoneMode && !ISRAELI_PHONE_RE.test(primary))) {
         donorPhones.push(primary);
         if (ivrPhones.indexOf(primary) === -1 && fallbackPhones.indexOf(primary) === -1) fallbackPhones.push(primary);
       }
@@ -1804,6 +1927,12 @@ function buildPhoneList(recipientFilter, opts) {
     donors:             includedDonors,
   };
 }
+
+// Give the AI low-risk action module access to buildPhoneList/
+// validateDonorsPayload without duplicating either — both are module-private
+// to server.js, so this is a one-time injection at startup rather than a
+// circular require.
+require("./ai/actions/lowrisk").injectServices({ buildPhoneList, validateDonorsPayload });
 
 // GET /api/technoline/send/recipient-count?filter=<filter>[&fallback=1]
 app.get(
@@ -1996,6 +2125,12 @@ app.post(
         return res.status(400).json({ error: "יש להזין טקסט להודעה" });
       }
 
+      var tzintukCallerIdManual = resolveTzintukCallerId();
+      if (tzintukCallerIdManual.error) {
+        logger.error("Campaign/Manual", tzintukCallerIdManual.error);
+        return res.status(500).json({ error: tzintukCallerIdManual.error });
+      }
+
       var params = {
         action:          "campaignRun",
         apiKey:          apiKey,
@@ -2006,6 +2141,7 @@ app.post(
         reasonableHours: "no",
         title:           "בדיקה ידנית - " + phone,
       };
+      if (tzintukCallerIdManual.callId) params.callId = tzintukCallerIdManual.callId;
       if (messageKind === "ivr") {
         params.messagesType        = "extensionActivation";
         params.extensionActivation = ivrExtension;
@@ -2084,6 +2220,47 @@ app.post(
   }
 );
 
+// Duplicate-send protection for the campaign send route below. Only the
+// client-side confirm() dialog + button-disable guarded against a repeated
+// submission before — a second tab, a fast double-click before disabled
+// took effect, or a retried request after a perceived timeout could still
+// trigger a real duplicate send to donors. Rather than a blanket
+// same-filter-within-N-seconds lock (which would also block two
+// legitimately different campaigns that happen to share an audience filter,
+// e.g. two separate "debt:200" urgent sends on different days), this
+// follows the same idempotency-key pattern already used by the manual
+// payment endpoints: the client generates one key per send action and
+// resends it on retry; a request that reuses a key already completed
+// successfully gets back the original result instead of sending again.
+// Requests with no key (or a key never seen before) are unaffected.
+var _campaignSendIdempotency = new Map(); // idempotencyKey -> { at, response }
+var CAMPAIGN_SEND_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000;
+
+function getCachedCampaignSend(key) {
+  if (!key) return null;
+  var entry = _campaignSendIdempotency.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.at > CAMPAIGN_SEND_IDEMPOTENCY_TTL_MS) {
+    _campaignSendIdempotency.delete(key);
+    return null;
+  }
+  return entry.response;
+}
+
+function cacheCampaignSend(key, response) {
+  if (!key) return;
+  // Opportunistic cleanup so this map doesn't grow unbounded over a long
+  // PM2 uptime — bounded by TTL, not by size, so this only matters on an
+  // unusually long-running process with heavy campaign traffic.
+  if (_campaignSendIdempotency.size > 500) {
+    var now = Date.now();
+    _campaignSendIdempotency.forEach(function (entry, k) {
+      if (now - entry.at > CAMPAIGN_SEND_IDEMPOTENCY_TTL_MS) _campaignSendIdempotency.delete(k);
+    });
+  }
+  _campaignSendIdempotency.set(key, { at: Date.now(), response: response });
+}
+
 // POST /api/technoline/send  (simplified send screen — hides all campaign API details)
 // POST /api/technoline/campaign/run  (legacy alias kept for backward compat)
 app.post(
@@ -2096,6 +2273,14 @@ app.post(
       if (!apiKey) return res.status(503).json({ error: "TECHNOLINE_API_KEY לא מוגדר בשרת" });
 
       var body               = req.body || {};
+      var sendIdempotencyKey = body.idempotencyKey ? String(body.idempotencyKey).trim() : "";
+      if (sendIdempotencyKey) {
+        var cached = getCachedCampaignSend(sendIdempotencyKey);
+        if (cached) {
+          return res.json(Object.assign({}, cached, { idempotent: true }));
+        }
+      }
+
       var title              = String(body.title           || "").trim();
       var messageKind        = String(body.messageKind     || "ivr").trim();   // "ivr" | "text"
       var messageText        = String(body.messageText     || "").trim();
@@ -2131,6 +2316,12 @@ app.post(
         return res.status(400).json({ error: "יש להזין טקסט להודעה" });
       }
 
+      var tzintukCallerId = resolveTzintukCallerId();
+      if (tzintukCallerId.error) {
+        logger.error("Campaign", tzintukCallerId.error);
+        return res.status(500).json({ error: tzintukCallerId.error });
+      }
+
       // Smart defaults — hidden from UI
       var params = {
         action:          "campaignRun",
@@ -2143,6 +2334,7 @@ app.post(
       };
       if (title)    params.title    = title;
       if (sendTime) params.sendTime = sendTime;
+      if (tzintukCallerId.callId) params.callId = tzintukCallerId.callId;
 
       if (messageKind === "ivr") {
         params.messagesType        = "extensionActivation";
@@ -2271,7 +2463,7 @@ app.post(
         });
       }
 
-      return res.json({
+      var successResponse = {
         ok:                 true,
         campaignId:         techBody.campaignId,
         phones:             techBody.phones,
@@ -2283,7 +2475,9 @@ app.post(
         sentCount:          phones.length,
         successCount:       acceptedCount,
         failedCount:        failedCount,
-      });
+      };
+      if (sendIdempotencyKey) cacheCampaignSend(sendIdempotencyKey, successResponse);
+      return res.json(successResponse);
     } catch (err) {
       next(err);
     }
@@ -2485,6 +2679,280 @@ app.get("/api/softphone/context", requireAuth, function (req, res, next) {
     });
   } catch (err) { next(err); }
 });
+
+// ── Softphone: outgoing caller-ID selection (browser SIP calls) ──────────────
+// IMPORTANT — see docs/softphone-caller-id-technoline-question.md: Technoline
+// has NO documented mechanism (as of this writing) for selecting a per-call
+// outbound Caller-ID on a registered SIP/WebRTC extension (unlike callId on
+// campaignRun or callerId on click2call, which ARE documented HTTP-API
+// parameters). This selection is therefore stored as the operator's request
+// only — nothing here modifies the SIP INVITE. Do not treat storage of this
+// value as proof it changes what the donor's phone displays.
+var SOFTPHONE_ALLOWED_CALLER_IDS = [
+  { number: "023766193", label: "מספר ראשי" },
+  { number: "025378787", label: "מספר חדש" },
+];
+var SOFTPHONE_ALLOWED_CALLER_ID_SET = {};
+SOFTPHONE_ALLOWED_CALLER_IDS.forEach(function (c) { SOFTPHONE_ALLOWED_CALLER_ID_SET[c.number] = true; });
+
+app.get("/api/softphone/caller-ids", requireRole([ROLES.ADMIN, ROLES.SECRETARY]), function (req, res) {
+  res.json({ options: SOFTPHONE_ALLOWED_CALLER_IDS });
+});
+
+// Matches a normalized phone to an app donor (by any phone field) or a
+// custom softphone contact (by primary/additional phone) — used to attach
+// donorId/donorName/contactId/contactName to a call-history row server-side,
+// so the frontend never has to be trusted for that link.
+function matchSoftphoneCallerIdentity(normalizedPhone) {
+  if (!normalizedPhone) return {};
+  var donors = allAppDonors();
+  for (var i = 0; i < donors.length; i++) {
+    if (getAllDonorPhones(donors[i]).indexOf(normalizedPhone) !== -1) {
+      return {
+        donorId:   donors[i].id != null ? donors[i].id : null,
+        donorName: donors[i].fullName || null,
+      };
+    }
+  }
+  var contact = findSoftphoneContactByAnyPhone(normalizedPhone);
+  if (contact) {
+    return { contactId: contact.id, contactName: contact.name };
+  }
+  return {};
+}
+
+// ── Softphone: call-history lifecycle events ─────────────────────────────────
+// The browser posts one event per JsSIP RTCSession lifecycle stage (created /
+// progress / accepted / ended / failed); classification into the final
+// status happens client-side (softphone-call-classifier.js, exercised by the
+// same module in tests) — this endpoint only validates + persists, upserting
+// by sipCallId so repeated events for one session never duplicate a row.
+app.post(
+  "/api/softphone/calls/event",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var direction = body.direction === "incoming" ? "incoming" : "outgoing";
+      var remotePhone = normalizePhone(body.remotePhone || "");
+      if (!remotePhone) return res.status(400).json({ error: "remotePhone חסר או לא תקין" });
+      var status = String(body.status || "").trim();
+      if (callClassifier.STATUSES.indexOf(status) === -1) {
+        return res.status(400).json({ error: "סטטוס שיחה לא תקין" });
+      }
+
+      var selectedCallerId = body.selectedCallerId ? String(body.selectedCallerId).trim() : null;
+      if (selectedCallerId && !SOFTPHONE_ALLOWED_CALLER_ID_SET[selectedCallerId]) {
+        return res.status(400).json({ error: "מזהה מתקשר יוצא לא מאושר: " + selectedCallerId });
+      }
+
+      var identity = matchSoftphoneCallerIdentity(remotePhone);
+
+      var row = upsertSoftphoneCall({
+        sipCallId:        String(body.sipCallId || "").trim(),
+        direction:        direction,
+        remotePhone:      remotePhone,
+        donorId:          identity.donorId,
+        donorName:        identity.donorName,
+        contactId:        identity.contactId,
+        contactName:      identity.contactName,
+        selectedCallerId: selectedCallerId,
+        workerId:         req.user.id,
+        workerName:       req.user.name,
+        startedAt:        body.startedAt  || null,
+        ringingAt:        body.ringingAt  || null,
+        answeredAt:       body.answeredAt || null,
+        endedAt:          body.endedAt    || null,
+        status:           status,
+        rawSipCause:      body.rawSipCause ? String(body.rawSipCause).slice(0, 200) : null,
+      });
+
+      res.json({ ok: true, call: row });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
+app.get(
+  "/api/softphone/calls",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var result = getSoftphoneCalls({
+        statusGroup: req.query.statusGroup,
+        search:      req.query.search,
+        page:        req.query.page,
+        pageSize:    req.query.pageSize,
+      });
+      res.json(result);
+    } catch (err) { next(err); }
+  }
+);
+
+app.delete(
+  "/api/softphone/calls/:id",
+  requireRole([ROLES.ADMIN]),
+  function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      var existing = getSoftphoneCallById(id);
+      if (!existing) return res.status(404).json({ error: "רשומת שיחה לא נמצאה" });
+      deleteSoftphoneCall(id);
+      insertAuditLog({
+        action:     "softphone_call_deleted",
+        entityType: "softphone_call",
+        entityId:   id,
+        entityName: existing.remotePhone,
+        details:    "נמחקה רשומת היסטוריית שיחה (" + existing.direction + ", " + existing.status + ")",
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true });
+    } catch (err) { next(err); }
+  }
+);
+
+// ── Softphone: contacts (donors merged live + custom contacts) ───────────────
+
+app.get(
+  "/api/softphone/contacts",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var search = req.query.search ? String(req.query.search).trim() : "";
+      var searchLower = search.toLowerCase();
+      var searchDigits = search.replace(/\D/g, ""); // for ID-number matching only
+      // "0253...", "02-53...", "+972-2-53...", and an already-normalized
+      // number must all find the same contact — run the search term through
+      // the exact same phone normalization used for stored donor phones
+      // (leading zero preserved, 972-prefix converted), not just digit-strip.
+      var searchPhoneDigits = normalizePhone(search);
+
+      var donorContacts = allAppDonors()
+        .filter(function (d) { return d.id !== undefined && d.id !== null && d.id !== ""; })
+        .filter(function (d) {
+          if (!search) return true;
+          var name = (d.fullName || "").toLowerCase();
+          if (name.indexOf(searchLower) !== -1) return true;
+          if (d.city && String(d.city).toLowerCase().indexOf(searchLower) !== -1) return true;
+          if (d.address && String(d.address).toLowerCase().indexOf(searchLower) !== -1) return true;
+          if (searchDigits && d.idNumber && normalizeIdNumber(d.idNumber).indexOf(searchDigits) !== -1) return true;
+          if (searchPhoneDigits && getAllDonorPhones(d).some(function (p) { return p.indexOf(searchPhoneDigits) !== -1; })) return true;
+          return false;
+        })
+        .map(function (d) {
+          return {
+            type:    "donor",
+            id:      d.id,
+            name:    d.fullName || "",
+            phones:  getAllDonorPhones(d),
+            city:    d.city    || "",
+            address: d.address || "",
+          };
+        });
+
+      var customContacts = getSoftphoneContacts(search).map(function (c) {
+        return {
+          type:   "custom",
+          id:     c.id,
+          name:   c.name,
+          phones: [c.primaryPhone].concat(c.additionalPhones),
+          notes:  c.notes,
+        };
+      });
+
+      res.json({ contacts: donorContacts.concat(customContacts) });
+    } catch (err) { next(err); }
+  }
+);
+
+app.post(
+  "/api/softphone/contacts",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var contact = createSoftphoneContact({
+        name:             body.name,
+        primaryPhone:     body.primaryPhone,
+        additionalPhones: body.additionalPhones,
+        notes:            body.notes,
+      }, req.user);
+      insertAuditLog({
+        action:     "softphone_contact_created",
+        entityType: "softphone_contact",
+        entityId:   contact.id,
+        entityName: contact.name,
+        details:    "איש קשר חדש נוצר: " + contact.name,
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true, contact: contact });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
+app.put(
+  "/api/softphone/contacts/:id",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var contact = updateSoftphoneContact(Number(req.params.id), {
+        name:             body.name,
+        primaryPhone:     body.primaryPhone,
+        additionalPhones: body.additionalPhones,
+        notes:            body.notes,
+      });
+      insertAuditLog({
+        action:     "softphone_contact_updated",
+        entityType: "softphone_contact",
+        entityId:   contact.id,
+        entityName: contact.name,
+        details:    "איש קשר עודכן: " + contact.name,
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true, contact: contact });
+    } catch (err) {
+      if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+      next(err);
+    }
+  }
+);
+
+app.delete(
+  "/api/softphone/contacts/:id",
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var id = Number(req.params.id);
+      var existing = getSoftphoneContacts().find(function (c) { return c.id === id; });
+      var deleted = deleteSoftphoneContact(id);
+      if (!deleted) return res.status(404).json({ error: "איש קשר לא נמצא" });
+      insertAuditLog({
+        action:     "softphone_contact_deleted",
+        entityType: "softphone_contact",
+        entityId:   id,
+        entityName: existing ? existing.name : null,
+        details:    "איש קשר נמחק" + (existing ? ": " + existing.name : ""),
+        workerId:   req.user.id,
+        workerName: req.user.name,
+        ip:         req.ip,
+      });
+      res.json({ ok: true });
+    } catch (err) { next(err); }
+  }
+);
 
 // ── IVR webhook (Technoline PBX) ──────────────────────────────────────────────
 // Technoline sends all accumulated query params on every step.
@@ -2940,7 +3408,19 @@ app.post(
         return res.status(400).json({ error: "שאלה ארוכה מדי (מקסימום 500 תווים)" });
       }
 
-      var result = await queryAI({ question, donorId, history, pageContext });
+      var result = await queryAI({ question, donorId, history, pageContext, role: req.userRole });
+
+      recordAiQuery({
+        worker:      req.user,
+        ip:          req.ip,
+        question:    question,
+        donorId:     donorId,
+        pageContext: pageContext,
+        intent:      result.intent,
+        model:       result.model || "local",
+        confidence:  result.debug && result.debug.confidence,
+        fallback:    result.fallback || false,
+      });
 
       return res.json({
         answer:      result.answer,
@@ -2950,6 +3430,110 @@ app.post(
         suggestions: result.suggestions || [],
         debug:       result.debug || null,
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/ai/capabilities — machine-readable capability list, filtered to
+// what the requesting worker's role is actually allowed to see. A SECRETARY
+// must never learn that an ADMIN-only capability id/description even
+// exists — so filtering happens server-side, not by hiding buttons in the UI.
+app.get(
+  "/api/ai/capabilities",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var caps = aiCapabilities.listCapabilities({ role: req.userRole });
+      res.json({ role: req.userRole, capabilities: caps });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/ai/search?q=...&field=name|phone|idNumber|city|any — Phase C:
+// global donor search + explicit disambiguation. Read-only; matches the
+// same field set frontend/js/donors.js already searches.
+app.get(
+  "/api/ai/search",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var q = String(req.query.q || "").trim();
+      if (!q) return res.status(400).json({ error: "פרמטר q (מונח חיפוש) חסר" });
+      if (q.length > 100) return res.status(400).json({ error: "מונח חיפוש ארוך מדי" });
+      var result = searchDonors(q, { field: req.query.field, limit: req.query.limit });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── AI action framework (Phase F) — prepare → confirm → execute ───────────────
+// Every stage requires the same auth as the rest of the AI routes; the
+// framework itself (ai/actions/index.js) does the finer-grained per-action
+// role/status check, since different actions may allow different roles.
+app.post(
+  "/api/ai/actions/prepare",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var result = await aiActions.prepareAction({
+        actionId: String(body.actionId || ""),
+        params: body.params || {},
+        worker: req.user,
+        ip: req.ip,
+        idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : null,
+      });
+      if (result.error) return res.status(400).json(result);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+app.post(
+  "/api/ai/actions/confirm",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var result = aiActions.confirmAction({
+        token: String(body.token || ""),
+        worker: req.user,
+        ip: req.ip,
+      });
+      if (result.error) return res.status(400).json(result);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+app.post(
+  "/api/ai/actions/execute",
+  apiLimiter,
+  requireRole([ROLES.ADMIN, ROLES.SECRETARY]),
+  async function (req, res, next) {
+    try {
+      var body = req.body || {};
+      var result = await aiActions.executeAction({
+        token: String(body.token || ""),
+        worker: req.user,
+        ip: req.ip,
+      });
+      if (result.error) return res.status(400).json(result);
+      res.json(result);
     } catch (err) {
       next(err);
     }
@@ -3011,9 +3595,12 @@ app.post(
       }
       const srcPath = path.join(BACKUP_DIR, filename);
       if (!fs.existsSync(srcPath)) return res.status(404).json({ error: "גיבוי לא נמצא" });
-      const restored = restoreFromBackup(srcPath);
-      insertAuditLog({ action: "BACKUP_RESTORED", entityType: "system", entityId: "", entityName: filename, details: restored + " keys restored", workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip });
-      res.json({ ok: true, restored: restored });
+      const restoredCounts = restoreFromBackup(srcPath);
+      const tableSummary = Object.keys(restoredCounts)
+        .map(function (t) { return t + "=" + restoredCounts[t]; })
+        .join(", ");
+      insertAuditLog({ action: "BACKUP_RESTORED", entityType: "system", entityId: "", entityName: filename, details: "כל הטבלאות שוחזרו: " + tableSummary, workerId: req.user && req.user.id, workerName: req.user && req.user.name, ip: req.ip });
+      res.json({ ok: true, restored: restoredCounts });
     } catch (err) { next(err); }
   }
 );

@@ -210,7 +210,20 @@ function getAudienceFilter() {
     return selectedListIds.length > 0 ? "ids:" + selectedListIds.join(",") : null;
   }
   if (val === "manual") return "manual";
-  return val; // "debt" | "all"
+  if (val === "debt_unbounded") return "debt"; // legacy uncapped filter — only reachable via this explicit, separate choice
+  if (val === "debt") {
+    var maxDebtEl  = document.getElementById("maxDebtInput");
+    var maxDebtVal = maxDebtEl ? String(maxDebtEl.value || "").trim() : "";
+    var maxDebtNum = Number(maxDebtVal);
+    // An empty/invalid cap must never silently fall back to the unbounded
+    // filter — default to 200 instead (see buildPhoneList()'s
+    // isBoundedDebtFilter in server.js for the bounded-filter logic itself,
+    // which is unaffected by this — it already enforces debt>0 && debt<=cap
+    // correctly; this only decides what cap gets sent).
+    if (!maxDebtVal || !isFinite(maxDebtNum) || maxDebtNum <= 0) return "debt:200";
+    return "debt:" + maxDebtVal;
+  }
+  return val; // "all"
 }
 
 async function refreshCount() {
@@ -242,10 +255,11 @@ async function refreshCount() {
   updateSendButton(count);
 
   // Update per-row badge for sub-selectors
-  if (audVal === "tag")      updateBadge("badgeTag",      count);
-  if (audVal === "city")     updateBadge("badgeCity",     count);
-  if (audVal === "donor")    updateBadge("badgeDonor",    count);
-  if (audVal === "selected") updateBadge("badgeSelected", count);
+  if (audVal === "tag")            updateBadge("badgeTag",            count);
+  if (audVal === "city")           updateBadge("badgeCity",           count);
+  if (audVal === "donor")          updateBadge("badgeDonor",          count);
+  if (audVal === "selected")       updateBadge("badgeSelected",       count);
+  if (audVal === "debt_unbounded") updateBadge("badgeDebtUnbounded",  count);
 }
 
 function updateBadge(id, count) {
@@ -263,6 +277,8 @@ var tagSel  = document.getElementById("tagSelect");
 var citySel = document.getElementById("citySelect");
 if (tagSel)  tagSel.addEventListener("change",  refreshCount);
 if (citySel) citySel.addEventListener("change", refreshCount);
+var maxDebtEl = document.getElementById("maxDebtInput");
+if (maxDebtEl) maxDebtEl.addEventListener("input", refreshCount);
 
 // ── Donor search autocomplete ─────────────────────────────────────────────────
 
@@ -380,6 +396,12 @@ function updateSendButton(count) {
       label = n + " מספרים";
     }
     countEl.textContent = label;
+    // The label above is human-readable text, not a bare number (e.g. "12
+    // מספרים (9 תורמים)") — the send-button click handler must NOT re-parse
+    // it with Number(textContent), which silently yields NaN -> 0 and was
+    // the exact cause of "אין מספרים תואמים לשליחה" firing even when this
+    // count was positive. Keep the real number in a data attribute instead.
+    countEl.setAttribute("data-count", String(n));
   }
 }
 
@@ -395,6 +417,32 @@ function showStatus(text, type) {
   el.className = "message show " + (type || "success");
   if (type !== "error") setTimeout(function () { el.className = "message"; el.innerText = ""; }, 10000);
 }
+
+// Reused across a manual retry of the same logical send (e.g. the operator
+// clicks send again after a network error, without changing anything) so
+// the server recognizes it as the same request instead of sending twice;
+// reset whenever the audience/message inputs actually change, since that's
+// a genuinely different send, or once a send actually succeeds.
+var _pendingCampaignSendKey = null;
+function _resetCampaignSendKey() { _pendingCampaignSendKey = null; }
+function generateCampaignIdempotencyKey() {
+  if (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+document.querySelectorAll("input[name=audience]").forEach(function (r) { r.addEventListener("change", _resetCampaignSendKey); });
+document.querySelectorAll("input[name=message]").forEach(function (r) { r.addEventListener("change", _resetCampaignSendKey); });
+(function () {
+  var tagSelForKey  = document.getElementById("tagSelect");
+  var citySelForKey = document.getElementById("citySelect");
+  var maxDebtForKey = document.getElementById("maxDebtInput");
+  var msgTextForKey = document.getElementById("msgTextInput");
+  if (tagSelForKey)  tagSelForKey.addEventListener("change", _resetCampaignSendKey);
+  if (citySelForKey) citySelForKey.addEventListener("change", _resetCampaignSendKey);
+  if (maxDebtForKey) maxDebtForKey.addEventListener("input",  _resetCampaignSendKey);
+  if (msgTextForKey) msgTextForKey.addEventListener("input",  _resetCampaignSendKey);
+}());
 
 document.getElementById("sendButton").addEventListener("click", async function () {
   var btn      = this;
@@ -446,8 +494,12 @@ document.getElementById("sendButton").addEventListener("click", async function (
   }
 
   // ── Normal audience mode ──────────────────────────────────────────────────
-  var filter = getAudienceFilter();
-  var count  = Number((document.getElementById("sendCount") || {}).textContent) || 0;
+  var filter  = getAudienceFilter();
+  var countEl = document.getElementById("sendCount");
+  // Read the real number from data-count, NOT textContent — that element's
+  // text is a human-readable label like "12 מספרים (9 תורמים)", and
+  // Number() on that yields NaN -> 0 every time (see updateSendButton()).
+  var count = countEl ? (Number(countEl.getAttribute("data-count")) || 0) : 0;
   if (!filter || count === 0) {
     showStatus("אין מספרים תואמים לשליחה", "error");
     return;
@@ -464,12 +516,14 @@ document.getElementById("sendButton").addEventListener("click", async function (
   btn.innerHTML   = 'שולח... <span class="btn-spinner"></span>';
 
   try {
+    if (!_pendingCampaignSendKey) _pendingCampaignSendKey = generateCampaignIdempotencyKey();
     var payload = {
       recipientFilter:   filter,
       messageKind:       msgVal,
       messageText:       msgText,
       quietHours:        true,
       fallbackToPrimary: _fallbackEnabled,
+      idempotencyKey:    _pendingCampaignSendKey,
     };
 
     var res  = await apiFetch("/api/technoline/send", { method: "POST", body: JSON.stringify(payload) });
@@ -480,6 +534,7 @@ document.getElementById("sendButton").addEventListener("click", async function (
       if (data.errorCode) errDetail += " (קוד: " + data.errorCode + ")";
       showStatus("❌ " + errDetail, "error");
     } else {
+      _resetCampaignSendKey(); // this logical send completed — a future click is a new action
       var sent    = data.sentCount    != null ? data.sentCount    : count;
       var success = data.successCount != null ? data.successCount : sent;
       var failed  = data.failedCount  != null ? data.failedCount  : 0;
@@ -509,7 +564,13 @@ document.getElementById("sendButton").addEventListener("click", async function (
 
 function getAudienceLabel() {
   var val = (document.querySelector("input[name=audience]:checked") || {}).value || "";
-  if (val === "debt")   return "בעלי חוב";
+  if (val === "debt") {
+    var maxDebtEl  = document.getElementById("maxDebtInput");
+    var maxDebtVal = maxDebtEl ? String(maxDebtEl.value || "").trim() : "";
+    var maxDebtNum = Number(maxDebtVal);
+    return "בעלי חוב עד ₪" + ((!maxDebtVal || !isFinite(maxDebtNum) || maxDebtNum <= 0) ? "200" : maxDebtVal);
+  }
+  if (val === "debt_unbounded") return "כל בעלי החוב (ללא הגבלה)";
   if (val === "tag")    return "תגית: " + ((document.getElementById("tagSelect")  || {}).value || "");
   if (val === "city")   return "עיר: "  + ((document.getElementById("citySelect") || {}).value || "");
   if (val === "donor" && selectedDonorName) return selectedDonorName;

@@ -13,7 +13,7 @@ const openaiEngine = require("./engines/openai");
  * @param {string}   opts.pageContext — "donor"|"debts"|"tasks"|"reminders"|"reports"|"phone"|"global"
  * @returns {Promise<{answer, intent, model, fallback, suggestions, debug}>}
  */
-async function queryAI({ question, donorId, history, pageContext }) {
+async function queryAI({ question, donorId, history, pageContext, role }) {
   const useOpenAI = Boolean(process.env.OPENAI_API_KEY);
 
   if (useOpenAI) {
@@ -21,12 +21,12 @@ async function queryAI({ question, donorId, history, pageContext }) {
       return await openaiEngine.query({ question, donorId, history, pageContext });
     } catch (err) {
       console.warn("[AI] OpenAI failed, falling back to local:", err.message);
-      const result = await localEngine.query({ question, donorId, history, pageContext });
+      const result = await localEngine.query({ question, donorId, history, pageContext, role });
       return Object.assign({}, result, { fallback: true });
     }
   }
 
-  return localEngine.query({ question, donorId, history, pageContext });
+  return localEngine.query({ question, donorId, history, pageContext, role });
 }
 
 console.log("[AI] ai/index.js v3 loaded OK");
