@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - master
+  pull_request:
+    branches:
+      - master
 
 jobs:
   test:
@@ -13,6 +16,12 @@ jobs:
     # pure/DI-style or use their own temporary sqlite files (see each file's
     # own header comment) — none of them touch the real server, its .env, or
     # its data.sqlite, so running them here is safe and requires no secrets.
+    #
+    # Runs on both push-to-master and any pull_request targeting master —
+    # the pull_request trigger is a pre-merge gate only (see the deploy job
+    # below, which stays push-to-master-only): it lets a PR show real,
+    # GitHub-verified check results before merge, without giving pull_request
+    # events any ability to reach the deploy job.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +37,13 @@ jobs:
 
   deploy:
     needs: test # deploy must never start if a single test failed
+    # Restricts this job to an actual push to master — without this, adding
+    # the pull_request trigger above would make GitHub evaluate this job on
+    # pull_request events too (the "needs: test" dependency alone doesn't
+    # scope deploy to any particular trigger type). A merge is a push event,
+    # so the existing "deploy runs after a push to master" behavior for a
+    # merged PR is unchanged.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
